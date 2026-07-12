@@ -1,5 +1,7 @@
 # 🔮 MARBLE
 
+[![CI](https://github.com/BobGnarly420/marble/actions/workflows/ci.yml/badge.svg)](https://github.com/BobGnarly420/marble/actions/workflows/ci.yml)
+
 **Interactive latent trajectory explorer for transformer forward passes.**
 
 MARBLE visualizes hidden-state evolution as trajectories over a semantic

@@ -178,6 +178,7 @@ def test_divergence_shape_mismatch_rejected(baseline):
 
 
 # -------------------------------------------------- semantic control (GPT-2)
+@pytest.mark.network
 def test_perturbation_flips_prediction_gpt2():
     """The payoff: pushing a late state along a token's embedding direction
     changes what the model predicts — causal control, end to end."""
