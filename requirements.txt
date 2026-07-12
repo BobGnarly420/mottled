@@ -1,0 +1,10 @@
+numpy
+scipy
+scikit-learn
+plotly
+streamlit
+torch
+transformers
+umap-learn
+faiss-cpu
+pytest
