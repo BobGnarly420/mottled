@@ -76,6 +76,20 @@ density, terrain, metrics, UI — works unchanged.
 | `cache.py` | Disk cache keyed by prompt + config hash |
 | `config.py` | One dataclass for every pipeline knob |
 | `ui.py` | Pure pipeline + pure Plotly renderer + Streamlit shell |
+| `bvh.py` | Spatial index over trajectory segments (ray-pick / nearest / box / frustum) for the fly-through canvas |
+
+### Interaction layer (in progress)
+
+The exploratory canvas renders trajectories as curves (not voxels — projected
+states occupy a vanishing fraction of any 3-D volume). `bvh.py` is the spatial
+acceleration structure the interaction grammar needs: `ray_pick` powers the
+"grab a state" gesture (camera ray → front-most segment within a pick radius),
+`nearest` powers hover, `query_box` powers region select, and `query_frustum`
+powers fly-through culling. It is backend-agnostic — it consumes projected 3-D
+points (a projection output), never transformer internals — so any substrate
+projected to ≤3-D is pickable. A volumetric (voxel-octree) renderer for
+*fields* (density / flow) will land once we render ensembles rather than single
+runs.
 
 ### Plugin points
 
