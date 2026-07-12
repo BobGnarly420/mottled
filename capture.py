@@ -54,19 +54,38 @@ def load_model(name: str, device: str = "auto", dtype: str = "float32"):
 
 
 class HookCapture:
-    """Context manager that records the residual stream around every block.
+    """Context manager that records — and optionally *edits* — the residual
+    stream around every block.
 
     Layer 0 is taken from a forward *pre*-hook on the first block — the exact
     tensor entering the residual stream (this is also correct for Gemma,
     which scales embeddings after the embedding module).  Layers 1..N come
     from forward hooks on each block's output.
+
+    Passing ``state_edits`` and/or ``frozen_blocks`` turns the capture into a
+    *resumable/intervened* pass: the forward runs to a block, the residual is
+    rewritten, and the model continues from the edited state — this is what
+    makes perturb-and-replay possible.  With neither argument the behaviour is
+    a pure read-only capture, identical to before.
+
+        state_edits[k]  : callable(hidden) -> hidden applied to the state at
+                          index k (0 = embeddings) *before* it is captured and
+                          before it propagates downstream.
+        frozen_blocks   : block indices whose update is skipped (output := input),
+                          i.e. the residual stream passes through unchanged.
+
+    Captured states always reflect the value that actually propagated, so a
+    perturbation at layer k appears in ``hidden[k]`` and in every layer after.
     """
 
-    def __init__(self, model):
+    def __init__(self, model, state_edits: dict | None = None,
+                 frozen_blocks: set | None = None):
         from models.families import resolve_family
 
         self.adapter = resolve_family(model)
         self.states: dict[int, "torch.Tensor"] = {}
+        self.state_edits = dict(state_edits or {})
+        self.frozen_blocks = set(frozen_blocks or set())
         self._handles = []
 
     def __enter__(self):
@@ -74,13 +93,37 @@ class HookCapture:
 
         def pre_hook(module, args, kwargs):
             hs = args[0] if args else kwargs.get("hidden_states")
+            edit = self.state_edits.get(0)
+            if edit is not None:
+                hs = edit(hs)
+                self.states[0] = hs.detach()
+                if args:
+                    return (hs,) + tuple(args[1:]), kwargs
+                kwargs = dict(kwargs)
+                kwargs["hidden_states"] = hs
+                return args, kwargs
             self.states[0] = hs.detach()
+            return None
 
         self._handles.append(blocks[0].register_forward_pre_hook(pre_hook, with_kwargs=True))
         for i, block in enumerate(blocks):
-            def hook(module, args, output, _layer=i + 1):
-                out = output[0] if isinstance(output, tuple) else output
+            def hook(module, args, output, _block=i, _layer=i + 1):
+                changed = False
+                if _block in self.frozen_blocks:            # skip the update
+                    out = args[0]
+                    changed = True
+                else:
+                    out = output[0] if isinstance(output, tuple) else output
+                edit = self.state_edits.get(_layer)
+                if edit is not None:
+                    out = edit(out)
+                    changed = True
                 self.states[_layer] = out.detach()
+                if not changed:
+                    return None
+                if isinstance(output, tuple):
+                    return (out,) + tuple(output[1:])
+                return out
 
             self._handles.append(block.register_forward_hook(hook))
         return self
@@ -152,6 +195,15 @@ def capture(
         return synthetic.capture(prompt, top_k=top_k, keep_logits=keep_logits)
 
     _require_torch()
+    return _run(model, prompt, tokenizer=tokenizer, top_k=top_k, device=device,
+                dtype=dtype, keep_logits=keep_logits)
+
+
+def _run(model, prompt, tokenizer=None, top_k=5, device="auto", dtype="float32",
+         keep_logits=True, state_edits: dict | None = None,
+         frozen_blocks: set | None = None, extra_meta: dict | None = None) -> StateTrajectory:
+    """Forward pass (optionally intervened) -> StateTrajectory. Shared by
+    capture() and intervene()."""
     if isinstance(model, str):
         model, tokenizer = load_model(model, device=device, dtype=dtype)
     if tokenizer is None:
@@ -163,7 +215,7 @@ def capture(
     tokens = [_clean_token(t) for t in tokenizer.convert_ids_to_tokens(input_ids[0].tolist())]
 
     model.eval()
-    with HookCapture(model) as cap, torch.no_grad():
+    with HookCapture(model, state_edits=state_edits, frozen_blocks=frozen_blocks) as cap, torch.no_grad():
         model(input_ids)
     hidden = cap.stacked()  # (L, T, D)
 
@@ -172,6 +224,14 @@ def capture(
     logits = logits_t.numpy()
     entropy, topk = _entropy_topk(logits, vocab, top_k)
 
+    meta = {
+        "backend": "transformers",
+        "model": getattr(getattr(model, "config", None), "name_or_path", type(model).__name__),
+        "prompt": prompt,
+        "family": cap.adapter.name,
+    }
+    if extra_meta:
+        meta.update(extra_meta)
     return StateTrajectory(
         hidden=hidden.numpy(),
         tokens=tokens,
@@ -180,12 +240,7 @@ def capture(
         topk=topk,
         vocab=vocab,
         embedding_matrix=cap.adapter.embedding_weight().numpy(),
-        meta={
-            "backend": "transformers",
-            "model": getattr(getattr(model, "config", None), "name_or_path", type(model).__name__),
-            "prompt": prompt,
-            "family": cap.adapter.name,
-        },
+        meta=meta,
     )
 
 

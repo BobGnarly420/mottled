@@ -76,6 +76,50 @@ density, terrain, metrics, UI — works unchanged.
 | `cache.py` | Disk cache keyed by prompt + config hash |
 | `config.py` | One dataclass for every pipeline knob |
 | `ui.py` | Pure pipeline + pure Plotly renderer + Streamlit shell |
+| `bvh.py` | Spatial index over trajectory segments (ray-pick / nearest / box / frustum) for the fly-through canvas |
+| `intervene.py` | Causal interventions: perturb / set / noise / freeze a state via a resumable forward pass → counterfactual trajectory |
+
+### Causal intervention (perturb-and-replay)
+
+Observation shows what a system *did*; intervention shows what it *would have
+done*. `intervene.py` runs a **resumable forward pass**: write-hooks rewrite
+the residual stream at a chosen layer and the model continues from the edited
+state, producing a **counterfactual `StateTrajectory`** — real data that flows
+through the same projection / measurement / renderer stack as the baseline.
+
+```python
+from capture import capture
+from intervene import Perturb, intervene, divergence
+
+base = capture(model, "The capital of France is", tokenizer=tok)
+# push the final state toward the " Berlin" embedding direction
+d = base.embedding_matrix[berlin_id]
+branch = intervene(model, "The capital of France is",
+                   [Perturb(layer=base.n_layers - 1, delta=60 * d, token=-1)],
+                   tokenizer=tok)
+# baseline predicts " the"; the branch now predicts " Berlin" (p≈1.0)
+print(divergence(base, branch).readout_changed)   # layer where the prediction flips
+```
+
+Edits: `Perturb` (push a state — the grab gesture), `SetState`, `InjectNoise`
+(seeded), `FreezeLayer` (skip a block's update). Multiple interventions compose
+in one pass. `divergence(baseline, branch)` measures where a branch separates
+(state-space profile + the layer the top-1 prediction flips) — a measurement,
+not a claimed cause. Interventions require a torch model; the synthetic backend
+is analytic and not resumable.
+
+### Interaction layer (in progress)
+
+The exploratory canvas renders trajectories as curves (not voxels — projected
+states occupy a vanishing fraction of any 3-D volume). `bvh.py` is the spatial
+acceleration structure the interaction grammar needs: `ray_pick` powers the
+"grab a state" gesture (camera ray → front-most segment within a pick radius),
+`nearest` powers hover, `query_box` powers region select, and `query_frustum`
+powers fly-through culling. It is backend-agnostic — it consumes projected 3-D
+points (a projection output), never transformer internals — so any substrate
+projected to ≤3-D is pickable. A volumetric (voxel-octree) renderer for
+*fields* (density / flow) will land once we render ensembles rather than single
+runs.
 
 ### Plugin points
 
