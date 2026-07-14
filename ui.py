@@ -19,6 +19,7 @@ import compare as compare_mod
 import density as density_mod
 import metrics as metrics_mod
 import sae as sae_mod
+import statefile as statefile_mod
 import projection as projection_mod
 import terrain as terrain_mod
 import trajectory as trajectory_mod
@@ -520,6 +521,16 @@ def main() -> None:
                     acts[:, t.token if isinstance(t.token, int) else traj.n_tokens - 1, feat]
                     for t in result["trajectories"]
                 ]
+
+        import io as _io
+
+        _buf = _io.BytesIO()
+        statefile_mod.save_scene(result, _buf)
+        st.download_button("⬇ Export scene (.mtj)", data=_buf.getvalue(),
+                           file_name="scene.mtj", mime="application/octet-stream",
+                           use_container_width=True, key="export_scene",
+                           help="Portable scene for the web viewer (viewer/) "
+                                "or any .mtj consumer — see docs/mtj-format.md.")
 
         with st.expander("Intervention (perturb & replay)", expanded=False):
             if cfg.model == "synthetic":

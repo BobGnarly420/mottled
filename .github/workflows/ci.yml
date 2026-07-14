@@ -39,3 +39,8 @@ jobs:
         # keep CI hermetic and fast. Everything else — including the torch
         # mechanism tests on locally-built models — runs offline.
         run: pytest -m "not network" -q
+
+      - name: Viewer parser tests
+        # The web viewer's .mtj parser runs under Node's built-in test runner
+        # against the committed sample scenes — no npm dependencies.
+        run: node --test viewer/tests/

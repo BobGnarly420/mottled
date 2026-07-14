@@ -1,0 +1,101 @@
+# The `.mtj` format — Mottled Trajectory interchange, version 1
+
+`StateTrajectory` is the center of Mottled: producers (transformer capture,
+synthetic generator, future Mamba / diffusion / neuroscience recorders) emit
+one, and viewers (the Streamlit app, the web viewer, notebooks) consume one.
+`.mtj` is the stable on-disk form of that abstraction, designed to be
+trivially parseable from any language — a JSON manifest plus raw
+little-endian typed-array buffers, in the spirit of glTF's `.glb`.
+
+## Container layout
+
+| bytes | content |
+|---|---|
+| 0–3 | magic `MTRJ` (ASCII) |
+| 4–7 | `uint32` (LE) format version, currently `1` |
+| 8–11 | `uint32` (LE) manifest length in bytes (`M`) |
+| 12 – 12+M | manifest: UTF-8 JSON, space-padded so `12+M` is a multiple of 16 |
+| 12+M – EOF | binary blob: raw array data, each array 16-byte aligned |
+
+Array `offset`s in the manifest are relative to the **start of the blob**
+(byte `12+M`), not the file. All numeric data is little-endian.
+
+A JavaScript reader needs only `DataView` + `TypedArray`; a Python reader
+needs only `struct` + `numpy.frombuffer`. No compression, no dependencies.
+
+## Manifest
+
+```jsonc
+{
+  "format": "mottled-trajectory",
+  "version": 1,
+  "kind": "trajectory",              // or "scene"
+  "meta": { "model": "gpt2", "prompt": "…", "backend": "transformers", … },
+  "arrays": {                        // name -> array reference
+    "hidden": { "dtype": "float32", "shape": [13, 6, 64], "offset": 0, "length": 199680 }
+  },
+  …kind-specific fields…
+}
+```
+
+Array references always carry `dtype` (`float16` | `float32` | `int32`),
+`shape`, `offset`, and `length` (bytes; equals the product of the shape and
+the item size). Readers MUST ignore unknown manifest fields and unknown
+arrays — that is how the format stays stable while growing.
+
+## `kind: "trajectory"` — one full StateTrajectory
+
+Round-trips a `StateTrajectory` at full fidelity. Fields:
+
+- `tokens`: list of token strings, length `T`.
+- `vocab` *(optional)*: list of vocabulary strings, length `V`.
+- `topk` *(optional)*: `[L][T][k]` list of `[token, probability]` pairs.
+- Arrays (all optional except `hidden`):
+  - `hidden` — `(L, T, D)` float32,
+  - `logits` — `(L, T, V)` float16,
+  - `entropy` — `(L, T)` float32,
+  - `attention` — `(L-1, T, T)` float32,
+  - `components.attn`, `components.mlp` — `(L-1, T, D)` float32,
+  - `embedding_matrix` — `(V, D)` float32.
+
+## `kind: "scene"` — a viewer-ready bundle
+
+What a viewer needs to draw and inspect, with the analysis already done in
+Python (projection, terrain, draping, comparisons). No hidden states are
+required, so scene files are small enough for the web.
+
+Fields:
+
+- `terrain`: `{ "x": <array ref name>, "y": …, "z": … }` — grid axes
+  `(W,)`, `(H,)` and heights `(H, W)`; `z[i][j]` is the height at
+  `(x[j], y[i])`.
+- `runs`: list of runs drawn on that terrain. Each run:
+  - `label`: display name (`"A"`, `"B"`, …),
+  - `prompt`: the prompt text,
+  - `tokens`: token strings, length `T`,
+  - `trajectory_labels`: display label per drawn trajectory,
+  - arrays (referenced by name from `arrays`):
+    - `points` — `(N, L, 3)` float32 draped trajectory points
+      (`N` trajectories × `L` layers × xyz). **Required.**
+    - `entropy` — `(L, T)` float32 *(optional)*,
+    - `attention` — `(L-1, T, T)` float32 *(optional)*,
+  - `topk` *(optional)*: `[L][T][k]` list of `[token, probability]` pairs.
+- `comparisons` *(optional)*: for runs beyond the first, JSON summaries:
+  `{ "label", "hausdorff", "dtw_normalized", "shared_tokens", "onset_layer",
+     "readout_changed" }`.
+
+Array names for run `i` are conventionally prefixed `run{i}.` (e.g.
+`run0.points`) but viewers MUST resolve them through the manifest references,
+never by naming convention.
+
+Viewers are expected to densify trajectory polylines themselves (e.g.
+Catmull-Rom) for smooth animation — fine paths are derived data and are not
+stored.
+
+## Versioning
+
+- The `version` header and manifest `version` change **only** on breaking
+  layout changes.
+- Additive evolution (new optional arrays, new manifest fields) does not
+  bump the version; readers ignore what they don't know.
+- Writers MUST NOT change the meaning of existing fields within a version.

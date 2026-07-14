@@ -61,14 +61,34 @@ attached per state.
 
 ## Architecture
 
-Everything operates on a single abstraction — **`StateTrajectory`**
-(`trajectory.py`). All analyses are functions over trajectories; nothing
-above the capture layer touches transformer internals. Transformers are one
-backend (`models/families.py` resolves Qwen/Llama/Mistral/Gemma/GPT-2/NeoX
-layouts structurally); the synthetic generator (`models/synthetic.py`) is
-another. Future backends (RNNs, Mamba, diffusion, biological recordings)
-only need to expose a `StateTrajectory` and the entire stack — projection,
-density, terrain, metrics, UI — works unchanged.
+**`StateTrajectory` (`trajectory.py`) is the center of the project — the
+interchange format everything else plugs into.** Producers emit one, viewers
+and analyses consume one, and neither side knows about the other:
+
+```
+producers                      interchange                     viewers
+─────────                      ───────────                     ───────
+transformers capture  ─┐                                 ┌─ Python / Streamlit (ui.py)
+synthetic generator   ─┼─►  StateTrajectory  ─► .mtj  ───┼─ web viewer (viewer/, WebGL)
+future: Mamba,        ─┘    (in memory)      (on disk)   ├─ Jupyter (render() is a
+diffusion, OpenAI /                                      │  plain Plotly figure)
+Anthropic logprobs,                                      └─ future: desktop app
+neuro recordings
+```
+
+Python owns capture and analysis; `statefile.py` freezes both into the
+versioned **`.mtj`** binary format ([spec](docs/mtj-format.md)) — a JSON
+manifest plus raw little-endian buffers, parseable from any language with no
+dependencies. Full-fidelity trajectory files round-trip a capture; compact
+**scene** files carry finished analysis artifacts (projected + draped
+trajectories, terrain, inspector stats) so a viewer only has to draw.
+
+Transformers are one producer (`models/families.py` resolves
+Qwen/Llama/Mistral/Gemma/GPT-2/NeoX layouts structurally); the synthetic
+generator (`models/synthetic.py`) is another. A new substrate — RNNs, Mamba,
+diffusion, API logprobs (limited: no hidden states), biological recordings —
+only needs to emit a `StateTrajectory` and the entire stack (projection,
+density, terrain, metrics, comparison, every viewer) works unchanged.
 
 | Module | Role |
 |---|---|
@@ -86,6 +106,8 @@ density, terrain, metrics, UI — works unchanged.
 | `intervene.py` | Causal interventions: perturb / set / noise / freeze a state via a resumable forward pass → counterfactual trajectory |
 | `compare.py` | Trajectory comparison: Hausdorff, dynamic time warping, shared-prefix alignment, layerwise divergence profiles |
 | `sae.py` | Sparse-autoencoder features: apply (never train) an SAE to every captured state; demo dictionary + npz interchange |
+| `statefile.py` | `.mtj` interchange: save/load full StateTrajectories and viewer-ready scene bundles ([format spec](docs/mtj-format.md)) |
+| `viewer/` | Self-contained WebGL viewer for `.mtj` scenes — no build step, no dependencies |
 
 ### Causal intervention (perturb-and-replay)
 
@@ -200,6 +222,35 @@ The UI exposes it as a sidebar panel — push a state toward a token
 embedding, inject noise, or freeze a block, then watch the counterfactual
 trajectory diverge on the same terrain.
 
+### The `.mtj` interchange format & web viewer
+
+```python
+import statefile
+from ui import run_scene
+
+statefile.save(traj, "run.mtj")            # full-fidelity StateTrajectory
+traj = statefile.load("run.mtj")           # round-trips every array
+
+result = run_scene(cfg, [prompt_a, prompt_b])
+statefile.save_scene(result, "scene.mtj")  # small, viewer-ready bundle
+```
+
+Scene files carry no hidden states — just draped trajectories, terrain and
+inspector data — so they are small enough to hand to the browser. Open the
+web viewer with any static file server:
+
+```bash
+python -m http.server            # from the repo root
+# → http://localhost:8000/viewer/   (drag a .mtj in, or ?file=samples/scene-abc.mtj)
+```
+
+The Streamlit app has an **Export scene (.mtj)** button for whatever is
+currently on screen. The viewer is plain WebGL2 with zero dependencies and
+zero build step; producers in other languages only need to follow
+[docs/mtj-format.md](docs/mtj-format.md). An optional capture backend for
+the browser (generate trajectories directly from a served model) is left
+for the future.
+
 ### Interaction layer (in progress)
 
 The exploratory canvas renders trajectories as curves (not voxels — projected
@@ -260,5 +311,9 @@ research tool.
 - **Phase 4** — ✅ multi-prompt scenes (`ui.run_scene`), attention flow
   (`capture_attention` + renderer edges), interactive patching
   (`ui.run_intervention` over `intervene.py`).
-- **Next** — volumetric field rendering for ensembles, SAE feature flows
-  across layers, richer scene management (pin/hide runs, saved scenes).
+- **Interchange & viewers** — ✅ `StateTrajectory` as the interchange format:
+  stable `.mtj` serialization (`statefile.py`, [spec](docs/mtj-format.md))
+  and a dependency-free WebGL web viewer (`viewer/`).
+- **Next** — optional browser capture backend, desktop shell, volumetric
+  field rendering for ensembles, SAE feature flows across layers, richer
+  scene management (pin/hide runs, saved scenes).

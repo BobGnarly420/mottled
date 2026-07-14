@@ -1,0 +1,254 @@
+"""`.mtj` — the StateTrajectory interchange format (see docs/mtj-format.md).
+
+StateTrajectory is the center of Mottled: producers emit one, viewers and
+analyses consume one.  This module is the stable boundary between the two —
+a versioned binary container (JSON manifest + raw little-endian buffers,
+glb-style) that any language can parse with nothing but its standard
+library.
+
+    save(traj, "run.mtj")            # full-fidelity StateTrajectory
+    traj = load("run.mtj")
+
+    save_scene(result, "scene.mtj")  # viewer-ready bundle from run_pipeline /
+    scene = load_scene("scene.mtj")  # run_scene / run_compare / run_intervention
+
+Python stays responsible for capture and analysis; scene files carry the
+finished artifacts (projected + draped trajectories, terrain, inspector
+stats) so a viewer — the web viewer in viewer/, a notebook, a future desktop
+app — only has to draw.
+"""
+
+from __future__ import annotations
+
+import json
+import struct
+from pathlib import Path
+from typing import Any, BinaryIO
+
+import numpy as np
+
+from trajectory import StateTrajectory
+
+MAGIC = b"MTRJ"
+VERSION = 1
+_ALIGN = 16
+_DTYPES = {"float16": np.float16, "float32": np.float32, "int32": np.int32}
+
+
+# --------------------------------------------------------------- container
+class _Writer:
+    """Accumulates named arrays into an aligned blob + manifest references."""
+
+    def __init__(self):
+        self.chunks: list[bytes] = []
+        self.refs: dict[str, dict] = {}
+        self._offset = 0
+
+    def add(self, name: str, array: np.ndarray) -> str:
+        arr = np.ascontiguousarray(array)
+        if arr.dtype.name not in _DTYPES:
+            arr = arr.astype(np.float32)
+        data = arr.astype(arr.dtype.newbyteorder("<")).tobytes()
+        pad = (-self._offset) % _ALIGN
+        if pad:
+            self.chunks.append(b"\x00" * pad)
+            self._offset += pad
+        self.refs[name] = {"dtype": arr.dtype.name, "shape": list(arr.shape),
+                           "offset": self._offset, "length": len(data)}
+        self.chunks.append(data)
+        self._offset += len(data)
+        return name
+
+    def write(self, fh: BinaryIO, manifest: dict) -> None:
+        manifest = dict(manifest)
+        manifest["arrays"] = self.refs
+        blob = json.dumps(manifest, ensure_ascii=False).encode("utf-8")
+        pad = (-(12 + len(blob))) % _ALIGN
+        blob += b" " * pad
+        fh.write(MAGIC)
+        fh.write(struct.pack("<II", VERSION, len(blob)))
+        fh.write(blob)
+        for chunk in self.chunks:
+            fh.write(chunk)
+
+
+def _write(path_or_fh, manifest: dict, writer: _Writer) -> None:
+    if hasattr(path_or_fh, "write"):
+        writer.write(path_or_fh, manifest)
+    else:
+        with Path(path_or_fh).open("wb") as fh:
+            writer.write(fh, manifest)
+
+
+def read_container(path_or_fh) -> tuple[dict, dict[str, np.ndarray]]:
+    """Parse any .mtj file: (manifest, {array name -> numpy array})."""
+    if hasattr(path_or_fh, "read"):
+        raw = path_or_fh.read()
+    else:
+        raw = Path(path_or_fh).read_bytes()
+    if raw[:4] != MAGIC:
+        raise ValueError("not a .mtj file (bad magic)")
+    version, mlen = struct.unpack_from("<II", raw, 4)
+    if version != VERSION:
+        raise ValueError(f"unsupported .mtj version {version} (reader supports {VERSION})")
+    manifest = json.loads(raw[12 : 12 + mlen].decode("utf-8"))
+    blob = raw[12 + mlen :]
+    arrays = {}
+    for name, ref in manifest.get("arrays", {}).items():
+        dtype = _DTYPES.get(ref["dtype"])
+        if dtype is None:  # unknown dtype from a newer writer: skip, stay stable
+            continue
+        buf = blob[ref["offset"] : ref["offset"] + ref["length"]]
+        arrays[name] = np.frombuffer(buf, dtype=np.dtype(dtype).newbyteorder("<")) \
+            .reshape(ref["shape"]).astype(dtype)
+    return manifest, arrays
+
+
+# ------------------------------------------------------------- trajectory IO
+def save(traj: StateTrajectory, path_or_fh, include_logits: bool = True,
+         include_embeddings: bool = True) -> None:
+    """Serialize one StateTrajectory at full fidelity (kind: "trajectory").
+
+    `include_logits` / `include_embeddings` drop the two largest optional
+    arrays for smaller files; everything else always round-trips.
+    """
+    w = _Writer()
+    w.add("hidden", traj.hidden.astype(np.float32))
+    if traj.entropy is not None:
+        w.add("entropy", traj.entropy.astype(np.float32))
+    if traj.logits is not None and include_logits:
+        w.add("logits", traj.logits.astype(np.float16))
+    if traj.attention is not None:
+        w.add("attention", traj.attention.astype(np.float32))
+    if traj.components is not None:
+        for name, arr in traj.components.items():
+            w.add(f"components.{name}", arr.astype(np.float32))
+    if traj.embedding_matrix is not None and include_embeddings:
+        w.add("embedding_matrix", traj.embedding_matrix.astype(np.float32))
+
+    manifest: dict[str, Any] = {
+        "format": "mottled-trajectory",
+        "version": VERSION,
+        "kind": "trajectory",
+        "meta": _jsonable(traj.meta),
+        "tokens": list(traj.tokens),
+    }
+    if traj.vocab is not None:
+        manifest["vocab"] = list(traj.vocab)
+    if traj.topk is not None:
+        manifest["topk"] = [[[[tok, float(p)] for tok, p in state] for state in layer]
+                            for layer in traj.topk]
+    _write(path_or_fh, manifest, w)
+
+
+def load(path_or_fh) -> StateTrajectory:
+    """Read a kind:"trajectory" .mtj back into a StateTrajectory."""
+    manifest, arrays = read_container(path_or_fh)
+    if manifest.get("kind") != "trajectory":
+        raise ValueError(f"expected kind 'trajectory', got {manifest.get('kind')!r}")
+    components = {name.split(".", 1)[1]: arr for name, arr in arrays.items()
+                  if name.startswith("components.")} or None
+    topk = manifest.get("topk")
+    if topk is not None:
+        topk = [[[(tok, float(p)) for tok, p in state] for state in layer]
+                for layer in topk]
+    traj = StateTrajectory(
+        hidden=arrays["hidden"],
+        tokens=list(manifest["tokens"]),
+        logits=arrays.get("logits"),
+        entropy=arrays.get("entropy"),
+        topk=topk,
+        vocab=manifest.get("vocab"),
+        embedding_matrix=arrays.get("embedding_matrix"),
+        components=components,
+        attention=arrays.get("attention"),
+        meta=manifest.get("meta", {}),
+    )
+    traj.validate()
+    return traj
+
+
+# ---------------------------------------------------------------- scene IO
+def save_scene(result: dict, path_or_fh) -> None:
+    """Serialize a pipeline result as a viewer-ready bundle (kind: "scene").
+
+    `result` is a dict from `ui.run_pipeline`, `ui.run_scene`,
+    `ui.run_compare`, or `ui.run_intervention`.  The scene carries draped
+    trajectory points, the terrain, and per-state inspector data — no hidden
+    states — so files stay small enough for the web viewer.
+    """
+    trajs = result.get("trajs") or [result["traj"]]
+    trajectories_list = result.get("trajectories_list") or [result["trajectories"]]
+    prompts = result.get("prompts") or [result.get("prompt", "")]
+    mesh = result["mesh"]
+
+    w = _Writer()
+    w.add("terrain.x", mesh.x)
+    w.add("terrain.y", mesh.y)
+    w.add("terrain.z", mesh.z)
+
+    runs = []
+    for i, (traj, trajectories) in enumerate(zip(trajs, trajectories_list)):
+        run: dict[str, Any] = {
+            "label": chr(65 + i),
+            "prompt": prompts[i] if i < len(prompts) else "",
+            "tokens": list(traj.tokens),
+            "trajectory_labels": [str(t.label or t.token) for t in trajectories],
+            "points": w.add(f"run{i}.points",
+                            np.stack([t.points for t in trajectories]).astype(np.float32)),
+        }
+        if traj.entropy is not None:
+            run["entropy"] = w.add(f"run{i}.entropy", traj.entropy.astype(np.float32))
+        if traj.attention is not None:
+            run["attention"] = w.add(f"run{i}.attention", traj.attention.astype(np.float32))
+        if traj.topk is not None:
+            run["topk"] = [[[[tok, float(p)] for tok, p in state] for state in layer]
+                           for layer in traj.topk]
+        runs.append(run)
+
+    manifest: dict[str, Any] = {
+        "format": "mottled-trajectory",
+        "version": VERSION,
+        "kind": "scene",
+        "meta": _jsonable(trajs[0].meta),
+        "terrain": {"x": "terrain.x", "y": "terrain.y", "z": "terrain.z"},
+        "runs": runs,
+    }
+    if result.get("comparisons"):
+        manifest["comparisons"] = [
+            {"label": chr(65 + i), "hausdorff": float(c.hausdorff),
+             "dtw_normalized": float(c.dtw.normalized),
+             "shared_tokens": int(c.shared_tokens),
+             "onset_layer": int(c.onset_layer),
+             "readout_changed": None if c.readout_changed is None else int(c.readout_changed)}
+            for i, c in enumerate(result["comparisons"], start=1)
+        ]
+    _write(path_or_fh, manifest, w)
+
+
+def load_scene(path_or_fh) -> dict:
+    """Read a kind:"scene" .mtj: the manifest with array references resolved
+    to numpy arrays in place ("points", "entropy", "attention", terrain)."""
+    manifest, arrays = read_container(path_or_fh)
+    if manifest.get("kind") != "scene":
+        raise ValueError(f"expected kind 'scene', got {manifest.get('kind')!r}")
+    scene = dict(manifest)
+    scene["terrain"] = {axis: arrays[name] for axis, name in manifest["terrain"].items()}
+    scene["runs"] = [
+        {**run, **{key: arrays[run[key]] for key in ("points", "entropy", "attention")
+                   if key in run}}
+        for run in manifest["runs"]
+    ]
+    return scene
+
+
+def _jsonable(meta: dict) -> dict:
+    """Best-effort JSON-safe copy of a meta dict (drop what can't serialize)."""
+    out = {}
+    for key, value in meta.items():
+        try:
+            json.dumps(value)
+            out[key] = value
+        except (TypeError, ValueError):
+            out[key] = str(value)
+    return out
