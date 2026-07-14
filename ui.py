@@ -227,10 +227,18 @@ def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
 
 
 # --------------------------------------------------------------------------
-# Renderer
+# Renderer — styled to the Incision design language: dark navy void, one
+# precision-blue accent, semantic data colors, mono for data values.
 # --------------------------------------------------------------------------
-_MARBLE_COLORS = ["#f94144", "#f8961e", "#f9c74f", "#90be6d", "#43aa8b",
-                  "#4d908e", "#577590", "#277da1", "#9b5de5", "#f15bb5"]
+_MARBLE_COLORS = ["#4B7CF3", "#00CCA8", "#D4934A", "#E05050", "#38B07A",
+                  "#8FA7F7", "#5CE0C6", "#E6B884", "#F08A8A", "#7FD0AC"]
+
+# Terrain potential ramp: void -> surfaces -> precision blue -> light blue.
+_TERRAIN_COLORSCALE = [[0.0, "#04060E"], [0.22, "#0C1020"], [0.45, "#1C2A55"],
+                       [0.68, "#2F55B8"], [0.86, "#4B7CF3"], [1.0, "#C8D4FB"]]
+
+_FONT_SANS = "DM Sans, -apple-system, Segoe UI, Helvetica, Arial, sans-serif"
+_FONT_MONO = "JetBrains Mono, SF Mono, Menlo, Consolas, monospace"
 
 
 def _hover_text(traj: StateTrajectory, t: trajectory_mod.Trajectory) -> list[str]:
@@ -277,7 +285,7 @@ def _attention_trace(
         return None
     return go.Scatter3d(
         x=xs, y=ys, z=zs, mode="lines",
-        line={"color": "rgba(255,255,255,0.5)", "width": 2},
+        line={"color": "rgba(129,143,184,0.55)", "width": 2},
         name="attention", hoverinfo="skip",
     )
 
@@ -315,9 +323,9 @@ def render(
     fig = go.Figure()
     fig.add_trace(go.Surface(
         x=surface.x, y=surface.y, z=surface.z,
-        colorscale="Viridis", opacity=0.92, showscale=False,
+        colorscale=_TERRAIN_COLORSCALE, opacity=0.94, showscale=False,
         contours={"z": {"show": True, "usecolormap": True, "width": 2,
-                        "highlightcolor": "white", "project": {"z": False}}},
+                        "highlightcolor": "#8FA7F7", "project": {"z": False}}},
         name="manifold", hoverinfo="skip",
     ))
 
@@ -379,7 +387,7 @@ def render(
             mode="markers",
             marker={"size": 9, "color": [_MARBLE_COLORS[i % len(_MARBLE_COLORS)]
                                          for i in range(len(fine_paths))],
-                    "symbol": "circle", "line": {"color": "white", "width": 2}},
+                    "symbol": "circle", "line": {"color": "#EDF0FA", "width": 2}},
             name="marble", hoverinfo="skip", showlegend=False,
         )
 
@@ -404,11 +412,13 @@ def render(
             updatemenus=[{
                 "type": "buttons", "direction": "left",
                 "x": 0.05, "y": 0.02, "xanchor": "left", "yanchor": "bottom",
+                "font": {"color": "#EDF0FA"}, "bgcolor": "#11162A",
+                "bordercolor": "#1E2540",
                 "buttons": [
-                    {"label": "▶ Play", "method": "animate",
+                    {"label": "Play", "method": "animate",
                      "args": [None, {"frame": {"duration": frame_ms, "redraw": True},
                                      "fromcurrent": True, "transition": {"duration": 0}}]},
-                    {"label": "⏸ Pause", "method": "animate",
+                    {"label": "Pause", "method": "animate",
                      "args": [[None], {"frame": {"duration": 0, "redraw": False},
                                        "mode": "immediate"}]},
                 ],
@@ -416,22 +426,33 @@ def render(
             sliders=[{
                 "steps": slider_steps, "active": min(current_layer, len(slider_steps) - 1),
                 "x": 0.05, "y": 0.08, "len": 0.9,
+                "font": {"color": "#818FB8", "family": _FONT_MONO, "size": 11},
+                "bgcolor": "#1E2540", "activebgcolor": "#4B7CF3",
+                "bordercolor": "#1E2540", "tickcolor": "#283050",
                 "currentvalue": {"prefix": "layer ", "font": {"size": 13}},
             }],
         )
 
+    axis = {"showbackground": False, "gridcolor": "#1E2540",
+            "zerolinecolor": "#283050", "color": "#818FB8"}
     fig.update_layout(
         scene={
-            "xaxis": {"title": "manifold x", "showbackground": False},
-            "yaxis": {"title": "manifold y", "showbackground": False},
-            "zaxis": {"title": "potential", "showbackground": False},
+            "xaxis": {"title": "manifold x", **axis},
+            "yaxis": {"title": "manifold y", **axis},
+            "zaxis": {"title": "potential", **axis},
             "aspectmode": "data",
         },
         margin={"l": 0, "r": 0, "t": 24, "b": 0},
         height=680,
-        legend={"x": 0.99, "y": 0.99, "xanchor": "right"},
-        template="plotly_dark",
-        title={"text": "Mottled — latent trajectory explorer", "font": {"size": 14}},
+        paper_bgcolor="#080B18",
+        font={"family": _FONT_SANS, "color": "#EDF0FA", "size": 12},
+        legend={"x": 0.99, "y": 0.99, "xanchor": "right",
+                "bgcolor": "rgba(12,16,32,0.88)", "bordercolor": "#1E2540",
+                "borderwidth": 1, "font": {"color": "#818FB8", "size": 11}},
+        hoverlabel={"bgcolor": "#161C33", "bordercolor": "#283050",
+                    "font": {"family": _FONT_MONO, "color": "#EDF0FA", "size": 11}},
+        title={"text": "Mottled — latent trajectory explorer",
+               "font": {"size": 13, "color": "#818FB8"}},
     )
     return fig
 
@@ -444,6 +465,29 @@ def main() -> None:
 
     st.set_page_config(page_title="Mottled", page_icon="🔮", layout="wide")
 
+    # Incision design language on top of the theme in .streamlit/config.toml:
+    # 1px borders, near-sharp corners, mono for data values, tracked overlines.
+    st.markdown("""<style>
+      [data-testid="stMetricValue"], [data-testid="stMetricDelta"] {
+        font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+      }
+      [data-testid="stMetricLabel"] p {
+        text-transform: uppercase; letter-spacing: 0.08em;
+        font-size: 11px; color: #818FB8;
+      }
+      [data-testid="stSidebar"] { border-right: 1px solid #1E2540; }
+      div[data-testid="stExpander"] details {
+        border: 1px solid #1E2540; border-radius: 2px;
+      }
+      .stButton button, .stDownloadButton button, div[data-baseweb="select"] > div,
+      .stTextArea textarea, .stTextInput input {
+        border-radius: 3px !important;
+      }
+      .stTextArea textarea, .stTextInput input { border: 1px solid #1E2540; }
+      code { font-family: "JetBrains Mono", ui-monospace, monospace; }
+      h1, h2, h3 { letter-spacing: -0.01em; }
+    </style>""", unsafe_allow_html=True)
+
     @st.cache_resource(show_spinner="Loading model…")
     def load_model_cached(name: str):
         from capture import load_model
@@ -452,7 +496,8 @@ def main() -> None:
 
     # ------------------------------------------------------------ left panel
     with st.sidebar:
-        st.title("🔮 Mottled")
+        st.title("Mottled")
+        st.caption("Latent trajectory explorer")
         prompt = st.text_area("Prompt", DEFAULT_PROMPT, key="prompt")
         prompt_b = st.text_area("Overlay prompts (one per line, optional)", "",
                                 key="prompt_b",
@@ -471,8 +516,8 @@ def main() -> None:
         attention_on = st.checkbox("Show attention flow", value=False, key="attention_flow",
                                    help="Draw head-averaged attention edges between token "
                                         "states at the selected layer.")
-        run = st.button("▶ Run capture", type="primary", use_container_width=True, key="run")
-        st.caption("Play / Pause / scrub inside the figure animate the marble; "
+        run = st.button("Run capture", type="primary", use_container_width=True, key="run")
+        st.caption("Play, pause and scrub inside the figure animate the marble; "
                    "the layer slider below drives the inspector.")
 
     if run and prompt.strip():
@@ -526,7 +571,7 @@ def main() -> None:
 
         _buf = _io.BytesIO()
         statefile_mod.save_scene(result, _buf)
-        st.download_button("⬇ Export scene (.mtj)", data=_buf.getvalue(),
+        st.download_button("Export scene (.mtj)", data=_buf.getvalue(),
                            file_name="scene.mtj", mime="application/octet-stream",
                            use_container_width=True, key="export_scene",
                            help="Portable scene for the web viewer (viewer/) "
