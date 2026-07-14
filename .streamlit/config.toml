@@ -1,0 +1,7 @@
+# Incision design language: dark navy void, precision-blue accent.
+[theme]
+base = "dark"
+primaryColor = "#4B7CF3"
+backgroundColor = "#080B18"
+secondaryBackgroundColor = "#0C1020"
+textColor = "#EDF0FA"

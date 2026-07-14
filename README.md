@@ -275,6 +275,16 @@ projected to ≤3-D is pickable. A volumetric (voxel-octree) renderer for
 *fields* (density / flow) will land once we render ensembles rather than single
 runs.
 
+### Design language
+
+Every surface — the Plotly renderer, the Streamlit shell, the web viewer —
+shares one design language (dark navy void `#080B18`, a single
+precision-blue accent `#4B7CF3`, semantic data colors, 1px borders,
+near-sharp corners, monospace for data values, no emoji in product UI).
+The tokens live in three mirrored places: `ui.py` (`_MARBLE_COLORS`,
+`_TERRAIN_COLORSCALE`), `.streamlit/config.toml`, and `viewer/style.css` —
+change a value in all three to retheme.
+
 ### Plugin points
 
 Projections (`projection.PROJECTIONS`), density estimators

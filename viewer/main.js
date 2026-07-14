@@ -3,22 +3,25 @@
 "use strict";
 
 // ---------------------------------------------------------------- constants
-const PALETTE = ["#f94144", "#f8961e", "#f9c74f", "#90be6d", "#43aa8b",
-                 "#4d908e", "#577590", "#277da1", "#9b5de5", "#f15bb5"];
+// Incision data palette — accent blue, live teal, risk amber, loss red,
+// payout green, then lightened variants. Mirrors ui.py's _MARBLE_COLORS.
+const PALETTE = ["#4B7CF3", "#00CCA8", "#D4934A", "#E05050", "#38B07A",
+                 "#8FA7F7", "#5CE0C6", "#E6B884", "#F08A8A", "#7FD0AC"];
 // draw/skip fine-segment run lengths, cycled per run: solid, dash, dot, longdash, dashdot
 const DASH_CYCLE = [null, [5, 3], [1, 2], [9, 3], [5, 2, 1, 2]];
 const SEG = 8;              // Catmull-Rom subdivisions per layer span
 const OVERLAY_ALPHA = 0.55; // runs after the first
 const PICK_RADIUS = 14;     // px
-const VIRIDIS = [[0.267, 0.005, 0.329], [0.283, 0.141, 0.458], [0.254, 0.265, 0.530],
-                 [0.207, 0.372, 0.553], [0.164, 0.471, 0.558], [0.128, 0.567, 0.551],
-                 [0.135, 0.659, 0.518], [0.267, 0.749, 0.441], [0.478, 0.821, 0.318],
-                 [0.741, 0.873, 0.150], [0.993, 0.906, 0.144]];
+// Terrain potential ramp: void -> surfaces -> precision blue -> light blue.
+// Mirrors ui.py's _TERRAIN_COLORSCALE.
+const TERRAIN_RAMP = [[0.016, 0.024, 0.055], [0.031, 0.047, 0.102], [0.047, 0.063, 0.125],
+                      [0.078, 0.118, 0.271], [0.110, 0.165, 0.333], [0.184, 0.333, 0.722],
+                      [0.294, 0.486, 0.953], [0.475, 0.616, 0.965], [0.784, 0.831, 0.984]];
 
-function viridis(t) {
-  t = Math.min(1, Math.max(0, t)) * (VIRIDIS.length - 1);
-  const i = Math.min(VIRIDIS.length - 2, Math.floor(t)), f = t - i;
-  const a = VIRIDIS[i], b = VIRIDIS[i + 1];
+function terrainColor(t) {
+  t = Math.min(1, Math.max(0, t)) * (TERRAIN_RAMP.length - 1);
+  const i = Math.min(TERRAIN_RAMP.length - 2, Math.floor(t)), f = t - i;
+  const a = TERRAIN_RAMP[i], b = TERRAIN_RAMP[i + 1];
   return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
 }
 function hexRGB(h) {
@@ -167,7 +170,7 @@ function buildTerrain(t) {
   for (let i = 0; i < H; i++) for (let j = 0; j < W; j++) {
     const v = i * W + j, z = zs[v];
     pos.set([xs[j], ys[i], z], v * 3);
-    const shade = viridis((z - zmin) / zr);
+    const shade = terrainColor((z - zmin) / zr);
     // faint contour-band feel: darken near iso-lines of height
     const iso = Math.abs(((z - zmin) / zr * 14) % 1 - 0.5);
     const k = iso < 0.06 ? 0.82 : 1.0;
@@ -340,7 +343,8 @@ function rebuildAttention() {
         if (src === dst || w[base + dst * T + src] < 0.1 || src >= rd.N) continue;
         pos.push(pts[(src * L + layer) * 3], pts[(src * L + layer) * 3 + 1], pts[(src * L + layer) * 3 + 2],
                  pts[(dst * L + layer) * 3], pts[(dst * L + layer) * 3 + 1], pts[(dst * L + layer) * 3 + 2]);
-        col.push(1, 1, 1, 0.5 * rd.alpha, 1, 1, 1, 0.5 * rd.alpha);
+        col.push(0.506, 0.561, 0.722, 0.55 * rd.alpha,
+                 0.506, 0.561, 0.722, 0.55 * rd.alpha);
       }
     }
   });
@@ -388,7 +392,7 @@ function frame(now) {
   const w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   gl.viewport(0, 0, w, h);
-  gl.clearColor(0.055, 0.063, 0.078, 1);
+  gl.clearColor(0.031, 0.043, 0.094, 1);  // --color-base #080B18
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   if (!state.scene) return;
 
