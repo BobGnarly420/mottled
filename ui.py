@@ -18,6 +18,7 @@ import cache as cache_mod
 import compare as compare_mod
 import density as density_mod
 import metrics as metrics_mod
+import sae as sae_mod
 import projection as projection_mod
 import terrain as terrain_mod
 import trajectory as trajectory_mod
@@ -44,11 +45,12 @@ def run_pipeline(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) -> 
     omitted, `cfg.model` is loaded by name ("synthetic" needs no loading).
     """
     disk = cache_mod.DiskCache(cfg.cache_dir) if cfg.use_cache else None
-    key = cache_mod.make_key("pipeline-v1", prompt, cfg.model, cfg.projection,
+    key = cache_mod.make_key("pipeline-v2", prompt, cfg.model, cfg.projection,
                              cfg.density, cfg.top_k, cfg.n_components, cfg.seed,
                              cfg.grid_size, cfg.smooth_sigma, cfg.height_scale,
                              cfg.invert_terrain, cfg.trajectory_mode,
-                             cfg.trajectory_token, cfg.frames_per_layer)
+                             cfg.trajectory_token, cfg.frames_per_layer,
+                             cfg.capture_components)
     if disk is not None and (hit := disk.get(key)) is not None:
         return hit
 
@@ -60,6 +62,7 @@ def run_pipeline(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) -> 
         device=cfg.device,
         dtype=cfg.dtype,
         keep_logits=cfg.keep_logits,
+        capture_components=cfg.capture_components,
     )
     traj.validate()
 
@@ -106,12 +109,13 @@ def run_compare(cfg: MarbleConfig, prompt_a: str, prompt_b: str,
     `comparison` (compare.TrajectoryComparison) at the final token.
     """
     disk = cache_mod.DiskCache(cfg.cache_dir) if cfg.use_cache else None
-    key = cache_mod.make_key("compare-v1", prompt_a, prompt_b, cfg.model,
+    key = cache_mod.make_key("compare-v2", prompt_a, prompt_b, cfg.model,
                              cfg.projection, cfg.density, cfg.top_k,
                              cfg.n_components, cfg.seed, cfg.grid_size,
                              cfg.smooth_sigma, cfg.height_scale,
                              cfg.invert_terrain, cfg.trajectory_mode,
-                             cfg.trajectory_token, cfg.frames_per_layer)
+                             cfg.trajectory_token, cfg.frames_per_layer,
+                             cfg.capture_components)
     if disk is not None and (hit := disk.get(key)) is not None:
         return hit
 
@@ -124,6 +128,7 @@ def run_compare(cfg: MarbleConfig, prompt_a: str, prompt_b: str,
             device=cfg.device,
             dtype=cfg.dtype,
             keep_logits=cfg.keep_logits,
+            capture_components=cfg.capture_components,
         )
         traj.validate()
         return traj
@@ -210,12 +215,18 @@ def render(
     traj_b: StateTrajectory | None = None,
     trajectories_b: list[trajectory_mod.Trajectory] | None = None,
     fine_paths_b: list[np.ndarray] | None = None,
+    overlay: list[np.ndarray] | None = None,
+    overlay_label: str = "feature",
 ) -> go.Figure:
     """Build the 3-D scene: terrain surface, token trajectories, animated marbles.
 
     Passing `traj_b` / `trajectories_b` / `fine_paths_b` (from `run_compare`)
     overlays a second run on the same terrain: B's trajectories are dashed and
     both runs' labels are prefixed A/B.
+
+    `overlay` colors the primary run's trajectory markers by a per-layer
+    scalar (one (L,) array per trajectory, e.g. an SAE feature's activation),
+    on a shared color scale with a colorbar.
     """
     fig = go.Figure()
     fig.add_trace(go.Surface(
@@ -230,20 +241,30 @@ def render(
     if trajectories_b:
         runs = [(traj, trajectories, "A · ", None),
                 (traj_b, trajectories_b, "B · ", "dash")]
+    vmin = vmax = 0.0
+    if overlay is not None:
+        vmin = float(min(v.min() for v in overlay))
+        vmax = float(max(max(v.max() for v in overlay), vmin + 1e-6))
     i = 0
-    for src, trajs, prefix, dash in runs:
-        for t in trajs:
+    for run_idx, (src, trajs, prefix, dash) in enumerate(runs):
+        for j, t in enumerate(trajs):
             color = _MARBLE_COLORS[i % len(_MARBLE_COLORS)]
             i += 1
             line = {"color": color, "width": 5}
             if dash:
                 line["dash"] = dash
+            marker = {"size": 3, "color": color}
+            if overlay is not None and run_idx == 0 and j < len(overlay):
+                marker = {"size": 5, "color": overlay[j], "colorscale": "Turbo",
+                          "cmin": vmin, "cmax": vmax, "showscale": j == 0,
+                          "colorbar": {"title": overlay_label, "len": 0.5,
+                                       "x": 0.02, "thickness": 12}}
             pts = t.points
             fig.add_trace(go.Scatter3d(
                 x=pts[:, 0], y=pts[:, 1], z=pts[:, 2],
                 mode="lines+markers",
                 line=line,
-                marker={"size": 3, "color": color},
+                marker=marker,
                 name=prefix + str(t.label or t.token),
                 text=_hover_text(src, t),
                 hoverinfo="text",
@@ -344,6 +365,10 @@ def main() -> None:
         top_k = st.slider("Top-k", 1, 10, 5, key="top_k")
         mode = st.selectbox("Trajectory", TRAJECTORY_MODES, key="trajectory_mode")
         invert = st.checkbox("Dense regions as valleys", value=False, key="invert")
+        sae_on = st.checkbox("SAE feature overlay", value=False, key="sae_overlay",
+                             help="Color trajectory markers by one feature's activation. "
+                                  "Uses an untrained demo dictionary; load real weights "
+                                  "with sae.load_npz for interpretable features.")
         run = st.button("▶ Run capture", type="primary", use_container_width=True, key="run")
         st.caption("Play / Pause / scrub inside the figure animate the marble; "
                    "the layer slider below drives the inspector.")
@@ -371,8 +396,28 @@ def main() -> None:
     cfg: MarbleConfig = st.session_state["cfg"]
     traj: StateTrajectory = result["traj"]
 
+    @st.cache_resource(show_spinner=False)
+    def _demo_sae(dim: int, n_features: int):
+        return sae_mod.demo_sae(dim, n_features)
+
+    acts = overlay = None
+    overlay_label = "feature"
     with st.sidebar:
         layer = st.slider("Layer", 0, traj.n_layers - 1, traj.n_layers - 1, key="layer")
+        if sae_on:
+            acts = sae_mod.feature_trajectory(traj, _demo_sae(traj.dim, cfg.sae_features))
+            choices = [int(f) for f in sae_mod.active_features(acts, k=25)]
+            if choices and result.get("traj_b") is None:
+                feat = st.selectbox(
+                    "SAE feature", choices,
+                    format_func=lambda f: f"f{f} · peak {acts[..., f].max():.2f}",
+                    key="feature",
+                )
+                overlay_label = f"f{feat}"
+                overlay = [
+                    acts[:, t.token if isinstance(t.token, int) else traj.n_tokens - 1, feat]
+                    for t in result["trajectories"]
+                ]
 
     @st.cache_resource(show_spinner=False)
     def _neighbor_cache(key: str):  # one TokenNeighbors per capture
@@ -392,7 +437,8 @@ def main() -> None:
                      frame_ms=cfg.frame_ms,
                      traj_b=result.get("traj_b"),
                      trajectories_b=result.get("trajectories_b"),
-                     fine_paths_b=result.get("fine_paths_b"))
+                     fine_paths_b=result.get("fine_paths_b"),
+                     overlay=overlay, overlay_label=overlay_label)
         st.plotly_chart(fig, use_container_width=True, key="scene")
 
     # ----------------------------------------------------------- right panel
@@ -420,6 +466,20 @@ def main() -> None:
             tn = _token_neighbors(traj)
             for tok, sim in tn.nearest(state.vector, k=cfg.n_neighbors):
                 st.write(f"`{tok}`  ·  cos {sim:.3f}")
+
+        if acts is not None:
+            st.markdown("**Top SAE features** *(demo dictionary)*")
+            fired = sae_mod.top_features(acts, layer, token, k=cfg.top_k)
+            for fid, act in fired:
+                st.write(f"`f{fid}`  ·  act {act:.2f}")
+            if not fired:
+                st.caption("no features fire at this state")
+
+        if traj.components is not None:
+            with st.expander("Residual decomposition", expanded=False):
+                shares = metrics_mod.component_shares(traj, token=token)
+                st.markdown("Share of each block's residual write")
+                st.line_chart({"attention": shares[:, 0], "mlp": shares[:, 1]})
 
         with st.expander("Research metrics", expanded=False):
             summary = metrics_mod.summarize(traj, result["coords"], token=token)

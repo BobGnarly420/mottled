@@ -57,6 +57,7 @@ def capture(
     dim: int = DIM,
     top_k: int = 5,
     keep_logits: bool = True,
+    capture_components: bool = False,
 ) -> StateTrajectory:
     """Generate a deterministic synthetic StateTrajectory for `prompt`."""
     tokens = _tokenize(prompt)
@@ -83,6 +84,17 @@ def capture(
         velocity = 0.7 * velocity + 0.15 * pull + 0.08 * noise
         hidden[layer] = hidden[layer - 1] + velocity
 
+    # Residual decomposition analog: split each layer's update into an
+    # "attention" and an "MLP" write that sum to it exactly, mirroring a
+    # pre-norm transformer.  The pull term plays attention (context-driven),
+    # the momentum+noise remainder plays the MLP.
+    components = None
+    if capture_components:
+        updates = np.diff(hidden, axis=0)                       # (L-1, T, D)
+        share = rng.uniform(0.3, 0.7, size=(L - 1, T, 1)).astype(np.float32)
+        attn = share * updates
+        components = {"attn": attn, "mlp": updates - attn}
+
     # Logit lens: similarity to token embeddings, sharpened with depth so
     # entropy collapses like a real network committing to a prediction.
     sharpness = 1.0 + 4.0 * np.arange(L, dtype=np.float32) / max(L - 1, 1)
@@ -98,6 +110,7 @@ def capture(
         topk=topk,
         vocab=list(VOCAB),
         embedding_matrix=emb,
+        components=components,
         meta={"backend": "synthetic", "prompt": prompt, "model": "synthetic"},
     )
 

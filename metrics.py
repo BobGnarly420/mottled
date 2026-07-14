@@ -115,6 +115,23 @@ def layerwise_kl(logits: np.ndarray) -> np.ndarray:
     return kl_divergence(lg[:-1], lg[1:])
 
 
+def component_shares(traj: StateTrajectory, token: int = -1) -> np.ndarray:
+    """Fraction of each block's residual write from attention vs MLP: (L-1, 2).
+
+    Column 0 is the attention share ||attn|| / (||attn|| + ||mlp||), column 1
+    the MLP share; rows sum to 1.  Requires a trajectory captured with
+    `capture_components=True`.
+    """
+    if traj.components is None or not {"attn", "mlp"} <= set(traj.components):
+        raise ValueError("trajectory has no residual decomposition; "
+                         "capture with capture_components=True")
+    t = int(token) % traj.n_tokens
+    a = np.linalg.norm(traj.components["attn"][:, t].astype(np.float64), axis=-1)
+    m = np.linalg.norm(traj.components["mlp"][:, t].astype(np.float64), axis=-1)
+    total = np.maximum(a + m, _EPS)
+    return np.stack([a / total, m / total], axis=1)
+
+
 def branch_divergence(points_a: np.ndarray, points_b: np.ndarray) -> np.ndarray:
     """Pointwise distance between two aligned trajectories (Phase-2 preview)."""
     n = min(len(points_a), len(points_b))
@@ -145,6 +162,8 @@ def summarize(traj: StateTrajectory, coords: np.ndarray, token: int = -1) -> dic
 
         ids = neighbor_ids_per_layer(traj.hidden, traj.embedding_matrix, token, k=5)
         out["nn_stability"] = float(neighbor_stability(ids).mean())
+    if traj.components is not None and {"attn", "mlp"} <= set(traj.components):
+        out["avg_attn_share"] = float(component_shares(traj, token)[:, 0].mean())
     return out
 
 

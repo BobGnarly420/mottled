@@ -35,6 +35,11 @@ class MarbleConfig:
     device: str = "auto"          # "auto" | "cpu" | "cuda" | "mps"
     dtype: str = "float32"
     keep_logits: bool = True      # keep full logit-lens logits (float16)
+    capture_components: bool = True  # record attn/MLP residual writes; set
+    # False for layouts without a single attn/mlp module per block (e.g. OPT)
+
+    # SAE feature overlay (demo dictionary; see sae.py for real weights)
+    sae_features: int = 256
 
     # projection
     projection: str = "pca"

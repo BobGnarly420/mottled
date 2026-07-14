@@ -43,6 +43,7 @@ from terrain import mesh, drape            # TerrainMesh
 from trajectory import extract, densify    # Trajectory list, animation path
 from metrics import summarize              # research metrics
 from compare import compare                # A/B trajectory comparison
+from sae import demo_sae, feature_trajectory  # SAE feature activations
 from ui import run_pipeline, render        # everything at once → plotly Figure
 
 traj = capture("gpt2", "The capital of France is")
@@ -83,6 +84,7 @@ density, terrain, metrics, UI — works unchanged.
 | `bvh.py` | Spatial index over trajectory segments (ray-pick / nearest / box / frustum) for the fly-through canvas |
 | `intervene.py` | Causal interventions: perturb / set / noise / freeze a state via a resumable forward pass → counterfactual trajectory |
 | `compare.py` | Trajectory comparison: Hausdorff, dynamic time warping, shared-prefix alignment, layerwise divergence profiles |
+| `sae.py` | Sparse-autoencoder features: apply (never train) an SAE to every captured state; demo dictionary + npz interchange |
 
 ### Causal intervention (perturb-and-replay)
 
@@ -143,6 +145,37 @@ metrics and the per-layer A–B distance in the inspector.
 Everything is backend-agnostic — a synthetic run and the comparison stack work
 without torch; the runs only need the same layer count and hidden dimension.
 
+### SAE features & residual decomposition
+
+`capture(model, prompt, capture_components=True)` additionally hooks every
+block's attention and MLP submodules and records their outputs — the two
+additive writes to the residual stream.  For pre-norm architectures
+(Llama-style, GPT-2, NeoX) the decomposition is exact:
+`hidden[l+1] = hidden[l] + attn[l] + mlp[l]` (pinned by tests).
+`metrics.component_shares` turns it into a per-layer attention-vs-MLP
+balance, and the UI plots it in the inspector.  The synthetic backend emits
+an analogous exact decomposition, so the whole path works without torch.
+
+`sae.py` applies sparse autoencoders to trajectories — it never trains them.
+An SAE is four plain numpy arrays (`w_enc`, `b_enc`, `w_dec`, `b_dec`);
+export any pretrained SAE (SAELens, dictionary-learning runs) to `.npz` and
+`load_npz` it.  `demo_sae` builds an untrained random dictionary so the
+feature pipeline — activations, top-features, UI overlay — runs offline
+(demo activations are sparse projections, *not* interpretable features).
+
+```python
+from sae import load_npz, demo_sae, feature_trajectory, top_features
+
+sae = demo_sae(traj.dim)          # or load_npz("gpt2-res-l8.npz")
+acts = feature_trajectory(traj, sae)         # (L, T, F) activations
+print(top_features(acts, layer=8, token=-1)) # strongest features at a state
+```
+
+In the UI, tick **SAE feature overlay**: trajectory markers are colored by
+the selected feature's activation per layer, the inspector lists the top
+features at the selected state, and a **Residual decomposition** panel shows
+each block's attention/MLP share.
+
 ### Interaction layer (in progress)
 
 The exploratory canvas renders trajectories as curves (not voxels — projected
@@ -181,20 +214,22 @@ reproduces the model's final logits, shape consistency, projection
 determinism, valid neighbor lookups, finite density (incl. degenerate
 inputs), terrain mesh consistency and smoothing, animation continuity,
 comparison geometry on analytic cases (Hausdorff, DTW alignment validity),
-and headless runs of the actual Streamlit app — single-prompt and A/B —
-(`streamlit.testing.v1.AppTest`).
+SAE encode/decode math and npz roundtrip, exact residual decomposition on
+locally-built Llama/GPT-2 models, and headless runs of the actual Streamlit
+app — single-prompt, A/B, and SAE overlay — (`streamlit.testing.v1.AppTest`).
 
 ## Non-goals (MVP)
 
-No training, finetuning, SAE integration, activation patching, circuit
-discovery, distributed inference, or production auth. Single-machine
-research tool.
+No training or finetuning (SAEs are *applied*, never trained), no activation
+patching, circuit discovery, distributed inference, or production auth.
+Single-machine research tool.
 
 ## Roadmap
 
 - **Phase 2** — ✅ trajectory comparison: prompt A/B overlay, Hausdorff
   distance, dynamic time warping, shared-prefix divergence (`compare.py`,
   grown from the `metrics.branch_divergence` seed).
-- **Phase 3** — SAE features, residual decomposition, feature overlays.
+- **Phase 3** — ✅ SAE features (`sae.py`), residual decomposition
+  (`capture_components`), feature overlays in the UI.
 - **Phase 4** — multi-prompt scenes (`projection.project_joint` already
   accepts N runs), attention flow, interactive patching.

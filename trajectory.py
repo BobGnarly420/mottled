@@ -62,6 +62,9 @@ class StateTrajectory:
     topk: list[list[list[tuple[str, float]]]] | None = None  # [L][T][k]
     vocab: list[str] | None = None            # id -> token string
     embedding_matrix: np.ndarray | None = None  # (V, D) token embeddings
+    components: dict[str, np.ndarray] | None = None  # residual decomposition,
+    # e.g. {"attn": (L-1, T, D), "mlp": (L-1, T, D)} — each block's additive
+    # writes to the stream: hidden[l+1] ≈ hidden[l] + attn[l] + mlp[l]
     meta: dict[str, Any] = field(default_factory=dict)
 
     # ------------------------------------------------------------------ shape
@@ -86,6 +89,11 @@ class StateTrajectory:
             raise ValueError(f"entropy shape {self.entropy.shape} != {(L, T)}")
         if self.logits is not None and self.logits.shape[:2] != (L, T):
             raise ValueError(f"logits shape {self.logits.shape[:2]} != {(L, T)}")
+        if self.components is not None:
+            for name, arr in self.components.items():
+                if arr.shape != (L - 1, T, self.dim):
+                    raise ValueError(
+                        f"component {name!r} shape {arr.shape} != {(L - 1, T, self.dim)}")
         if not np.isfinite(self.hidden).all():
             raise ValueError("hidden contains non-finite values")
 

@@ -76,16 +76,24 @@ class HookCapture:
 
     Captured states always reflect the value that actually propagated, so a
     perturbation at layer k appears in ``hidden[k]`` and in every layer after.
+
+    ``capture_components=True`` additionally hooks every block's attention and
+    MLP submodules and records their outputs — the two additive writes to the
+    residual stream, so for pre-norm architectures (Llama-style, GPT-2, NeoX)
+    ``hidden[l+1] = hidden[l] + attn[l] + mlp[l]`` exactly.  Frozen blocks
+    skip their update, so their recorded components no longer propagate.
     """
 
     def __init__(self, model, state_edits: dict | None = None,
-                 frozen_blocks: set | None = None):
+                 frozen_blocks: set | None = None, capture_components: bool = False):
         from models.families import resolve_family
 
         self.adapter = resolve_family(model)
         self.states: dict[int, "torch.Tensor"] = {}
+        self.components: dict[str, dict[int, "torch.Tensor"]] = {"attn": {}, "mlp": {}}
         self.state_edits = dict(state_edits or {})
         self.frozen_blocks = set(frozen_blocks or set())
+        self.capture_components = capture_components
         self._handles = []
 
     def __enter__(self):
@@ -126,6 +134,18 @@ class HookCapture:
                 return out
 
             self._handles.append(block.register_forward_hook(hook))
+
+        if self.capture_components:
+            def component_hook(name: str, i: int):
+                def hook(module, args, output):
+                    out = output[0] if isinstance(output, tuple) else output
+                    self.components[name][i] = out.detach()
+                return hook
+
+            for i, block in enumerate(blocks):
+                attn, mlp = self.adapter.block_submodules(block)
+                self._handles.append(attn.register_forward_hook(component_hook("attn", i)))
+                self._handles.append(mlp.register_forward_hook(component_hook("mlp", i)))
         return self
 
     def __exit__(self, *exc):
@@ -140,6 +160,17 @@ class HookCapture:
         if missing:
             raise RuntimeError(f"missing hook captures for layers {missing}")
         return torch.stack([self.states[i][0] for i in range(n)]).float().cpu()
+
+    def stacked_components(self) -> dict[str, "torch.Tensor"]:
+        """{"attn": (L-1, T, D), "mlp": (L-1, T, D)} float32 on CPU."""
+        n = len(self.adapter.blocks)
+        out = {}
+        for name, per_block in self.components.items():
+            missing = [i for i in range(n) if i not in per_block]
+            if missing:
+                raise RuntimeError(f"missing {name} captures for blocks {missing}")
+            out[name] = torch.stack([per_block[i][0] for i in range(n)]).float().cpu()
+        return out
 
 
 def logit_lens(hidden: "torch.Tensor", adapter, chunk: int = 4) -> "torch.Tensor":
@@ -182,26 +213,33 @@ def capture(
     device: str = "auto",
     dtype: str = "float32",
     keep_logits: bool = True,
+    capture_components: bool = False,
 ) -> StateTrajectory:
     """Run a forward pass and capture the residual stream at every layer.
 
     `model` may be a HF model instance (with `tokenizer` supplied), a HF hub
     name, or the string "synthetic".  Returns hidden[layer][token][dimension]
     wrapped in a StateTrajectory with logit-lens statistics attached.
+
+    `capture_components=True` also records each block's attention and MLP
+    outputs — the residual decomposition — in `StateTrajectory.components`.
     """
     if isinstance(model, str) and model == "synthetic":
         from models import synthetic
 
-        return synthetic.capture(prompt, top_k=top_k, keep_logits=keep_logits)
+        return synthetic.capture(prompt, top_k=top_k, keep_logits=keep_logits,
+                                 capture_components=capture_components)
 
     _require_torch()
     return _run(model, prompt, tokenizer=tokenizer, top_k=top_k, device=device,
-                dtype=dtype, keep_logits=keep_logits)
+                dtype=dtype, keep_logits=keep_logits,
+                capture_components=capture_components)
 
 
 def _run(model, prompt, tokenizer=None, top_k=5, device="auto", dtype="float32",
          keep_logits=True, state_edits: dict | None = None,
-         frozen_blocks: set | None = None, extra_meta: dict | None = None) -> StateTrajectory:
+         frozen_blocks: set | None = None, extra_meta: dict | None = None,
+         capture_components: bool = False) -> StateTrajectory:
     """Forward pass (optionally intervened) -> StateTrajectory. Shared by
     capture() and intervene()."""
     if isinstance(model, str):
@@ -215,9 +253,13 @@ def _run(model, prompt, tokenizer=None, top_k=5, device="auto", dtype="float32",
     tokens = [_clean_token(t) for t in tokenizer.convert_ids_to_tokens(input_ids[0].tolist())]
 
     model.eval()
-    with HookCapture(model, state_edits=state_edits, frozen_blocks=frozen_blocks) as cap, torch.no_grad():
+    with HookCapture(model, state_edits=state_edits, frozen_blocks=frozen_blocks,
+                     capture_components=capture_components) as cap, torch.no_grad():
         model(input_ids)
     hidden = cap.stacked()  # (L, T, D)
+    components = None
+    if capture_components:
+        components = {k: v.numpy() for k, v in cap.stacked_components().items()}
 
     logits_t = logit_lens(hidden, cap.adapter)
     vocab = [_clean_token(t) for t in tokenizer.convert_ids_to_tokens(range(logits_t.shape[-1]))]
@@ -240,6 +282,7 @@ def _run(model, prompt, tokenizer=None, top_k=5, device="auto", dtype="float32",
         topk=topk,
         vocab=vocab,
         embedding_matrix=cap.adapter.embedding_weight().numpy(),
+        components=components,
         meta=meta,
     )
 

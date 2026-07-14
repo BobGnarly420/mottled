@@ -33,6 +33,8 @@ _NORM_PATHS = [
     "model.decoder.final_layer_norm",
 ]
 _HEAD_PATHS = ["lm_head", "embed_out"]
+_ATTN_PATHS = ["self_attn", "attn", "attention", "self_attention"]
+_MLP_PATHS = ["mlp", "feed_forward", "ffn"]
 
 
 def _get_path(obj: Any, path: str) -> Any | None:
@@ -65,6 +67,22 @@ class FamilyAdapter:
             raise AttributeError("embedding module has no .weight")
         with torch.no_grad():
             return w.detach().float().cpu()
+
+    def block_submodules(self, block: Any) -> tuple[Any, Any]:
+        """(attention, mlp) submodules of one block — the two residual writers.
+
+        Resolution is structural, like block discovery.  Raises when a block
+        does not follow the attn+MLP layout (residual decomposition is not
+        defined for it).
+        """
+        attn = next((m for p in _ATTN_PATHS if (m := getattr(block, p, None)) is not None), None)
+        mlp = next((m for p in _MLP_PATHS if (m := getattr(block, p, None)) is not None), None)
+        if attn is None or mlp is None:
+            raise ValueError(
+                f"cannot resolve attention/MLP submodules on {type(block).__name__}; "
+                "residual decomposition is unavailable for this layout"
+            )
+        return attn, mlp
 
 
 def resolve_family(model: Any) -> FamilyAdapter:
