@@ -669,6 +669,40 @@ async function loadURL(url, quiet) {
   }
 }
 
+// Capture backend (serve.py) discovery: when /api/health answers, the
+// browser can generate new scenes directly instead of only loading files.
+(async function discoverBackend() {
+  let health;
+  try {
+    const res = await fetch("/api/health");
+    if (!res.ok) return;
+    health = await res.json();
+  } catch { return; }  // plain static hosting: no backend, no form
+  const row = document.getElementById("capture-row");
+  const promptsEl = document.getElementById("capturePrompts");
+  const btn = document.getElementById("captureBtn");
+  row.hidden = false;
+  document.getElementById("captureModel").textContent = `model: ${health.model}`;
+  btn.addEventListener("click", async () => {
+    const prompts = promptsEl.value.split("\n").map((s) => s.trim()).filter(Boolean);
+    if (!prompts.length) return;
+    btn.disabled = true; btn.textContent = "Capturing";
+    try {
+      const res = await fetch("/api/scene", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompts }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+      loadBuffer(await res.arrayBuffer(), prompts[0]);
+    } catch (err) {
+      showMessage(`capture failed: ${err.message}`, true);
+    } finally {
+      btn.disabled = false; btn.textContent = "Capture";
+    }
+  });
+})();
+
 (async function boot() {
   if (!gl) { showMessage("WebGL2 is not available in this browser", true); return; }
   requestAnimationFrame(frame);

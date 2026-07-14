@@ -259,11 +259,19 @@ def _run(model, prompt, tokenizer=None, top_k=5, device="auto", dtype="float32",
     tokens = [_clean_token(t) for t in tokenizer.convert_ids_to_tokens(input_ids[0].tolist())]
 
     model.eval()
-    with HookCapture(model, state_edits=state_edits, frozen_blocks=frozen_blocks,
-                     capture_components=capture_components) as cap, torch.no_grad():
-        # output_attentions forces the eager attention path so patterns are
-        # actually materialised (sdpa/flash kernels never form the matrix).
-        out = model(input_ids, output_attentions=capture_attention or None)
+    # sdpa/flash kernels never materialise the attention matrix; switch the
+    # dispatch to eager for this pass so output_attentions actually returns.
+    config = getattr(model, "config", None)
+    prev_impl = getattr(config, "_attn_implementation", None)
+    if capture_attention and prev_impl and prev_impl != "eager":
+        config._attn_implementation = "eager"
+    try:
+        with HookCapture(model, state_edits=state_edits, frozen_blocks=frozen_blocks,
+                         capture_components=capture_components) as cap, torch.no_grad():
+            out = model(input_ids, output_attentions=capture_attention or None)
+    finally:
+        if capture_attention and prev_impl and prev_impl != "eager":
+            config._attn_implementation = prev_impl
     hidden = cap.stacked()  # (L, T, D)
     components = None
     if capture_components:

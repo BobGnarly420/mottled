@@ -108,3 +108,23 @@ def test_gpt2_style_layout_resolves():
     assert adapter.n_layers == 2
     traj = capture(model, PROMPT, tokenizer=DummyTokenizer(), top_k=2)
     assert traj.hidden.shape[0] == 3
+
+
+def test_mamba_layout_resolves():
+    """Mamba is a state-space model, not a transformer: the producer
+    abstraction must hold anyway (block capture + logit lens unchanged)."""
+    torch.manual_seed(0)
+    cfg = transformers.MambaConfig(vocab_size=VOCAB_SIZE, hidden_size=32,
+                                   state_size=8, num_hidden_layers=2, expand=2)
+    model = transformers.MambaForCausalLM(cfg).eval()
+    adapter = resolve_family(model)
+    assert adapter.n_layers == 2
+    traj = capture(model, PROMPT, tokenizer=DummyTokenizer(), top_k=3)
+    traj.validate()
+    assert traj.hidden.shape == (3, len(PROMPT.split()), 32)
+    assert np.isfinite(traj.entropy).all()
+    # no attention, no attn/mlp split: those captures must refuse, not lie
+    with pytest.raises(ValueError):
+        capture(model, PROMPT, tokenizer=DummyTokenizer(), capture_components=True)
+    with pytest.raises(ValueError):
+        capture(model, PROMPT, tokenizer=DummyTokenizer(), capture_attention=True)

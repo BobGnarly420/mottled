@@ -47,6 +47,14 @@ button, select {
 button:hover, select:hover { border-color: var(--color-accent); }
 button:active { transform: translateY(1px); }
 
+#capture-row { margin-top: 10px; border-top: 1px solid var(--color-border);
+  padding-top: 8px; }
+#capture-row textarea { width: 100%; resize: vertical; background: var(--color-surface-1);
+  color: var(--color-fg-1); border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm); padding: 5px 8px; font: inherit; }
+#capture-row textarea:focus { outline: none; border-color: var(--color-accent); }
+#capture-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+
 #runs-panel { top: 12px; right: 12px; min-width: 220px; max-width: 320px; }
 .panel-head { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
   color: var(--color-fg-2); margin-bottom: 6px; }

@@ -1,10 +1,13 @@
 """Model-family abstraction for HuggingFace causal LMs.
 
 Qwen / Llama / Mistral / Gemma all expose the Llama-style layout
-(``model.layers``, ``model.norm``, ``lm_head``); GPT-2 and GPT-NeoX layouts
-are also recognised so tiny test models work.  Resolution is structural —
-we probe attribute paths instead of switching on class names — so any model
-that follows one of these layouts is supported without registration.
+(``model.layers``, ``model.norm``, ``lm_head``); GPT-2, GPT-NeoX and Mamba
+layouts are also recognised.  Resolution is structural — we probe attribute
+paths instead of switching on class names — so any model that follows one of
+these layouts is supported without registration.  Mamba is the proof that
+the producer abstraction is not transformer-shaped: its blocks are state-
+space mixers (no attention, no attn/mlp residual split), yet block-output
+capture and the logit lens work unchanged.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ _BLOCK_PATHS = [
     "gpt_neox.layers",         # GPT-NeoX / Pythia
     "model.decoder.layers",    # OPT
     "transformer.blocks",      # MPT
+    "backbone.layers",         # Mamba (state-space; not a transformer at all)
 ]
 _EMBED_PATHS = [
     "model.embed_tokens",
@@ -25,12 +29,14 @@ _EMBED_PATHS = [
     "gpt_neox.embed_in",
     "model.decoder.embed_tokens",
     "transformer.wte",
+    "backbone.embeddings",
 ]
 _NORM_PATHS = [
     "model.norm",
     "transformer.ln_f",
     "gpt_neox.final_layer_norm",
     "model.decoder.final_layer_norm",
+    "backbone.norm_f",
 ]
 _HEAD_PATHS = ["lm_head", "embed_out"]
 _ATTN_PATHS = ["self_attn", "attn", "attention", "self_attention"]

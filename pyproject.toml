@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mottled"
+version = "0.1.0"
+description = "Interactive latent trajectory explorer for transformer forward passes"
+readme = "README.md"
+license = "GPL-2.0-only"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "scipy",
+    "scikit-learn",
+    "plotly",
+    "streamlit",
+]
+
+[project.optional-dependencies]
+# Real transformer captures (the synthetic producer needs none of these).
+models = ["torch", "transformers"]
+umap = ["umap-learn"]
+faiss = ["faiss-cpu"]
+dev = ["pytest"]
+
+[project.urls]
+Homepage = "https://github.com/BobGnarly420/mottled"
+Documentation = "https://github.com/BobGnarly420/mottled#readme"
+
+[project.scripts]
+mottled = "cli:main"
+
+[tool.setuptools]
+py-modules = ["bvh", "cache", "capture", "cli", "compare", "config", "density",
+              "intervene", "metrics", "neighbors", "projection", "sae",
+              "serve", "statefile", "terrain", "trajectory", "ui"]
+packages = ["models"]

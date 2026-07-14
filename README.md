@@ -23,12 +23,20 @@ layer scrubber and the token inspector](docs/images/explorer.png)
 "The capital of Germany is" — marbles at layer 12, inspector showing the
 final token's predictions and semantic neighbors.*
 
+**Live demo:** [bobgnarly420.github.io/mottled](https://bobgnarly420.github.io/mottled/) —
+landing page plus the web viewer with bundled sample scenes (synthetic and
+real GPT-2), no install required.
+
 ## Quickstart
 
 ```bash
-pip install -r requirements.txt
-streamlit run ui.py
+pip install "mottled[models] @ git+https://github.com/BobGnarly420/mottled"
+mottled                      # the Streamlit explorer
+mottled serve --model gpt2   # web viewer + in-browser capture API
+mottled export "The capital of France is" -o scene.mtj
 ```
+
+(Or from a clone: `pip install -r requirements.txt && streamlit run ui.py`.)
 
 Enter a prompt (e.g. `The capital of France is`), pick a model, press
 **Run capture**. You get an animated hidden-state trajectory over a density
@@ -38,6 +46,16 @@ The default `synthetic` backend needs no model download (or even torch) —
 it generates deterministic, realistic trajectories so you can explore the
 tool instantly. Select a HuggingFace model (Qwen / Llama / Mistral / Gemma /
 GPT-2) for real captures.
+
+### A real model, not a sketch
+
+![The web viewer rendering a real GPT-2 A/B capture](docs/images/viewer-gpt2.png)
+*Real GPT-2: "The capital of France is" vs "The capital of Germany is"
+(`viewer/samples/gpt2-capitals.mtj`). Both runs launch from the embedding
+region and dive into the shared late-layer attractor basin; the logit-lens
+readouts differ from layer 2, and attention patterns and the attn/MLP
+residual decomposition are captured exactly (verified against HF's own
+outputs in the test suite).*
 
 ## Programmatic API
 
@@ -75,11 +93,11 @@ and analyses consume one, and neither side knows about the other:
 producers                      interchange                     viewers
 ─────────                      ───────────                     ───────
 transformers capture  ─┐                                 ┌─ Python / Streamlit (ui.py)
-synthetic generator   ─┼─►  StateTrajectory  ─► .mtj  ───┼─ web viewer (viewer/, WebGL)
-future: Mamba,        ─┘    (in memory)      (on disk)   ├─ Jupyter (render() is a
-diffusion, OpenAI /                                      │  plain Plotly figure)
-Anthropic logprobs,                                      └─ future: desktop app
-neuro recordings
+Mamba (state-space)   ─┼─►  StateTrajectory  ─► .mtj  ───┼─ web viewer (viewer/, WebGL)
+synthetic generator   ─┘    (in memory)      (on disk)   ├─ Jupyter (render() is a
+future: diffusion,                                       │  plain Plotly figure)
+OpenAI / Anthropic                                       └─ future: desktop app
+logprobs, neuro recordings
 ```
 
 Python owns capture and analysis; `statefile.py` freezes both into the
@@ -91,7 +109,11 @@ trajectories, terrain, inspector stats) so a viewer only has to draw.
 
 Transformers are one producer (`models/families.py` resolves
 Qwen/Llama/Mistral/Gemma/GPT-2/NeoX layouts structurally); the synthetic
-generator (`models/synthetic.py`) is another. A new substrate — RNNs, Mamba,
+generator (`models/synthetic.py`) is another; **Mamba** — a state-space
+model with no attention at all — is the proof the abstraction is not
+transformer-shaped: its `backbone.layers` layout resolves structurally and
+block capture + logit lens work unchanged (captures that don't apply, like
+attention patterns, refuse loudly instead of lying). A new substrate —
 diffusion, API logprobs (limited: no hidden states), biological recordings —
 only needs to emit a `StateTrajectory` and the entire stack (projection,
 density, terrain, metrics, comparison, every viewer) works unchanged.
@@ -114,6 +136,9 @@ density, terrain, metrics, comparison, every viewer) works unchanged.
 | `sae.py` | Sparse-autoencoder features: apply (never train) an SAE to every captured state; demo dictionary + npz interchange |
 | `statefile.py` | `.mtj` interchange: save/load full StateTrajectories and viewer-ready scene bundles ([format spec](docs/mtj-format.md)) |
 | `viewer/` | Self-contained WebGL viewer for `.mtj` scenes — no build step, no dependencies |
+| `serve.py` | Optional stdlib capture backend: serves the viewer + a JSON API so the browser can generate scenes |
+| `cli.py` | `mottled` console commands: explorer (default), `serve`, `export` |
+| `site/` | Static landing page (deployed with the viewer to GitHub Pages) |
 
 ### Causal intervention (perturb-and-replay)
 
@@ -258,9 +283,14 @@ scrubber.*
 The Streamlit app has an **Export scene (.mtj)** button for whatever is
 currently on screen. The viewer is plain WebGL2 with zero dependencies and
 zero build step; producers in other languages only need to follow
-[docs/mtj-format.md](docs/mtj-format.md). An optional capture backend for
-the browser (generate trajectories directly from a served model) is left
-for the future.
+[docs/mtj-format.md](docs/mtj-format.md).
+
+**Capture from the browser**: `mottled serve --model gpt2` (or
+`python serve.py`) runs a standard-library web server that hosts the viewer
+*and* a capture API. The viewer discovers it at runtime and shows a prompt
+form — type prompts, press Capture, and the scene is generated server-side
+and streamed back as `.mtj`. On plain static hosting (GitHub Pages) the
+form simply never appears.
 
 ### Interaction layer (in progress)
 
@@ -335,6 +365,9 @@ research tool.
 - **Interchange & viewers** — ✅ `StateTrajectory` as the interchange format:
   stable `.mtj` serialization (`statefile.py`, [spec](docs/mtj-format.md))
   and a dependency-free WebGL web viewer (`viewer/`).
-- **Next** — optional browser capture backend, desktop shell, volumetric
-  field rendering for ensembles, SAE feature flows across layers, richer
-  scene management (pin/hide runs, saved scenes).
+- **Distribution** — ✅ pip-installable package with a `mottled` CLI, browser
+  capture backend (`serve.py`), Mamba producer, real GPT-2 sample scene,
+  GitHub Pages site (landing + viewer).
+- **Next** — desktop shell, volumetric field rendering for ensembles, SAE
+  feature flows across layers, richer scene management (pin/hide runs,
+  saved scenes), diffusion / recording producers.

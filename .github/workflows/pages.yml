@@ -1,0 +1,48 @@
+name: Deploy site
+
+# Publishes the landing page (site/) at the root and the WebGL viewer at
+# /viewer/ — both fully static, no build step.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble static site
+        run: |
+          mkdir -p _site
+          if [ -d site ]; then cp -r site/. _site/; fi
+          cp -r viewer _site/viewer
+          rm -rf _site/viewer/tests
+          # never ship without a root page
+          if [ ! -f _site/index.html ]; then
+            printf '<meta http-equiv="refresh" content="0; url=viewer/">' > _site/index.html
+          fi
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -18,6 +18,14 @@
     <input id="fileInput" type="file" accept=".mtj" hidden>
     <span class="dim hint">or drag a .mtj anywhere</span>
   </div>
+  <div id="capture-row" hidden>
+    <textarea id="capturePrompts" rows="2"
+      placeholder="one prompt per line"></textarea>
+    <div id="capture-actions">
+      <button id="captureBtn">Capture</button>
+      <span id="captureModel" class="dim hint mono"></span>
+    </div>
+  </div>
 </div>
 
 <div id="runs-panel" hidden>
