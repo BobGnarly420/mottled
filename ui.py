@@ -45,26 +45,16 @@ def run_pipeline(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) -> 
     omitted, `cfg.model` is loaded by name ("synthetic" needs no loading).
     """
     disk = cache_mod.DiskCache(cfg.cache_dir) if cfg.use_cache else None
-    key = cache_mod.make_key("pipeline-v2", prompt, cfg.model, cfg.projection,
+    key = cache_mod.make_key("pipeline-v3", prompt, cfg.model, cfg.projection,
                              cfg.density, cfg.top_k, cfg.n_components, cfg.seed,
                              cfg.grid_size, cfg.smooth_sigma, cfg.height_scale,
                              cfg.invert_terrain, cfg.trajectory_mode,
                              cfg.trajectory_token, cfg.frames_per_layer,
-                             cfg.capture_components)
+                             cfg.capture_components, cfg.capture_attention)
     if disk is not None and (hit := disk.get(key)) is not None:
         return hit
 
-    traj = capture(
-        model if model is not None else cfg.model,
-        prompt,
-        tokenizer=tokenizer,
-        top_k=cfg.top_k,
-        device=cfg.device,
-        dtype=cfg.dtype,
-        keep_logits=cfg.keep_logits,
-        capture_components=cfg.capture_components,
-    )
-    traj.validate()
+    traj = _capture_with(cfg, prompt, model=model, tokenizer=tokenizer)
 
     coords, _ = projection_mod.project(
         traj.hidden, method=cfg.projection, n_components=cfg.n_components, seed=cfg.seed
@@ -99,48 +89,31 @@ def run_pipeline(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) -> 
     return result
 
 
-def run_compare(cfg: MarbleConfig, prompt_a: str, prompt_b: str,
-                model=None, tokenizer=None) -> dict:
-    """A/B pipeline: capture both prompts, joint-project into one shared
-    space, build one terrain from the union of states, and compare.
+def _capture_with(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) -> StateTrajectory:
+    """One validated capture under the config's capture knobs."""
+    traj = capture(
+        model if model is not None else cfg.model,
+        prompt,
+        tokenizer=tokenizer,
+        top_k=cfg.top_k,
+        device=cfg.device,
+        dtype=cfg.dtype,
+        keep_logits=cfg.keep_logits,
+        capture_components=cfg.capture_components,
+        capture_attention=cfg.capture_attention,
+    )
+    traj.validate()
+    return traj
 
-    Returns the `run_pipeline` artifacts for prompt A plus `traj_b` /
-    `coords_b` / `trajectories_b` / `fine_paths_b` for prompt B and a
-    `comparison` (compare.TrajectoryComparison) at the final token.
-    """
-    disk = cache_mod.DiskCache(cfg.cache_dir) if cfg.use_cache else None
-    key = cache_mod.make_key("compare-v2", prompt_a, prompt_b, cfg.model,
-                             cfg.projection, cfg.density, cfg.top_k,
-                             cfg.n_components, cfg.seed, cfg.grid_size,
-                             cfg.smooth_sigma, cfg.height_scale,
-                             cfg.invert_terrain, cfg.trajectory_mode,
-                             cfg.trajectory_token, cfg.frames_per_layer,
-                             cfg.capture_components)
-    if disk is not None and (hit := disk.get(key)) is not None:
-        return hit
 
-    def _capture(prompt: str):
-        traj = capture(
-            model if model is not None else cfg.model,
-            prompt,
-            tokenizer=tokenizer,
-            top_k=cfg.top_k,
-            device=cfg.device,
-            dtype=cfg.dtype,
-            keep_logits=cfg.keep_logits,
-            capture_components=cfg.capture_components,
-        )
-        traj.validate()
-        return traj
-
-    traj_a, traj_b = _capture(prompt_a), _capture(prompt_b)
-
-    (coords_a, coords_b), _ = projection_mod.project_joint(
-        [traj_a.hidden, traj_b.hidden],
+def _assemble_scene(cfg: MarbleConfig, trajs: list[StateTrajectory]) -> dict:
+    """Shared multi-run assembly: joint projection, one terrain from the
+    union of all runs' states, draped trajectories, comparisons vs run 0."""
+    coords_list, _ = projection_mod.project_joint(
+        [t.hidden for t in trajs],
         method=cfg.projection, n_components=cfg.n_components, seed=cfg.seed,
     )
-    union = np.concatenate([coords_a.reshape(-1, cfg.n_components),
-                            coords_b.reshape(-1, cfg.n_components)])
+    union = np.concatenate([c.reshape(-1, cfg.n_components) for c in coords_list])
     landscape = density_mod.compute_density(
         union, method=cfg.density, grid_size=cfg.grid_size, padding=cfg.grid_padding
     )
@@ -149,36 +122,106 @@ def run_compare(cfg: MarbleConfig, prompt_a: str, prompt_b: str,
         height_scale=cfg.height_scale, invert=cfg.invert_terrain,
     )
 
-    def _build(traj, coords):
+    trajectories_list, fine_paths_list = [], []
+    for traj, coords in zip(trajs, coords_list):
         flat = trajectory_mod.extract(coords, traj.tokens, mode=cfg.trajectory_mode,
                                       token=cfg.trajectory_token)
         trajectories = [
             replace(t, points=terrain_mod.drape(surface, t.points, lift=cfg.marble_lift))
             for t in flat
         ]
-        fine = [trajectory_mod.densify(t.points, cfg.frames_per_layer) for t in trajectories]
-        return trajectories, fine
+        trajectories_list.append(trajectories)
+        fine_paths_list.append(
+            [trajectory_mod.densify(t.points, cfg.frames_per_layer) for t in trajectories])
 
-    trajectories_a, fine_a = _build(traj_a, coords_a)
-    trajectories_b, fine_b = _build(traj_b, coords_b)
+    comparisons = [
+        compare_mod.compare(trajs[0], t, coords_list[0], c)
+        for t, c in zip(trajs[1:], coords_list[1:])
+    ]
 
     result = {
-        "prompt": prompt_a,
-        "prompt_b": prompt_b,
-        "traj": traj_a,
-        "traj_b": traj_b,
-        "coords": coords_a,
-        "coords_b": coords_b,
+        "trajs": trajs,
+        "coords_list": coords_list,
         "landscape": landscape,
         "mesh": surface,
-        "trajectories": trajectories_a,
-        "fine_paths": fine_a,
-        "trajectories_b": trajectories_b,
-        "fine_paths_b": fine_b,
-        "comparison": compare_mod.compare(traj_a, traj_b, coords_a, coords_b),
+        "trajectories_list": trajectories_list,
+        "fine_paths_list": fine_paths_list,
+        "comparisons": comparisons,
+        # run-0 view (the run_pipeline keys)
+        "traj": trajs[0],
+        "coords": coords_list[0],
+        "trajectories": trajectories_list[0],
+        "fine_paths": fine_paths_list[0],
     }
+    if len(trajs) == 2:  # the run_compare aliases
+        result.update({
+            "traj_b": trajs[1],
+            "coords_b": coords_list[1],
+            "trajectories_b": trajectories_list[1],
+            "fine_paths_b": fine_paths_list[1],
+            "comparison": comparisons[0],
+        })
+    return result
+
+
+def run_scene(cfg: MarbleConfig, prompts: list[str], model=None, tokenizer=None) -> dict:
+    """Multi-prompt scene: capture every prompt, joint-project into ONE
+    shared space, build one terrain from the union of all states, and
+    compare each run against the first.
+
+    Returns per-run lists ("trajs", "coords_list", "trajectories_list",
+    "fine_paths_list", "comparisons") plus the `run_pipeline` keys for run 0
+    and, for exactly two prompts, the `run_compare` aliases.
+    """
+    if not prompts:
+        raise ValueError("run_scene needs at least one prompt")
+    disk = cache_mod.DiskCache(cfg.cache_dir) if cfg.use_cache else None
+    key = cache_mod.make_key("scene-v1", prompts, cfg.model, cfg.projection,
+                             cfg.density, cfg.top_k, cfg.n_components, cfg.seed,
+                             cfg.grid_size, cfg.smooth_sigma, cfg.height_scale,
+                             cfg.invert_terrain, cfg.trajectory_mode,
+                             cfg.trajectory_token, cfg.frames_per_layer,
+                             cfg.capture_components, cfg.capture_attention)
+    if disk is not None and (hit := disk.get(key)) is not None:
+        return hit
+
+    trajs = [_capture_with(cfg, p, model=model, tokenizer=tokenizer) for p in prompts]
+    result = {"prompts": list(prompts), "prompt": prompts[0], **_assemble_scene(cfg, trajs)}
+    if len(prompts) == 2:
+        result["prompt_b"] = prompts[1]
     if disk is not None:
         disk.put(key, result)
+    return result
+
+
+def run_compare(cfg: MarbleConfig, prompt_a: str, prompt_b: str,
+                model=None, tokenizer=None) -> dict:
+    """A/B pipeline: a two-prompt `run_scene` (kept as the pairwise API)."""
+    return run_scene(cfg, [prompt_a, prompt_b], model=model, tokenizer=tokenizer)
+
+
+def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
+                     model, tokenizer) -> dict:
+    """Interactive patching: baseline capture vs perturb-and-replay branch.
+
+    Runs the same prompt twice — once untouched, once under `interventions`
+    (intervene.Intervention edits) — then assembles the two counterfactual
+    runs as a scene: shared projection, one terrain, comparison, plus an
+    `intervene.divergence` readout.  Requires a torch model; results are not
+    cached (the edit space is unbounded).
+    """
+    from intervene import divergence, intervene
+
+    baseline = _capture_with(cfg, prompt, model=model, tokenizer=tokenizer)
+    branch = intervene(model, prompt, interventions, tokenizer=tokenizer,
+                       top_k=cfg.top_k, device=cfg.device, dtype=cfg.dtype,
+                       keep_logits=cfg.keep_logits)
+    branch.validate()
+
+    result = {"prompts": [prompt, prompt], "prompt": prompt,
+              "prompt_b": "patched: " + ", ".join(iv.describe() for iv in interventions),
+              **_assemble_scene(cfg, [baseline, branch])}
+    result["divergence"] = divergence(baseline, branch)
     return result
 
 
@@ -204,6 +247,40 @@ def _hover_text(traj: StateTrajectory, t: trajectory_mod.Trajectory) -> list[str
     return texts
 
 
+_DASH_CYCLE = [None, "dash", "dot", "longdash", "dashdot"]
+
+
+def _attention_trace(
+    trajectories: list[trajectory_mod.Trajectory],
+    attention: np.ndarray,
+    layer: int,
+    threshold: float = 0.1,
+    top_k: int = 3,
+) -> go.Scatter3d | None:
+    """Attention-flow segments at one layer: destination states connected to
+    the source states they read from (head-averaged weight ≥ threshold,
+    self-attention omitted — it would be a zero-length segment)."""
+    if layer < 1 or layer - 1 >= len(attention):
+        return None
+    weights = attention[layer - 1]
+    xs, ys, zs = [], [], []
+    for dst in range(weights.shape[0]):
+        for src in np.argsort(-weights[dst])[:top_k]:
+            if src == dst or weights[dst, src] < threshold:
+                continue
+            p, q = trajectories[src].points[layer], trajectories[dst].points[layer]
+            xs += [p[0], q[0], None]
+            ys += [p[1], q[1], None]
+            zs += [p[2], q[2], None]
+    if not xs:
+        return None
+    return go.Scatter3d(
+        x=xs, y=ys, z=zs, mode="lines",
+        line={"color": "rgba(255,255,255,0.5)", "width": 2},
+        name="attention", hoverinfo="skip",
+    )
+
+
 def render(
     traj: StateTrajectory,
     surface: terrain_mod.TerrainMesh,
@@ -215,18 +292,24 @@ def render(
     traj_b: StateTrajectory | None = None,
     trajectories_b: list[trajectory_mod.Trajectory] | None = None,
     fine_paths_b: list[np.ndarray] | None = None,
+    extra_runs: list[tuple] | None = None,
     overlay: list[np.ndarray] | None = None,
     overlay_label: str = "feature",
+    show_attention: bool = False,
 ) -> go.Figure:
     """Build the 3-D scene: terrain surface, token trajectories, animated marbles.
 
     Passing `traj_b` / `trajectories_b` / `fine_paths_b` (from `run_compare`)
-    overlays a second run on the same terrain: B's trajectories are dashed and
-    both runs' labels are prefixed A/B.
+    overlays a second run on the same terrain; `extra_runs` — a list of
+    (traj, trajectories, fine_paths) tuples from `run_scene` — overlays runs
+    beyond the second.  Every overlaid run gets its own dash style and an
+    A/B/C… label prefix.
 
     `overlay` colors the primary run's trajectory markers by a per-layer
     scalar (one (L,) array per trajectory, e.g. an SAE feature's activation),
-    on a shared color scale with a colorbar.
+    on a shared color scale with a colorbar.  `show_attention` draws the
+    primary run's attention flow at `current_layer` (per-token trajectories
+    with a captured attention pattern only).
     """
     fig = go.Figure()
     fig.add_trace(go.Surface(
@@ -237,10 +320,17 @@ def render(
         name="manifold", hoverinfo="skip",
     ))
 
-    runs = [(traj, trajectories, "", None)]
+    all_runs = [(traj, trajectories, fine_paths)]
     if trajectories_b:
-        runs = [(traj, trajectories, "A · ", None),
-                (traj_b, trajectories_b, "B · ", "dash")]
+        all_runs.append((traj_b, trajectories_b, fine_paths_b))
+    if extra_runs:
+        all_runs.extend(extra_runs)
+    multi = len(all_runs) > 1
+    runs = [
+        (src, trajs, f"{chr(65 + r)} · " if multi else "",
+         _DASH_CYCLE[r % len(_DASH_CYCLE)] if r else None)
+        for r, (src, trajs, _) in enumerate(all_runs)
+    ]
     vmin = vmax = 0.0
     if overlay is not None:
         vmin = float(min(v.min() for v in overlay))
@@ -270,9 +360,14 @@ def render(
                 hoverinfo="text",
             ))
 
+    if show_attention and traj.attention is not None and len(trajectories) == traj.n_tokens:
+        att = _attention_trace(trajectories, traj.attention, current_layer)
+        if att is not None:
+            fig.add_trace(att)
+
     # Marbles: one animated marker per trajectory, positioned along the
     # densified path; fine index f corresponds to layer f / frames_per_layer.
-    fine_paths = list(fine_paths) + list(fine_paths_b or [])
+    fine_paths = [p for _, _, fp in all_runs for p in fp]
     n_frames = min(len(p) for p in fine_paths) if fine_paths else 0
     start = min(current_layer * frames_per_layer, max(n_frames - 1, 0))
 
@@ -358,7 +453,10 @@ def main() -> None:
     with st.sidebar:
         st.title("🔮 Mottled")
         prompt = st.text_area("Prompt", DEFAULT_PROMPT, key="prompt")
-        prompt_b = st.text_area("Prompt B (A/B overlay, optional)", "", key="prompt_b")
+        prompt_b = st.text_area("Overlay prompts (one per line, optional)", "",
+                                key="prompt_b",
+                                help="Each line becomes another run drawn on the "
+                                     "same terrain and compared against the prompt above.")
         model_name = st.selectbox("Model", MODEL_CHOICES, index=0, key="model")
         proj_name = st.selectbox("Projection", PROJECTION_CHOICES, key="projection")
         dens_name = st.selectbox("Density estimator", DENSITY_CHOICES, key="density")
@@ -369,6 +467,9 @@ def main() -> None:
                              help="Color trajectory markers by one feature's activation. "
                                   "Uses an untrained demo dictionary; load real weights "
                                   "with sae.load_npz for interpretable features.")
+        attention_on = st.checkbox("Show attention flow", value=False, key="attention_flow",
+                                   help="Draw head-averaged attention edges between token "
+                                        "states at the selected layer.")
         run = st.button("▶ Run capture", type="primary", use_container_width=True, key="run")
         st.caption("Play / Pause / scrub inside the figure animate the marble; "
                    "the layer slider below drives the inspector.")
@@ -379,10 +480,11 @@ def main() -> None:
         model = tokenizer = None
         if model_name != "synthetic":
             model, tokenizer = load_model_cached(model_name)
+        overlays = [p.strip() for p in prompt_b.splitlines() if p.strip()]
         with st.spinner("Capturing forward pass…"):
-            if prompt_b.strip():
-                st.session_state["result"] = run_compare(cfg, prompt, prompt_b,
-                                                         model=model, tokenizer=tokenizer)
+            if overlays:
+                st.session_state["result"] = run_scene(cfg, [prompt] + overlays,
+                                                       model=model, tokenizer=tokenizer)
             else:
                 st.session_state["result"] = run_pipeline(cfg, prompt,
                                                           model=model, tokenizer=tokenizer)
@@ -419,6 +521,39 @@ def main() -> None:
                     for t in result["trajectories"]
                 ]
 
+        with st.expander("Intervention (perturb & replay)", expanded=False):
+            if cfg.model == "synthetic":
+                st.caption("The synthetic backend is analytic and not resumable; "
+                           "interventions need a torch model.")
+            else:
+                iv_layer = st.slider("Edit layer", 0, traj.n_layers - 1,
+                                     traj.n_layers - 1, key="iv_layer")
+                iv_kind = st.selectbox("Edit", ["push toward token", "inject noise",
+                                                "freeze block"], key="iv_kind")
+                iv_target = ""
+                if iv_kind == "push toward token":
+                    iv_target = st.text_input("Target token", "Berlin", key="iv_target")
+                iv_scale = st.slider("Strength", 0.0, 100.0, 30.0, key="iv_scale")
+                if st.button("Run intervention", key="iv_run"):
+                    from intervene import FreezeLayer, InjectNoise, Perturb
+
+                    model, tokenizer = load_model_cached(cfg.model)
+                    if iv_kind == "push toward token":
+                        ids = tokenizer(iv_target, add_special_tokens=False)["input_ids"]
+                        if not ids:
+                            st.warning("target token is empty")
+                            st.stop()
+                        direction = traj.embedding_matrix[ids[0]]
+                        edits = [Perturb(iv_layer, iv_scale * direction, token=-1)]
+                    elif iv_kind == "inject noise":
+                        edits = [InjectNoise(iv_layer, iv_scale, token=-1)]
+                    else:
+                        edits = [FreezeLayer(min(iv_layer, traj.n_layers - 2))]
+                    with st.spinner("Replaying under intervention…"):
+                        st.session_state["result"] = run_intervention(
+                            cfg, result["prompt"], edits, model, tokenizer)
+                    st.rerun()
+
     @st.cache_resource(show_spinner=False)
     def _neighbor_cache(key: str):  # one TokenNeighbors per capture
         return {}
@@ -431,6 +566,13 @@ def main() -> None:
 
     col_viz, col_info = st.columns([3, 1])
 
+    extra_runs = None
+    if result.get("trajs") is not None and len(result["trajs"]) > 2:
+        extra_runs = [
+            (result["trajs"][i], result["trajectories_list"][i], result["fine_paths_list"][i])
+            for i in range(2, len(result["trajs"]))
+        ]
+
     with col_viz:
         fig = render(traj, result["mesh"], result["trajectories"], result["fine_paths"],
                      current_layer=layer, frames_per_layer=cfg.frames_per_layer,
@@ -438,7 +580,9 @@ def main() -> None:
                      traj_b=result.get("traj_b"),
                      trajectories_b=result.get("trajectories_b"),
                      fine_paths_b=result.get("fine_paths_b"),
-                     overlay=overlay, overlay_label=overlay_label)
+                     extra_runs=extra_runs,
+                     overlay=overlay, overlay_label=overlay_label,
+                     show_attention=attention_on)
         st.plotly_chart(fig, use_container_width=True, key="scene")
 
     # ----------------------------------------------------------- right panel
@@ -475,6 +619,14 @@ def main() -> None:
             if not fired:
                 st.caption("no features fire at this state")
 
+        if traj.attention is not None and layer >= 1:
+            st.markdown("**Attention** *(head-averaged, into this layer)*")
+            weights = traj.attention[layer - 1, token]
+            for src in np.argsort(-weights)[:5]:
+                if weights[src] <= 0.01:
+                    continue
+                st.write(f"`{traj.tokens[src]}` ({src})  ·  {weights[src]:.2f}")
+
         if traj.components is not None:
             with st.expander("Residual decomposition", expanded=False):
                 shares = metrics_mod.component_shares(traj, token=token)
@@ -488,6 +640,7 @@ def main() -> None:
 
         if result.get("traj_b") is not None:
             with st.expander("A/B comparison", expanded=True):
+                st.caption(f"B = {result.get('prompt_b', '')}")
                 cmp = compare_mod.compare(traj, result["traj_b"],
                                           result["coords"], result["coords_b"],
                                           token=token)
@@ -501,6 +654,22 @@ def main() -> None:
                     st.write(f"top-1 prediction differs from layer **{cmp.readout_changed}**")
                 st.markdown("**A–B distance per layer**")
                 st.line_chart(cmp.profile)
+
+        if (div := result.get("divergence")) is not None:
+            with st.expander("Intervention divergence", expanded=True):
+                st.write(f"separation onset: layer **{div.onset}**")
+                if div.readout_changed is not None:
+                    st.write(f"prediction flips at layer **{div.readout_changed}**")
+                else:
+                    st.write("top-1 prediction unchanged")
+                st.line_chart(div.profile)
+
+        if result.get("comparisons") and len(result["comparisons"]) > 1:
+            with st.expander("Scene comparisons (vs A)", expanded=True):
+                for i, cmp in enumerate(result["comparisons"], start=1):
+                    st.write(f"**{chr(65 + i)}** · Hausdorff {cmp.hausdorff:.3f} "
+                             f"· DTW {cmp.dtw.normalized:.3f} "
+                             f"· shared prefix {cmp.shared_tokens}")
 
 
 if __name__ == "__main__":

@@ -214,6 +214,7 @@ def capture(
     dtype: str = "float32",
     keep_logits: bool = True,
     capture_components: bool = False,
+    capture_attention: bool = False,
 ) -> StateTrajectory:
     """Run a forward pass and capture the residual stream at every layer.
 
@@ -223,23 +224,28 @@ def capture(
 
     `capture_components=True` also records each block's attention and MLP
     outputs — the residual decomposition — in `StateTrajectory.components`.
+    `capture_attention=True` records each block's head-averaged attention
+    pattern (L-1, T, T) in `StateTrajectory.attention`.
     """
     if isinstance(model, str) and model == "synthetic":
         from models import synthetic
 
         return synthetic.capture(prompt, top_k=top_k, keep_logits=keep_logits,
-                                 capture_components=capture_components)
+                                 capture_components=capture_components,
+                                 capture_attention=capture_attention)
 
     _require_torch()
     return _run(model, prompt, tokenizer=tokenizer, top_k=top_k, device=device,
                 dtype=dtype, keep_logits=keep_logits,
-                capture_components=capture_components)
+                capture_components=capture_components,
+                capture_attention=capture_attention)
 
 
 def _run(model, prompt, tokenizer=None, top_k=5, device="auto", dtype="float32",
          keep_logits=True, state_edits: dict | None = None,
          frozen_blocks: set | None = None, extra_meta: dict | None = None,
-         capture_components: bool = False) -> StateTrajectory:
+         capture_components: bool = False,
+         capture_attention: bool = False) -> StateTrajectory:
     """Forward pass (optionally intervened) -> StateTrajectory. Shared by
     capture() and intervene()."""
     if isinstance(model, str):
@@ -255,11 +261,20 @@ def _run(model, prompt, tokenizer=None, top_k=5, device="auto", dtype="float32",
     model.eval()
     with HookCapture(model, state_edits=state_edits, frozen_blocks=frozen_blocks,
                      capture_components=capture_components) as cap, torch.no_grad():
-        model(input_ids)
+        # output_attentions forces the eager attention path so patterns are
+        # actually materialised (sdpa/flash kernels never form the matrix).
+        out = model(input_ids, output_attentions=capture_attention or None)
     hidden = cap.stacked()  # (L, T, D)
     components = None
     if capture_components:
         components = {k: v.numpy() for k, v in cap.stacked_components().items()}
+    attention = None
+    if capture_attention:
+        if not getattr(out, "attentions", None):
+            raise ValueError("model returned no attention patterns; "
+                             "this architecture does not support capture_attention")
+        # (blocks, B, H, T, T) -> head-average, squeeze batch -> (L-1, T, T)
+        attention = torch.stack([a.float().mean(dim=1)[0] for a in out.attentions]).cpu().numpy()
 
     logits_t = logit_lens(hidden, cap.adapter)
     vocab = [_clean_token(t) for t in tokenizer.convert_ids_to_tokens(range(logits_t.shape[-1]))]
@@ -283,6 +298,7 @@ def _run(model, prompt, tokenizer=None, top_k=5, device="auto", dtype="float32",
         vocab=vocab,
         embedding_matrix=cap.adapter.embedding_weight().numpy(),
         components=components,
+        attention=attention,
         meta=meta,
     )
 

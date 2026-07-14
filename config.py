@@ -37,6 +37,8 @@ class MarbleConfig:
     keep_logits: bool = True      # keep full logit-lens logits (float16)
     capture_components: bool = True  # record attn/MLP residual writes; set
     # False for layouts without a single attn/mlp module per block (e.g. OPT)
+    capture_attention: bool = True   # record head-averaged attention patterns
+    # (forces the eager attention path on torch models)
 
     # SAE feature overlay (demo dictionary; see sae.py for real weights)
     sae_features: int = 256

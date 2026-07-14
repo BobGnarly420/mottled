@@ -65,6 +65,9 @@ class StateTrajectory:
     components: dict[str, np.ndarray] | None = None  # residual decomposition,
     # e.g. {"attn": (L-1, T, D), "mlp": (L-1, T, D)} — each block's additive
     # writes to the stream: hidden[l+1] ≈ hidden[l] + attn[l] + mlp[l]
+    attention: np.ndarray | None = None      # (L-1, T, T) head-averaged
+    # attention: attention[b, t, s] is how much block b's destination token t
+    # reads from source token s (causal: zero for s > t, rows sum to 1)
     meta: dict[str, Any] = field(default_factory=dict)
 
     # ------------------------------------------------------------------ shape
@@ -94,6 +97,9 @@ class StateTrajectory:
                 if arr.shape != (L - 1, T, self.dim):
                     raise ValueError(
                         f"component {name!r} shape {arr.shape} != {(L - 1, T, self.dim)}")
+        if self.attention is not None and self.attention.shape != (L - 1, T, T):
+            raise ValueError(
+                f"attention shape {self.attention.shape} != {(L - 1, T, T)}")
         if not np.isfinite(self.hidden).all():
             raise ValueError("hidden contains non-finite values")
 

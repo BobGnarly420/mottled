@@ -45,6 +45,7 @@ from metrics import summarize              # research metrics
 from compare import compare                # A/B trajectory comparison
 from sae import demo_sae, feature_trajectory  # SAE feature activations
 from ui import run_pipeline, render        # everything at once → plotly Figure
+from ui import run_scene, run_intervention  # multi-prompt scenes, patching
 
 traj = capture("gpt2", "The capital of France is")
 coords, projector = project(traj.hidden, method="pca")
@@ -176,6 +177,29 @@ the selected feature's activation per layer, the inspector lists the top
 features at the selected state, and a **Residual decomposition** panel shows
 each block's attention/MLP share.
 
+### Multi-prompt scenes, attention flow, interactive patching
+
+`ui.run_scene(cfg, prompts)` generalizes the A/B overlay to N prompts: every
+run is captured, joint-projected into one shared space, drawn on a single
+terrain built from the union of all states, and compared against the first
+run (in the UI, enter one overlay prompt per line — runs get A/B/C… labels
+and distinct dash styles).
+
+`capture(..., capture_attention=True)` records each block's head-averaged
+attention pattern (`StateTrajectory.attention`, `(L-1, T, T)`; the eager
+attention path is forced so the matrix actually materialises).  The renderer
+can draw **attention flow** — edges from each token's state to the states it
+reads from at the selected layer — and the inspector lists the top attended
+tokens.  The synthetic backend generates a causal, deterministic analog.
+
+`ui.run_intervention(cfg, prompt, edits, model, tokenizer)` is interactive
+patching: the baseline and a perturb-and-replay branch (`intervene.py`)
+are assembled as a two-run scene, with the full comparison plus an
+`intervene.divergence` readout (separation onset, prediction-flip layer).
+The UI exposes it as a sidebar panel — push a state toward a token
+embedding, inject noise, or freeze a block, then watch the counterfactual
+trajectory diverge on the same terrain.
+
 ### Interaction layer (in progress)
 
 The exploratory canvas renders trajectories as curves (not voxels — projected
@@ -214,15 +238,17 @@ reproduces the model's final logits, shape consistency, projection
 determinism, valid neighbor lookups, finite density (incl. degenerate
 inputs), terrain mesh consistency and smoothing, animation continuity,
 comparison geometry on analytic cases (Hausdorff, DTW alignment validity),
-SAE encode/decode math and npz roundtrip, exact residual decomposition on
-locally-built Llama/GPT-2 models, and headless runs of the actual Streamlit
-app — single-prompt, A/B, and SAE overlay — (`streamlit.testing.v1.AppTest`).
+SAE encode/decode math and npz roundtrip, exact residual decomposition and
+attention-pattern capture on locally-built Llama/GPT-2 models, multi-prompt
+scene assembly, the intervention pipeline, and headless runs of the actual
+Streamlit app — single-prompt, A/B, N-prompt scene, and SAE overlay —
+(`streamlit.testing.v1.AppTest`).
 
 ## Non-goals (MVP)
 
-No training or finetuning (SAEs are *applied*, never trained), no activation
-patching, circuit discovery, distributed inference, or production auth.
-Single-machine research tool.
+No training or finetuning (SAEs are *applied*, never trained), no circuit
+discovery, distributed inference, or production auth. Single-machine
+research tool.
 
 ## Roadmap
 
@@ -231,5 +257,8 @@ Single-machine research tool.
   grown from the `metrics.branch_divergence` seed).
 - **Phase 3** — ✅ SAE features (`sae.py`), residual decomposition
   (`capture_components`), feature overlays in the UI.
-- **Phase 4** — multi-prompt scenes (`projection.project_joint` already
-  accepts N runs), attention flow, interactive patching.
+- **Phase 4** — ✅ multi-prompt scenes (`ui.run_scene`), attention flow
+  (`capture_attention` + renderer edges), interactive patching
+  (`ui.run_intervention` over `intervene.py`).
+- **Next** — volumetric field rendering for ensembles, SAE feature flows
+  across layers, richer scene management (pin/hide runs, saved scenes).

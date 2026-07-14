@@ -58,6 +58,7 @@ def capture(
     top_k: int = 5,
     keep_logits: bool = True,
     capture_components: bool = False,
+    capture_attention: bool = False,
 ) -> StateTrajectory:
     """Generate a deterministic synthetic StateTrajectory for `prompt`."""
     tokens = _tokenize(prompt)
@@ -95,6 +96,20 @@ def capture(
         attn = share * updates
         components = {"attn": attn, "mlp": updates - attn}
 
+    # Attention analog: causal, head-averaged patterns built from state
+    # similarity plus a recency bias, softmaxed over the visible prefix.
+    attention = None
+    if capture_attention:
+        attention = np.zeros((L - 1, T, T), dtype=np.float32)
+        for b in range(L - 1):
+            scores = hidden[b] @ hidden[b].T / np.sqrt(dim)
+            scores = scores + 0.5 * rng.normal(size=(T, T)).astype(np.float32)
+            for t in range(T):
+                recency = -0.3 * (t - np.arange(t + 1))
+                row = scores[t, : t + 1] + recency
+                row = np.exp(row - row.max())
+                attention[b, t, : t + 1] = row / row.sum()
+
     # Logit lens: similarity to token embeddings, sharpened with depth so
     # entropy collapses like a real network committing to a prediction.
     sharpness = 1.0 + 4.0 * np.arange(L, dtype=np.float32) / max(L - 1, 1)
@@ -111,6 +126,7 @@ def capture(
         vocab=list(VOCAB),
         embedding_matrix=emb,
         components=components,
+        attention=attention,
         meta={"backend": "synthetic", "prompt": prompt, "model": "synthetic"},
     )
 
