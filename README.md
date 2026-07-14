@@ -42,6 +42,7 @@ from density import compute_density        # Landscape
 from terrain import mesh, drape            # TerrainMesh
 from trajectory import extract, densify    # Trajectory list, animation path
 from metrics import summarize              # research metrics
+from compare import compare                # A/B trajectory comparison
 from ui import run_pipeline, render        # everything at once → plotly Figure
 
 traj = capture("gpt2", "The capital of France is")
@@ -81,6 +82,7 @@ density, terrain, metrics, UI — works unchanged.
 | `ui.py` | Pure pipeline + pure Plotly renderer + Streamlit shell |
 | `bvh.py` | Spatial index over trajectory segments (ray-pick / nearest / box / frustum) for the fly-through canvas |
 | `intervene.py` | Causal interventions: perturb / set / noise / freeze a state via a resumable forward pass → counterfactual trajectory |
+| `compare.py` | Trajectory comparison: Hausdorff, dynamic time warping, shared-prefix alignment, layerwise divergence profiles |
 
 ### Causal intervention (perturb-and-replay)
 
@@ -110,6 +112,36 @@ in one pass. `divergence(baseline, branch)` measures where a branch separates
 (state-space profile + the layer the top-1 prediction flips) — a measurement,
 not a claimed cause. Interventions require a torch model; the synthetic backend
 is analytic and not resumable.
+
+### Trajectory comparison (prompt A/B)
+
+Two forward passes become comparable once their states live in **one shared
+projection** (`projection.project_joint` fits on the union of both runs).
+`compare.py` then measures how the trajectories relate: symmetric **Hausdorff**
+distance (how far apart the paths get), **dynamic time warping** (aligns paths
+that trace the same route at different speeds), **shared-prefix** alignment,
+and layerwise divergence profiles in full hidden space — including the first
+token position where the runs separate and the first layer where the
+logit-lens top-1 prediction differs.
+
+```python
+from capture import capture
+from projection import project_joint
+from compare import compare
+
+a = capture("gpt2", "The capital of France is", tokenizer=tok)
+b = capture("gpt2", "The capital of Germany is", tokenizer=tok)
+(ca, cb), _ = project_joint([a.hidden, b.hidden])
+cmp = compare(a, b, ca, cb)                  # geometry in the shared space
+print(cmp.shared_tokens, cmp.hausdorff, cmp.dtw.normalized, cmp.readout_changed)
+```
+
+In the UI, fill in **Prompt B** and run: both trajectories are drawn on a
+single terrain built from the union of states (B dashed), with the comparison
+metrics and the per-layer A–B distance in the inspector.
+`ui.run_compare(cfg, prompt_a, prompt_b)` is the programmatic entry point.
+Everything is backend-agnostic — a synthetic run and the comparison stack work
+without torch; the runs only need the same layer count and hidden dimension.
 
 ### Interaction layer (in progress)
 
@@ -147,8 +179,10 @@ python -m pytest tests/ -q
 Covers: hook captures match `output_hidden_states` exactly, logit lens
 reproduces the model's final logits, shape consistency, projection
 determinism, valid neighbor lookups, finite density (incl. degenerate
-inputs), terrain mesh consistency and smoothing, animation continuity, and a
-headless run of the actual Streamlit app (`streamlit.testing.v1.AppTest`).
+inputs), terrain mesh consistency and smoothing, animation continuity,
+comparison geometry on analytic cases (Hausdorff, DTW alignment validity),
+and headless runs of the actual Streamlit app — single-prompt and A/B —
+(`streamlit.testing.v1.AppTest`).
 
 ## Non-goals (MVP)
 
@@ -158,8 +192,9 @@ research tool.
 
 ## Roadmap
 
-- **Phase 2** — trajectory comparison: prompt A/B overlay, Hausdorff
-  distance, dynamic time warping, shared-prefix divergence
-  (`metrics.branch_divergence` is the seed).
+- **Phase 2** — ✅ trajectory comparison: prompt A/B overlay, Hausdorff
+  distance, dynamic time warping, shared-prefix divergence (`compare.py`,
+  grown from the `metrics.branch_divergence` seed).
 - **Phase 3** — SAE features, residual decomposition, feature overlays.
-- **Phase 4** — multi-prompt scenes, attention flow, interactive patching.
+- **Phase 4** — multi-prompt scenes (`projection.project_joint` already
+  accepts N runs), attention flow, interactive patching.

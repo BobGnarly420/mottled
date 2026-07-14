@@ -87,3 +87,35 @@ def project(
     proj = get_projection(method, n_components=n_components, seed=seed)
     coords = proj.fit_transform(hidden.reshape(L * T, D))
     return coords.reshape(L, T, n_components), proj
+
+
+def project_joint(
+    hiddens: list[np.ndarray],
+    method: str = "pca",
+    n_components: int = 2,
+    seed: int = 0,
+):
+    """Project several (L_i, T_i, D) hidden arrays into ONE shared space.
+
+    The projection is fitted on the union of every run's states, so
+    coordinates — and distances — are comparable *across* runs.  This is what
+    the prompt A/B overlay needs: two forward passes drawn on the same
+    manifold.  Returns (coords_list, projector); each coords_list[i] has
+    shape (L_i, T_i, n_components).
+    """
+    arrays = [np.asarray(h) for h in hiddens]
+    if not arrays:
+        raise ValueError("project_joint needs at least one hidden array")
+    D = arrays[0].shape[-1]
+    if any(a.ndim != 3 or a.shape[-1] != D for a in arrays):
+        raise ValueError("all hidden arrays must be (L, T, D) with a shared D")
+
+    proj = get_projection(method, n_components=n_components, seed=seed)
+    flat = proj.fit_transform(np.concatenate([a.reshape(-1, D) for a in arrays]))
+
+    coords, offset = [], 0
+    for a in arrays:
+        n = a.shape[0] * a.shape[1]
+        coords.append(flat[offset : offset + n].reshape(a.shape[0], a.shape[1], n_components))
+        offset += n
+    return coords, proj

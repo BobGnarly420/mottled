@@ -15,6 +15,7 @@ import numpy as np
 import plotly.graph_objects as go
 
 import cache as cache_mod
+import compare as compare_mod
 import density as density_mod
 import metrics as metrics_mod
 import projection as projection_mod
@@ -95,6 +96,87 @@ def run_pipeline(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) -> 
     return result
 
 
+def run_compare(cfg: MarbleConfig, prompt_a: str, prompt_b: str,
+                model=None, tokenizer=None) -> dict:
+    """A/B pipeline: capture both prompts, joint-project into one shared
+    space, build one terrain from the union of states, and compare.
+
+    Returns the `run_pipeline` artifacts for prompt A plus `traj_b` /
+    `coords_b` / `trajectories_b` / `fine_paths_b` for prompt B and a
+    `comparison` (compare.TrajectoryComparison) at the final token.
+    """
+    disk = cache_mod.DiskCache(cfg.cache_dir) if cfg.use_cache else None
+    key = cache_mod.make_key("compare-v1", prompt_a, prompt_b, cfg.model,
+                             cfg.projection, cfg.density, cfg.top_k,
+                             cfg.n_components, cfg.seed, cfg.grid_size,
+                             cfg.smooth_sigma, cfg.height_scale,
+                             cfg.invert_terrain, cfg.trajectory_mode,
+                             cfg.trajectory_token, cfg.frames_per_layer)
+    if disk is not None and (hit := disk.get(key)) is not None:
+        return hit
+
+    def _capture(prompt: str):
+        traj = capture(
+            model if model is not None else cfg.model,
+            prompt,
+            tokenizer=tokenizer,
+            top_k=cfg.top_k,
+            device=cfg.device,
+            dtype=cfg.dtype,
+            keep_logits=cfg.keep_logits,
+        )
+        traj.validate()
+        return traj
+
+    traj_a, traj_b = _capture(prompt_a), _capture(prompt_b)
+
+    (coords_a, coords_b), _ = projection_mod.project_joint(
+        [traj_a.hidden, traj_b.hidden],
+        method=cfg.projection, n_components=cfg.n_components, seed=cfg.seed,
+    )
+    union = np.concatenate([coords_a.reshape(-1, cfg.n_components),
+                            coords_b.reshape(-1, cfg.n_components)])
+    landscape = density_mod.compute_density(
+        union, method=cfg.density, grid_size=cfg.grid_size, padding=cfg.grid_padding
+    )
+    surface = terrain_mod.mesh(
+        landscape, smooth_sigma=cfg.smooth_sigma,
+        height_scale=cfg.height_scale, invert=cfg.invert_terrain,
+    )
+
+    def _build(traj, coords):
+        flat = trajectory_mod.extract(coords, traj.tokens, mode=cfg.trajectory_mode,
+                                      token=cfg.trajectory_token)
+        trajectories = [
+            replace(t, points=terrain_mod.drape(surface, t.points, lift=cfg.marble_lift))
+            for t in flat
+        ]
+        fine = [trajectory_mod.densify(t.points, cfg.frames_per_layer) for t in trajectories]
+        return trajectories, fine
+
+    trajectories_a, fine_a = _build(traj_a, coords_a)
+    trajectories_b, fine_b = _build(traj_b, coords_b)
+
+    result = {
+        "prompt": prompt_a,
+        "prompt_b": prompt_b,
+        "traj": traj_a,
+        "traj_b": traj_b,
+        "coords": coords_a,
+        "coords_b": coords_b,
+        "landscape": landscape,
+        "mesh": surface,
+        "trajectories": trajectories_a,
+        "fine_paths": fine_a,
+        "trajectories_b": trajectories_b,
+        "fine_paths_b": fine_b,
+        "comparison": compare_mod.compare(traj_a, traj_b, coords_a, coords_b),
+    }
+    if disk is not None:
+        disk.put(key, result)
+    return result
+
+
 # --------------------------------------------------------------------------
 # Renderer
 # --------------------------------------------------------------------------
@@ -125,8 +207,16 @@ def render(
     current_layer: int = 0,
     frames_per_layer: int = 4,
     frame_ms: int = 120,
+    traj_b: StateTrajectory | None = None,
+    trajectories_b: list[trajectory_mod.Trajectory] | None = None,
+    fine_paths_b: list[np.ndarray] | None = None,
 ) -> go.Figure:
-    """Build the 3-D scene: terrain surface, token trajectories, animated marbles."""
+    """Build the 3-D scene: terrain surface, token trajectories, animated marbles.
+
+    Passing `traj_b` / `trajectories_b` / `fine_paths_b` (from `run_compare`)
+    overlays a second run on the same terrain: B's trajectories are dashed and
+    both runs' labels are prefixed A/B.
+    """
     fig = go.Figure()
     fig.add_trace(go.Surface(
         x=surface.x, y=surface.y, z=surface.z,
@@ -136,21 +226,32 @@ def render(
         name="manifold", hoverinfo="skip",
     ))
 
-    for i, t in enumerate(trajectories):
-        color = _MARBLE_COLORS[i % len(_MARBLE_COLORS)]
-        pts = t.points
-        fig.add_trace(go.Scatter3d(
-            x=pts[:, 0], y=pts[:, 1], z=pts[:, 2],
-            mode="lines+markers",
-            line={"color": color, "width": 5},
-            marker={"size": 3, "color": color},
-            name=str(t.label or t.token),
-            text=_hover_text(traj, t),
-            hoverinfo="text",
-        ))
+    runs = [(traj, trajectories, "", None)]
+    if trajectories_b:
+        runs = [(traj, trajectories, "A · ", None),
+                (traj_b, trajectories_b, "B · ", "dash")]
+    i = 0
+    for src, trajs, prefix, dash in runs:
+        for t in trajs:
+            color = _MARBLE_COLORS[i % len(_MARBLE_COLORS)]
+            i += 1
+            line = {"color": color, "width": 5}
+            if dash:
+                line["dash"] = dash
+            pts = t.points
+            fig.add_trace(go.Scatter3d(
+                x=pts[:, 0], y=pts[:, 1], z=pts[:, 2],
+                mode="lines+markers",
+                line=line,
+                marker={"size": 3, "color": color},
+                name=prefix + str(t.label or t.token),
+                text=_hover_text(src, t),
+                hoverinfo="text",
+            ))
 
     # Marbles: one animated marker per trajectory, positioned along the
     # densified path; fine index f corresponds to layer f / frames_per_layer.
+    fine_paths = list(fine_paths) + list(fine_paths_b or [])
     n_frames = min(len(p) for p in fine_paths) if fine_paths else 0
     start = min(current_layer * frames_per_layer, max(n_frames - 1, 0))
 
@@ -236,6 +337,7 @@ def main() -> None:
     with st.sidebar:
         st.title("🔮 Mottled")
         prompt = st.text_area("Prompt", DEFAULT_PROMPT, key="prompt")
+        prompt_b = st.text_area("Prompt B (A/B overlay, optional)", "", key="prompt_b")
         model_name = st.selectbox("Model", MODEL_CHOICES, index=0, key="model")
         proj_name = st.selectbox("Projection", PROJECTION_CHOICES, key="projection")
         dens_name = st.selectbox("Density estimator", DENSITY_CHOICES, key="density")
@@ -253,7 +355,12 @@ def main() -> None:
         if model_name != "synthetic":
             model, tokenizer = load_model_cached(model_name)
         with st.spinner("Capturing forward pass…"):
-            st.session_state["result"] = run_pipeline(cfg, prompt, model=model, tokenizer=tokenizer)
+            if prompt_b.strip():
+                st.session_state["result"] = run_compare(cfg, prompt, prompt_b,
+                                                         model=model, tokenizer=tokenizer)
+            else:
+                st.session_state["result"] = run_pipeline(cfg, prompt,
+                                                          model=model, tokenizer=tokenizer)
             st.session_state["cfg"] = cfg
 
     result = st.session_state.get("result")
@@ -282,7 +389,10 @@ def main() -> None:
     with col_viz:
         fig = render(traj, result["mesh"], result["trajectories"], result["fine_paths"],
                      current_layer=layer, frames_per_layer=cfg.frames_per_layer,
-                     frame_ms=cfg.frame_ms)
+                     frame_ms=cfg.frame_ms,
+                     traj_b=result.get("traj_b"),
+                     trajectories_b=result.get("trajectories_b"),
+                     fine_paths_b=result.get("fine_paths_b"))
         st.plotly_chart(fig, use_container_width=True, key="scene")
 
     # ----------------------------------------------------------- right panel
@@ -315,6 +425,22 @@ def main() -> None:
             summary = metrics_mod.summarize(traj, result["coords"], token=token)
             for name, value in summary.items():
                 st.write(f"{name.replace('_', ' ')}: **{value:.3f}**")
+
+        if result.get("traj_b") is not None:
+            with st.expander("A/B comparison", expanded=True):
+                cmp = compare_mod.compare(traj, result["traj_b"],
+                                          result["coords"], result["coords_b"],
+                                          token=token)
+                st.write(f"shared prefix: **{cmp.shared_tokens} tokens**")
+                st.write(f"Hausdorff distance: **{cmp.hausdorff:.3f}**")
+                st.write(f"DTW distance (normalized): **{cmp.dtw.normalized:.3f}**")
+                if cmp.onset_token is not None:
+                    st.write(f"states separate from token **{cmp.onset_token}**, "
+                             f"layer **{cmp.onset_layer}**")
+                if cmp.readout_changed is not None:
+                    st.write(f"top-1 prediction differs from layer **{cmp.readout_changed}**")
+                st.markdown("**A–B distance per layer**")
+                st.line_chart(cmp.profile)
 
 
 if __name__ == "__main__":
