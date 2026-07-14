@@ -1,4 +1,4 @@
-"""MARBLE UI: interactive latent trajectory explorer.
+"""Mottled UI: interactive latent trajectory explorer.
 
 Run with:  streamlit run ui.py
 
@@ -37,7 +37,7 @@ from trajectory import StateTrajectory
 # Pipeline: capture -> project -> compute_density -> mesh -> trajectory
 # --------------------------------------------------------------------------
 def run_pipeline(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) -> dict:
-    """Execute the full MARBLE pipeline and return every artifact.
+    """Execute the full Mottled pipeline and return every artifact.
 
     `model`/`tokenizer` may be pre-loaded objects (the UI caches them); when
     omitted, `cfg.model` is loaded by name ("synthetic" needs no loading).
@@ -213,7 +213,7 @@ def render(
         height=680,
         legend={"x": 0.99, "y": 0.99, "xanchor": "right"},
         template="plotly_dark",
-        title={"text": "MARBLE — latent trajectory explorer", "font": {"size": 14}},
+        title={"text": "Mottled — latent trajectory explorer", "font": {"size": 14}},
     )
     return fig
 
@@ -224,7 +224,7 @@ def render(
 def main() -> None:
     import streamlit as st
 
-    st.set_page_config(page_title="MARBLE", page_icon="🔮", layout="wide")
+    st.set_page_config(page_title="Mottled", page_icon="🔮", layout="wide")
 
     @st.cache_resource(show_spinner="Loading model…")
     def load_model_cached(name: str):
@@ -234,7 +234,7 @@ def main() -> None:
 
     # ------------------------------------------------------------ left panel
     with st.sidebar:
-        st.title("🔮 MARBLE")
+        st.title("🔮 Mottled")
         prompt = st.text_area("Prompt", DEFAULT_PROMPT, key="prompt")
         model_name = st.selectbox("Model", MODEL_CHOICES, index=0, key="model")
         proj_name = st.selectbox("Projection", PROJECTION_CHOICES, key="projection")

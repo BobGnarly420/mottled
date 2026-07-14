@@ -1,4 +1,4 @@
-"""Global configuration for MARBLE.
+"""Global configuration for Mottled.
 
 A single dataclass carries every knob the pipeline understands so that
 capture -> project -> density -> terrain -> render can be driven from one
