@@ -47,6 +47,18 @@ it generates deterministic, realistic trajectories so you can explore the
 tool instantly. Select a HuggingFace model (Qwen / Llama / Mistral / Gemma /
 GPT-2) for real captures.
 
+### Self-portrait
+
+`viewer/samples/self-portrait.mtj` is Mottled pointed at itself: GPT-2 —
+the same class of machinery the tool was built to instrument — processing
+Mottled's own self-descriptions ("Mottled visualizes hidden-state evolution
+as trajectories over a semantic manifold"; "the residual stream moves,
+turns, and settles"; "StateTrajectory is the center of the project"),
+captured by Mottled and rendered by Mottled.
+[View it live](https://bobgnarly420.github.io/mottled/viewer/?file=samples/self-portrait.mtj).
+Given "the residual stream moves, turns, and settles", the model's top
+continuation is " into" — it completes the thesis.
+
 ### A real model, not a sketch
 
 ![The web viewer rendering a real GPT-2 A/B capture](docs/images/viewer-gpt2.png)
