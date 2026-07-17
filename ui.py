@@ -435,12 +435,21 @@ def render(
 
     axis = {"showbackground": False, "gridcolor": "#1E2540",
             "zerolinecolor": "#283050", "color": "#818FB8"}
+    # Real-model scenes span hundreds of units in x/y while terrain height is
+    # normalized 0..1; pure "data" aspect flattens the relief into
+    # invisibility. Keep data proportions but never let relief drop below
+    # ~12% of the box (the web viewer applies the same rule).
+    sx = float(surface.x.max() - surface.x.min()) or 1.0
+    sy = float(surface.y.max() - surface.y.min()) or 1.0
+    sz = float(surface.z.max() - surface.z.min()) or 1.0
+    m = max(sx, sy)
     fig.update_layout(
         scene={
             "xaxis": {"title": "manifold x", **axis},
             "yaxis": {"title": "manifold y", **axis},
             "zaxis": {"title": "potential", **axis},
-            "aspectmode": "data",
+            "aspectmode": "manual",
+            "aspectratio": {"x": sx / m, "y": sy / m, "z": max(sz / m, 0.12)},
         },
         margin={"l": 0, "r": 0, "t": 24, "b": 0},
         height=680,

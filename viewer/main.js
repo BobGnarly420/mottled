@@ -213,28 +213,43 @@ function buildTerrain(t) {
            zmin, zmax };
 }
 
-function buildRun(run, runIdx, colorBase) {
+function buildRun(run, runIdx, colorBase, dashUnit) {
   const [N, L] = run.points.shape, pts = run.points.data;
   const alpha = runIdx === 0 ? 1.0 : OVERLAY_ALPHA;
   const dash = DASH_CYCLE[runIdx % DASH_CYCLE.length];
+  const patLen = dash ? dash.reduce((a, b) => a + b, 0) * dashUnit : 0;
   const trajs = [], lineVerts = [], lineCols = [];
   for (let j = 0; j < N; j++) {
     const rgb = hexRGB(PALETTE[(colorBase + j) % PALETTE.length]);
     const fine = catmullRom(pts.subarray(j * L * 3, (j + 1) * L * 3), L);
     const nFine = fine.length / 3 - 1;
-    let phase = 0;
+    const emit = (x0, y0, z0, x1, y1, z1) => {
+      lineVerts.push(x0, y0, z0, x1, y1, z1);
+      lineCols.push(rgb[0], rgb[1], rgb[2], alpha, rgb[0], rgb[1], rgb[2], alpha);
+    };
+    // Dashes are cut by accumulated arc length (world units), so the
+    // pattern stays even whether a layer span covers millimetres or
+    // hundreds of units (real-model scenes).
+    let dpos = 0;
     for (let s = 0; s < nFine; s++) {
-      let draw = true;
-      if (dash) { // dash by segment skipping over the draw/skip pattern
-        let p = phase % dash.reduce((a, b) => a + b, 0), di = 0;
-        while (p >= dash[di]) { p -= dash[di]; di++; }
-        draw = di % 2 === 0;
-        phase++;
-      }
-      if (draw) {
-        lineVerts.push(fine[s * 3], fine[s * 3 + 1], fine[s * 3 + 2],
-                       fine[s * 3 + 3], fine[s * 3 + 4], fine[s * 3 + 5]);
-        lineCols.push(rgb[0], rgb[1], rgb[2], alpha, rgb[0], rgb[1], rgb[2], alpha);
+      const x0 = fine[s * 3], y0 = fine[s * 3 + 1], z0 = fine[s * 3 + 2];
+      const x1 = fine[s * 3 + 3], y1 = fine[s * 3 + 4], z1 = fine[s * 3 + 5];
+      if (!dash) { emit(x0, y0, z0, x1, y1, z1); continue; }
+      const segLen = Math.hypot(x1 - x0, y1 - y0, z1 - z0);
+      let done = 0;
+      while (done < segLen - 1e-9) {
+        let p = dpos % patLen, di = 0;
+        while (di < dash.length && p >= dash[di] * dashUnit) { p -= dash[di] * dashUnit; di++; }
+        if (di >= dash.length) { di = 0; p = 0; }  // float residue at the cycle seam
+        // the minimum step keeps float rounding from ever stalling the walk
+        const chunk = Math.min(Math.max(dash[di] * dashUnit - p, dashUnit * 1e-3),
+                               segLen - done);
+        if (di % 2 === 0) {
+          const t0 = done / segLen, t1 = (done + chunk) / segLen;
+          emit(x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0, z0 + (z1 - z0) * t0,
+               x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1, z0 + (z1 - z0) * t1);
+        }
+        done += chunk; dpos += chunk;
       }
     }
     trajs.push({ fine, rgb, label: run.trajectoryLabels[j] != null ? String(run.trajectoryLabels[j]) : `#${j}` });
@@ -280,11 +295,33 @@ function setScene(scene) {
   state.playing = false;
   state.pick = null;
   state.visible = scene.runs.map(() => true);
+
+  // Real-model scenes span hundreds of units in x/y while terrain height is
+  // normalized 0..1 — relief flattens into invisibility and marbles sink
+  // into the surface. Exaggerate z uniformly (a pure view transform applied
+  // identically to terrain and trajectories, so all spatial relationships
+  // are preserved) until relief reads at ~10% of the horizontal span.
+  const tzArr = scene.terrain.z.data, txArr = scene.terrain.x.data, tyArr = scene.terrain.y.data;
+  let tzmin = Infinity, tzmax = -Infinity;
+  for (const v of tzArr) { if (v < tzmin) tzmin = v; if (v > tzmax) tzmax = v; }
+  const spanXY = Math.hypot(txArr[txArr.length - 1] - txArr[0],
+                            tyArr[tyArr.length - 1] - tyArr[0]) || 1;
+  const relief = tzmax - tzmin;
+  const zScale = relief > 1e-9 ? Math.max(1, 0.10 * spanXY / relief) : 1;
+  if (zScale > 1) {
+    for (let i = 0; i < tzArr.length; i++) tzArr[i] *= zScale;
+    for (const run of scene.runs) {
+      const p = run.points.data;
+      for (let i = 2; i < p.length; i += 3) p[i] *= zScale;
+    }
+  }
+
   state.terrain = buildTerrain(scene.terrain);
   state.runs = [];
+  const dashUnit = spanXY / 500;  // world-unit length of one dash-pattern tick
   let colorBase = 0, totalTrajs = 0, maxAttn = 0;
   scene.runs.forEach((run, i) => {
-    state.runs.push(buildRun(run, i, colorBase));
+    state.runs.push(buildRun(run, i, colorBase, dashUnit));
     colorBase += run.points.shape[0];
     totalTrajs += run.points.shape[0];
     if (run.attention) maxAttn += run.attention.shape[1] * 3 * 2;
@@ -319,7 +356,7 @@ function setScene(scene) {
   const target = [(tlo[0] + thi[0]) / 2, (tlo[1] + thi[1]) / 2, (tlo[2] + thi[2]) / 2];
   state.cam = { theta: -2.35, phi: 0.55, dist: Math.min(diag * 1.05, tdiag * 1.7), target };
   state.diag = diag;
-  state.zEps = (state.terrain.zmax - state.terrain.zmin) * 0.02 || 0.02;
+  state.zEps = (state.terrain.zmax - state.terrain.zmin) * 0.05 || 0.02;
 
   buildUI(scene);
   rebuildAttention();
@@ -455,8 +492,13 @@ function frame(now) {
   gl.bindBuffer(gl.ARRAY_BUFFER, dynPoints.bufs.col); gl.bufferSubData(gl.ARRAY_BUFFER, 0, col);
   gl.bindBuffer(gl.ARRAY_BUFFER, dynPoints.bufs.size); gl.bufferSubData(gl.ARRAY_BUFFER, 0, size);
   gl.uniform1f(rimLoc, 1);
+  // Marbles and the pick highlight always face the camera whole — depth
+  // testing a screen-space sprite against the surface it rides on slices it
+  // into a half-dome (the Plotly reference draws markers on top as well).
+  gl.disable(gl.DEPTH_TEST);
   gl.bindVertexArray(dynPoints.vao);
   gl.drawArrays(gl.POINTS, 0, n);
+  gl.enable(gl.DEPTH_TEST);
 
   gl.depthMask(true);
   gl.disable(gl.BLEND);
