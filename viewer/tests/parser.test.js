@@ -151,6 +151,69 @@ test("forward compatibility: unknown fields and dtypes are ignored", () => {
   assert.strictEqual(scene.runs[0].entropy, null);
 });
 
+test("loadScene resolves optional uncertainty layers (terrain se/density, run quality)", () => {
+  const buf = buildMtj({
+    manifest: {
+      format: "mottled-trajectory", version: 1, kind: "scene",
+      terrain: { x: "x", y: "y", z: "z", density: "d", se: "se" },
+      runs: [{ label: "A", prompt: "p", tokens: ["a", "b"], trajectory_labels: ["a", "b"],
+               points: "pts", quality: "q" }],
+      arrays: {
+        x: { dtype: "float32", shape: [2], offset: 0, length: 8 },
+        y: { dtype: "float32", shape: [2], offset: 16, length: 8 },
+        z: { dtype: "float32", shape: [2, 2], offset: 32, length: 16 },
+        d: { dtype: "float32", shape: [2, 2], offset: 48, length: 16 },
+        se: { dtype: "float32", shape: [2, 2], offset: 64, length: 16 },
+        pts: { dtype: "float32", shape: [2, 1, 3], offset: 80, length: 24 },
+        q: { dtype: "float32", shape: [1, 2], offset: 112, length: 8 },
+      },
+    },
+    blob: (() => {
+      const b = new Uint8Array(128);
+      const put = (off, vals) => new Uint8Array(b.buffer, off, vals.length * 4)
+        .set(new Uint8Array(new Float32Array(vals).buffer));
+      put(0, [0, 1]); put(16, [0, 1]); put(32, [0, 0.5, 0.5, 1]);
+      put(48, [1, 0.5, 0.5, 0]); put(64, [0.1, 0.2, 0.05, 0.3]);
+      put(80, [0, 0, 0, 1, 1, 1]); put(112, [0.75, 0.25]);
+      return b;
+    })(),
+  });
+  const scene = MTJ.loadScene(buf);
+  assert.deepStrictEqual(scene.terrain.se.shape, [2, 2]);
+  assert.deepStrictEqual(scene.terrain.density.shape, [2, 2]);
+  assert.ok(scene.terrain.se.data instanceof Float32Array);
+  assert.deepStrictEqual(scene.runs[0].quality.shape, [1, 2]);
+  assert.deepStrictEqual(Array.from(scene.runs[0].quality.data), [0.75, 0.25]);
+});
+
+test("loadScene tolerates scenes with no uncertainty layers (older writers)", () => {
+  // A pre-v3 scene: terrain has only x/y/z, runs have no quality array.
+  const buf = buildMtj({
+    manifest: {
+      format: "mottled-trajectory", version: 1, kind: "scene",
+      terrain: { x: "x", y: "y", z: "z" },
+      runs: [{ label: "A", prompt: "p", tokens: ["a"], trajectory_labels: ["a"], points: "pts" }],
+      arrays: {
+        x: { dtype: "float32", shape: [2], offset: 0, length: 8 },
+        y: { dtype: "float32", shape: [2], offset: 16, length: 8 },
+        z: { dtype: "float32", shape: [2, 2], offset: 32, length: 16 },
+        pts: { dtype: "float32", shape: [1, 2, 3], offset: 48, length: 24 },
+      },
+    },
+    blob: (() => {
+      const b = new Uint8Array(80);
+      const put = (off, vals) => new Uint8Array(b.buffer, off, vals.length * 4)
+        .set(new Uint8Array(new Float32Array(vals).buffer));
+      put(0, [0, 1]); put(16, [0, 1]); put(32, [0, 0.5, 0.5, 1]); put(48, [0, 0, 0, 1, 1, 1]);
+      return b;
+    })(),
+  });
+  const scene = MTJ.loadScene(buf);
+  assert.strictEqual(scene.terrain.se, null);
+  assert.strictEqual(scene.terrain.density, null);
+  assert.strictEqual(scene.runs[0].quality, null);
+});
+
 test("float16 arrays decode to Float32Array", () => {
   // 1.0 = 0x3C00, -2.0 = 0xC000, 0.5 = 0x3800
   const blob = new Uint8Array(16);

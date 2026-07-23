@@ -3,7 +3,13 @@
 import numpy as np
 import pytest
 
-from projection import PROJECTIONS, get_projection, project
+from projection import (
+    PROJECTIONS,
+    get_projection,
+    neighborhood_preservation,
+    project,
+    projection_quality,
+)
 
 
 @pytest.fixture(scope="module")
@@ -41,6 +47,42 @@ def test_umap_shape(hidden):
 def test_unknown_projection_rejected(hidden):
     with pytest.raises(ValueError, match="unknown projection"):
         project(hidden, method="tsne-magic")
+
+
+def test_neighborhood_preservation_perfect_when_structure_kept():
+    # A projection that keeps the first two (already dominant) coordinates
+    # preserves neighborhoods exactly.
+    rng = np.random.default_rng(3)
+    X = rng.normal(size=(40, 2))
+    X = np.column_stack([X, 0.001 * rng.normal(size=(40, 3))])  # near-2D cloud
+    Y = X[:, :2]
+    pres = neighborhood_preservation(X, Y, k=5)
+    assert pres.shape == (40,)
+    assert (pres >= 0).all() and (pres <= 1).all()
+    assert pres.mean() > 0.9
+
+
+def test_projection_quality_reports_pca_residual_and_variance(hidden):
+    coords, proj = project(hidden, method="pca")
+    q = projection_quality(hidden, coords, proj, k=8)
+    assert q.preservation.shape == hidden.shape[:2]
+    assert (q.preservation >= 0).all() and (q.preservation <= 1).all()
+    # PCA exposes both residual and explained variance
+    assert q.residual is not None and q.residual.shape == hidden.shape[:2]
+    assert (q.residual >= 0).all()
+    assert q.explained_variance is not None and 0.0 <= q.explained_variance <= 1.0
+
+
+def test_projection_quality_residual_matches_variance_direction():
+    # A cloud that lives almost entirely in a 2-plane: low residual, high var.
+    rng = np.random.default_rng(9)
+    flat = np.column_stack([rng.normal(size=(30, 2)) * 10,
+                            rng.normal(size=(30, 6)) * 0.01])
+    hidden = flat.reshape(5, 6, 8)
+    coords, proj = project(hidden, method="pca")
+    q = projection_quality(hidden, coords, proj)
+    assert q.explained_variance > 0.98
+    assert q.residual.mean() < 0.1
 
 
 def test_registry_plugin():

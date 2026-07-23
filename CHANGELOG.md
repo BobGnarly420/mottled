@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Uncertainty visualization
+- `projection.projection_quality`: measures how much a fitted projection
+  distorts, per state — k-NN neighborhood preservation for any projection,
+  plus reconstruction residual and explained variance for linear ones. The
+  2-D picture is lossy and now says where.
+- `density.compute_density(..., bootstrap=B)`: resamples the points `B`
+  times and records the per-cell standard error of the density
+  (`Landscape.density_se`) — a confidence field over the terrain. New
+  `MarbleConfig.density_bootstrap` (default 24; cache keys bumped).
+- The explorer gains an **Uncertainty** inspector panel (explained variance,
+  neighborhood preservation for the selected state and per layer, density
+  bootstrap SE). Scene `.mtj` files now carry `terrain.density`,
+  `terrain.se`, and per-run `quality` arrays (all optional, additive).
+- The web viewer gains an **uncertainty** toggle that recolors the terrain by
+  its bootstrap SE, and shows per-state neighborhood fidelity on hover. The
+  bundled sample scenes were regenerated to carry these layers.
+
 ### Explanatory layer
 - `attractor.py`: measures why the density basin forms (per-layer step
   deceleration, settle layer), what it is made of (membership roster above

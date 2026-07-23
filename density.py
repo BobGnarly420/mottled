@@ -4,6 +4,12 @@ The density of projected hidden states is the scalar potential that terrain.py
 turns into a landscape.  Two estimators are registered: Gaussian KDE (default)
 and kNN inverse-distance.  Both are evaluated on a regular grid spanning the
 point cloud (plus padding) and guaranteed to return finite values.
+
+The estimate is made from one run's worth of points, so it is noisy:
+`compute_density(..., bootstrap=B)` additionally resamples the points B times
+and records the per-cell standard error of the density (`Landscape.density_se`)
+— the confidence field viewers use to show where the terrain is measurement
+and where it is bandwidth artifact.
 """
 
 from __future__ import annotations
@@ -32,6 +38,8 @@ class Landscape:
     grid_y: np.ndarray                 # (H,)
     density: np.ndarray                # (H, W) normalised to [0, 1]
     point_density: np.ndarray          # (N,) density at each input point
+    density_se: np.ndarray | None = None  # (H, W) bootstrap standard error,
+    # in the same normalised units as `density`; None when bootstrap was off
     neighbors: dict = field(default_factory=dict)  # optional neighbor annotations
 
 
@@ -81,10 +89,16 @@ def compute_density(
     method: str = "kde",
     grid_size: int = 64,
     padding: float = 0.2,
+    bootstrap: int = 0,
+    seed: int = 0,
 ) -> Landscape:
     """Estimate the density field of projected states on a regular grid.
 
     coords: (N, 2) or (L, T, 2) — higher-rank inputs are flattened.
+    bootstrap >= 2 additionally refits the estimator on that many resamples
+    of the points (with replacement, seeded) and stores the per-cell standard
+    error in `Landscape.density_se`, in the same normalised units as
+    `density`.
     """
     pts = np.asarray(coords, dtype=np.float64).reshape(-1, coords.shape[-1])[:, :2]
     lo, hi = pts.min(axis=0), pts.max(axis=0)
@@ -104,10 +118,24 @@ def compute_density(
     if peak > 0:
         dens = dens / peak
         point_dens = point_dens / peak
+
+    density_se = None
+    if bootstrap >= 2 and len(pts) > 1 and peak > 0:
+        rng = np.random.default_rng(seed)
+        resampled = np.empty((bootstrap, len(grid_pts)))
+        for b in range(bootstrap):
+            sample = pts[rng.integers(0, len(pts), size=len(pts))]
+            d = get_estimator(method, sample).evaluate(grid_pts)
+            # same normalisation as the point estimate, so SE is comparable
+            resampled[b] = np.nan_to_num(d, nan=0.0, posinf=0.0, neginf=0.0) / peak
+        density_se = resampled.std(axis=0, ddof=1) \
+            .reshape(grid_size, grid_size).astype(np.float32)
+
     return Landscape(
         coordinates=pts.astype(np.float32),
         grid_x=grid_x.astype(np.float32),
         grid_y=grid_y.astype(np.float32),
         density=dens.reshape(grid_size, grid_size).astype(np.float32),
         point_density=point_dens.astype(np.float32),
+        density_se=density_se,
     )

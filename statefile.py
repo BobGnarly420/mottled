@@ -180,12 +180,20 @@ def save_scene(result: dict, path_or_fh) -> None:
     trajs = result.get("trajs") or [result["traj"]]
     trajectories_list = result.get("trajectories_list") or [result["trajectories"]]
     prompts = result.get("prompts") or [result.get("prompt", "")]
+    qualities = result.get("quality_list")
+    if qualities is None:
+        qualities = [result["quality"]] if result.get("quality") is not None else []
     mesh = result["mesh"]
+    landscape = result.get("landscape")
 
     w = _Writer()
-    w.add("terrain.x", mesh.x)
-    w.add("terrain.y", mesh.y)
-    w.add("terrain.z", mesh.z)
+    terrain_refs = {"x": w.add("terrain.x", mesh.x),
+                    "y": w.add("terrain.y", mesh.y),
+                    "z": w.add("terrain.z", mesh.z)}
+    if landscape is not None:
+        terrain_refs["density"] = w.add("terrain.density", landscape.density)
+        if landscape.density_se is not None:
+            terrain_refs["se"] = w.add("terrain.se", landscape.density_se)
 
     runs = []
     for i, (traj, trajectories) in enumerate(zip(trajs, trajectories_list)):
@@ -199,6 +207,9 @@ def save_scene(result: dict, path_or_fh) -> None:
         }
         if traj.entropy is not None:
             run["entropy"] = w.add(f"run{i}.entropy", traj.entropy.astype(np.float32))
+        if i < len(qualities) and qualities[i] is not None:
+            run["quality"] = w.add(f"run{i}.quality",
+                                   qualities[i].preservation.astype(np.float32))
         if traj.attention is not None:
             run["attention"] = w.add(f"run{i}.attention", traj.attention.astype(np.float32))
         if traj.topk is not None:
@@ -211,7 +222,7 @@ def save_scene(result: dict, path_or_fh) -> None:
         "version": VERSION,
         "kind": "scene",
         "meta": _jsonable(trajs[0].meta),
-        "terrain": {"x": "terrain.x", "y": "terrain.y", "z": "terrain.z"},
+        "terrain": terrain_refs,
         "runs": runs,
     }
     if result.get("comparisons"):
@@ -235,7 +246,8 @@ def load_scene(path_or_fh) -> dict:
     scene = dict(manifest)
     scene["terrain"] = {axis: arrays[name] for axis, name in manifest["terrain"].items()}
     scene["runs"] = [
-        {**run, **{key: arrays[run[key]] for key in ("points", "entropy", "attention")
+        {**run, **{key: arrays[run[key]]
+                   for key in ("points", "entropy", "attention", "quality")
                    if key in run}}
         for run in manifest["runs"]
     ]

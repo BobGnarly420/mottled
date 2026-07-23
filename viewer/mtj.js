@@ -110,6 +110,9 @@
       x: resolve(t.x, "terrain.x"),
       y: resolve(t.y, "terrain.y"),
       z: resolve(t.z, "terrain.z"),
+      // optional uncertainty layers (writers >= scene-v3)
+      density: t.density ? resolve(t.density, "terrain.density") : null,
+      se: t.se ? resolve(t.se, "terrain.se") : null,
     };
     if (terrain.z.shape.length !== 2 ||
         terrain.z.shape[0] !== terrain.y.shape[0] || terrain.z.shape[1] !== terrain.x.shape[0])
@@ -126,6 +129,7 @@
         trajectoryLabels: r.trajectory_labels || r.tokens || [],
         points,
         entropy: r.entropy ? resolve(r.entropy, `run ${i} entropy`) : null,
+        quality: r.quality ? resolve(r.quality, `run ${i} quality`) : null,
         attention: r.attention ? resolve(r.attention, `run ${i} attention`) : null,
         topk: r.topk || null,
       };

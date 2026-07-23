@@ -27,6 +27,17 @@ def test_pipeline_artifacts(cfg, result):
     assert all(t.points.shape == (L, 3) for t in result["trajectories"])
 
 
+def test_pipeline_reports_uncertainty(cfg, result):
+    traj = result["traj"]
+    q = result["quality"]
+    assert q.preservation.shape == (traj.n_layers, traj.n_tokens)
+    assert (q.preservation >= 0).all() and (q.preservation <= 1).all()
+    # synthetic default config runs the density bootstrap
+    if cfg.density_bootstrap >= 2:
+        assert result["landscape"].density_se is not None
+        assert result["landscape"].density_se.shape == result["mesh"].z.shape
+
+
 def test_pipeline_cache_roundtrip(cfg, result):
     again = run_pipeline(cfg, "The capital of France is")
     assert np.array_equal(again["coords"], result["coords"])

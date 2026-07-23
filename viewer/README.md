@@ -31,10 +31,19 @@ terrain and draped trajectory points; raw trajectories don't).
 | left-drag | orbit |
 | right-drag or shift-drag | pan |
 | wheel | zoom |
-| hover near a trajectory point | highlight + inspector (run, layer, token, entropy, top-k readout) |
+| hover near a trajectory point | highlight + inspector (run, layer, token, entropy, neighborhood fidelity, top-k readout) |
 | slider / play button | scrub or animate the marbles across layers |
 | runs panel checkboxes | show / hide individual runs |
 | attention flow toggle | draw top-3 attention edges (weight ≥ 0.1) at the current layer |
+| uncertainty toggle | recolor the terrain by the density's bootstrap standard error (amber = less certain); appears only when the scene carries an `se` field |
+
+The uncertainty controls surface two honesty signals the format now carries.
+The **uncertainty toggle** washes the terrain toward amber where the density
+estimate is least stable across bootstrap resamples — the height there is
+bandwidth artifact more than measurement. The inspector's **nbhd preserved**
+line reports how much of a state's hidden-space neighborhood survived the 2-D
+projection at the point you hover: a low percentage means the flattened
+position is not to be trusted.
 
 Run A is drawn solid; runs B, C, … get dash patterns and reduced opacity,
 with labels prefixed `B · token` etc. Comparison summaries (`hausdorff`,
@@ -48,9 +57,11 @@ Everything is per `docs/mtj-format.md`, version 1:
   UTF-8 JSON manifest padded so the blob starts 16-byte aligned, then raw
   little-endian arrays at 16-byte-aligned offsets relative to the blob start;
 - manifest `kind: "scene"` with `terrain.{x,y,z}` array references
-  (`(W,)`, `(H,)`, `(H, W)`; `z[i][j]` is the height at `(x[j], y[i])`);
+  (`(W,)`, `(H,)`, `(H, W)`; `z[i][j]` is the height at `(x[j], y[i])`) plus
+  optional `terrain.{density,se}` `(H, W)` uncertainty layers;
 - `runs[]`, each with a required `points` array `(N, L, 3)` and optional
-  `entropy` `(L, T)`, `attention` `(L-1, T, T)`, and manifest `topk`
+  `entropy` `(L, T)`, `quality` `(L, T)` (projection fidelity),
+  `attention` `(L-1, T, T)`, and manifest `topk`
   `[L][T][k]` of `[token, prob]` pairs;
 - array references are resolved strictly through `manifest.arrays` — never by
   the `run{i}.` naming convention;
