@@ -139,6 +139,7 @@ const state = {
   layerF: 0, L: 1,
   playing: false, speed: 2,
   showAttention: false,
+  showUncertainty: false,
   visible: [],
   pick: null, hover: null,
   cam: { theta: -2.2, phi: 0.65, dist: 10, target: [0, 0, 0] },
@@ -161,12 +162,23 @@ function catmullRom(pts, L) { // pts: Float32Array (L*3) -> densified Float32Arr
   return out;
 }
 
+// Uncertainty ramp for the density standard-error overlay: confident terrain
+// stays its own colour (blended out at se≈0), rising error washes toward a
+// warning amber. Kept distinct from the potential ramp so the two readings
+// never get confused.
+const SE_COLOR = [0.878, 0.576, 0.290]; // #E0934A, the risk-amber data colour
+
 function buildTerrain(t) {
   const W = t.x.shape[0], H = t.y.shape[0], xs = t.x.data, ys = t.y.data, zs = t.z.data;
+  const se = t.se ? t.se.data : null;
+  let seMax = 0;
+  if (se) for (const v of se) { if (v > seMax) seMax = v; }
+  seMax = seMax || 1;
   let zmin = Infinity, zmax = -Infinity;
   for (const v of zs) { if (v < zmin) zmin = v; if (v > zmax) zmax = v; }
   const zr = (zmax - zmin) || 1;
-  const pos = new Float32Array(W * H * 3), col = new Float32Array(W * H * 3), nrm = new Float32Array(W * H * 3);
+  const pos = new Float32Array(W * H * 3), col = new Float32Array(W * H * 3),
+        seCol = new Float32Array(W * H * 3), nrm = new Float32Array(W * H * 3);
   for (let i = 0; i < H; i++) for (let j = 0; j < W; j++) {
     const v = i * W + j, z = zs[v];
     pos.set([xs[j], ys[i], z], v * 3);
@@ -175,6 +187,13 @@ function buildTerrain(t) {
     const iso = Math.abs(((z - zmin) / zr * 14) % 1 - 0.5);
     const k = iso < 0.06 ? 0.82 : 1.0;
     col.set([shade[0] * k, shade[1] * k, shade[2] * k], v * 3);
+    // uncertainty shading: blend the base colour toward SE_COLOR by the
+    // cell's relative bootstrap standard error (confident cells unchanged)
+    const u = se ? Math.min(1, se[v] / seMax) : 0;
+    const um = 0.15 + 0.85 * u; // keep a floor so confident terrain reads too
+    seCol.set([shade[0] * k * (1 - um) + SE_COLOR[0] * um,
+               shade[1] * k * (1 - um) + SE_COLOR[1] * um,
+               shade[2] * k * (1 - um) + SE_COLOR[2] * um], v * 3);
     const dzx = (zs[i * W + Math.min(j + 1, W - 1)] - zs[i * W + Math.max(j - 1, 0)]) /
                 ((xs[Math.min(j + 1, W - 1)] - xs[Math.max(j - 1, 0)]) || 1);
     const dzy = (zs[Math.min(i + 1, H - 1) * W + j] - zs[Math.max(i - 1, 0) * W + j]) /
@@ -210,7 +229,16 @@ function buildTerrain(t) {
   const wireVao = makeVAO(lineProg, [{ name: "pos", size: 3, data: wirePos },
                                      { name: "col", size: 4, data: wireCol }]);
   return { vao: vaoInfo.vao, count: idx.length, wireVao: wireVao.vao, wireCount: wirePos.length / 3,
-           zmin, zmax };
+           zmin, zmax, hasSE: !!se, seMax, colBuf: vaoInfo.bufs.col, baseCol: col, seCol };
+}
+
+// Swap the terrain colour attribute between the potential shading and the
+// uncertainty (density standard-error) shading in place — no re-tessellation.
+function setTerrainColors(showUncertainty) {
+  const ter = state.terrain;
+  if (!ter || !ter.colBuf) return;
+  gl.bindBuffer(gl.ARRAY_BUFFER, ter.colBuf);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, showUncertainty && ter.hasSE ? ter.seCol : ter.baseCol);
 }
 
 function buildRun(run, runIdx, colorBase, dashUnit) {
@@ -317,6 +345,7 @@ function setScene(scene) {
   }
 
   state.terrain = buildTerrain(scene.terrain);
+  setTerrainColors(state.showUncertainty);
   state.runs = [];
   const dashUnit = spanXY / 500;  // world-unit length of one dash-pattern tick
   let colorBase = 0, totalTrajs = 0, maxAttn = 0;
@@ -545,6 +574,14 @@ function setPickInfo(pick) {
     if (pick.layer < L && tok < Te)
       html += `<div>entropy ${run.entropy.data[pick.layer * Te + tok].toFixed(2)} nats</div>`;
   }
+  if (run.quality) {
+    const [Lq, Tq] = run.quality.shape;
+    if (pick.layer < Lq && tok < Tq) {
+      const pres = run.quality.data[pick.layer * Tq + tok];
+      html += `<div>nbhd preserved <b>${(pres * 100).toFixed(0)}%</b>` +
+              `<span class="dim"> (2-D fidelity)</span></div>`;
+    }
+  }
   if (run.topk && run.topk[pick.layer] && run.topk[pick.layer][tok]) {
     const rows = run.topk[pick.layer][tok].slice(0, 5).map(([t, p]) =>
       `<div><span class="bar" style="width:${Math.max(2, p * 120)}px"></span>` +
@@ -568,6 +605,8 @@ const ui = {
   comparisons: document.getElementById("comparisons"),
   attnRow: document.getElementById("attn-row"),
   attnToggle: document.getElementById("attnToggle"),
+  uncertaintyRow: document.getElementById("uncertainty-row"),
+  uncertaintyToggle: document.getElementById("uncertaintyToggle"),
   infoPanel: document.getElementById("info-panel"),
   hudBottom: document.getElementById("hud-bottom"),
   playBtn: document.getElementById("playBtn"),
@@ -621,6 +660,11 @@ function buildUI(scene) {
   const hasAttn = scene.runs.some((r) => r.attention);
   ui.attnRow.hidden = !hasAttn;
   ui.attnToggle.checked = state.showAttention = false;
+
+  const hasSE = !!(scene.terrain && scene.terrain.se);
+  ui.uncertaintyRow.hidden = !hasSE;
+  ui.uncertaintyToggle.checked = state.showUncertainty = false;
+  setTerrainColors(false);
 }
 const fmt = (v) => (typeof v === "number" ? v.toFixed(3) : "–");
 
@@ -638,6 +682,10 @@ ui.playBtn.addEventListener("click", () => {
 });
 ui.speedSel.addEventListener("change", () => { state.speed = parseFloat(ui.speedSel.value); });
 ui.attnToggle.addEventListener("change", () => { state.showAttention = ui.attnToggle.checked; rebuildAttention(); });
+ui.uncertaintyToggle.addEventListener("change", () => {
+  state.showUncertainty = ui.uncertaintyToggle.checked;
+  setTerrainColors(state.showUncertainty);
+});
 ui.openBtn.addEventListener("click", () => ui.fileInput.click());
 ui.fileInput.addEventListener("change", () => {
   if (ui.fileInput.files[0]) loadBlob(ui.fileInput.files[0], ui.fileInput.files[0].name);

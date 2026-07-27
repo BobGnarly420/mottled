@@ -68,7 +68,12 @@ Fields:
 
 - `terrain`: `{ "x": <array ref name>, "y": …, "z": … }` — grid axes
   `(W,)`, `(H,)` and heights `(H, W)`; `z[i][j]` is the height at
-  `(x[j], y[i])`.
+  `(x[j], y[i])`. Two optional keys carry the density and its uncertainty:
+  - `density` — `(H, W)` float32 *(optional)*: the normalised `[0, 1]`
+    density field the height map was built from.
+  - `se` — `(H, W)` float32 *(optional)*: the per-cell bootstrap standard
+    error of that density, in the same normalised units — the confidence
+    field. Present only when the producer ran the density bootstrap.
 - `runs`: list of runs drawn on that terrain. Each run:
   - `label`: display name (`"A"`, `"B"`, …),
   - `prompt`: the prompt text,
@@ -78,6 +83,10 @@ Fields:
     - `points` — `(N, L, 3)` float32 draped trajectory points
       (`N` trajectories × `L` layers × xyz). **Required.**
     - `entropy` — `(L, T)` float32 *(optional)*,
+    - `quality` — `(L, T)` float32 *(optional)*: per-state projection
+      fidelity — the fraction of each state's hidden-space nearest
+      neighbors preserved in the 2-D projection (`1.0` = local structure
+      intact). Tells a viewer where the flattened picture is trustworthy.
     - `attention` — `(L-1, T, T)` float32 *(optional)*,
   - `topk` *(optional)*: `[L][T][k]` list of `[token, probability]` pairs.
 - `comparisons` *(optional)*: for runs beyond the first, JSON summaries:

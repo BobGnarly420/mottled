@@ -47,12 +47,13 @@ def run_pipeline(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) -> 
     omitted, `cfg.model` is loaded by name ("synthetic" needs no loading).
     """
     disk = cache_mod.DiskCache(cfg.cache_dir) if cfg.use_cache else None
-    key = cache_mod.make_key("pipeline-v4", prompt, cfg.model, cfg.projection,
+    key = cache_mod.make_key("pipeline-v5", prompt, cfg.model, cfg.projection,
                              cfg.density, cfg.top_k, cfg.n_components, cfg.seed,
                              cfg.grid_size, cfg.smooth_sigma, cfg.height_scale,
                              cfg.invert_terrain, cfg.trajectory_mode,
                              cfg.trajectory_token, cfg.frames_per_layer,
-                             cfg.capture_components, cfg.capture_attention)
+                             cfg.capture_components, cfg.capture_attention,
+                             cfg.density_bootstrap)
     if disk is not None and (hit := disk.get(key)) is not None:
         return hit
 
@@ -61,8 +62,10 @@ def run_pipeline(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) -> 
     coords, projector = projection_mod.project(
         traj.hidden, method=cfg.projection, n_components=cfg.n_components, seed=cfg.seed
     )
+    quality = projection_mod.projection_quality(traj.hidden, coords, projector)
     landscape = density_mod.compute_density(
-        coords, method=cfg.density, grid_size=cfg.grid_size, padding=cfg.grid_padding
+        coords, method=cfg.density, grid_size=cfg.grid_size, padding=cfg.grid_padding,
+        bootstrap=cfg.density_bootstrap, seed=cfg.seed,
     )
     surface = terrain_mod.mesh(
         landscape, smooth_sigma=cfg.smooth_sigma,
@@ -82,6 +85,7 @@ def run_pipeline(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) -> 
         "traj": traj,
         "coords": coords,
         "projector": projector,
+        "quality": quality,
         "landscape": landscape,
         "mesh": surface,
         "trajectories": trajectories,
@@ -116,9 +120,14 @@ def _assemble_scene(cfg: MarbleConfig, trajs: list[StateTrajectory]) -> dict:
         [t.hidden for t in trajs],
         method=cfg.projection, n_components=cfg.n_components, seed=cfg.seed,
     )
+    quality_list = [
+        projection_mod.projection_quality(t.hidden, c, projector)
+        for t, c in zip(trajs, coords_list)
+    ]
     union = np.concatenate([c.reshape(-1, cfg.n_components) for c in coords_list])
     landscape = density_mod.compute_density(
-        union, method=cfg.density, grid_size=cfg.grid_size, padding=cfg.grid_padding
+        union, method=cfg.density, grid_size=cfg.grid_size, padding=cfg.grid_padding,
+        bootstrap=cfg.density_bootstrap, seed=cfg.seed,
     )
     surface = terrain_mod.mesh(
         landscape, smooth_sigma=cfg.smooth_sigma,
@@ -146,6 +155,7 @@ def _assemble_scene(cfg: MarbleConfig, trajs: list[StateTrajectory]) -> dict:
         "trajs": trajs,
         "coords_list": coords_list,
         "projector": projector,
+        "quality_list": quality_list,
         "landscape": landscape,
         "mesh": surface,
         "trajectories_list": trajectories_list,
@@ -154,6 +164,7 @@ def _assemble_scene(cfg: MarbleConfig, trajs: list[StateTrajectory]) -> dict:
         # run-0 view (the run_pipeline keys)
         "traj": trajs[0],
         "coords": coords_list[0],
+        "quality": quality_list[0],
         "trajectories": trajectories_list[0],
         "fine_paths": fine_paths_list[0],
     }
@@ -180,12 +191,13 @@ def run_scene(cfg: MarbleConfig, prompts: list[str], model=None, tokenizer=None)
     if not prompts:
         raise ValueError("run_scene needs at least one prompt")
     disk = cache_mod.DiskCache(cfg.cache_dir) if cfg.use_cache else None
-    key = cache_mod.make_key("scene-v2", prompts, cfg.model, cfg.projection,
+    key = cache_mod.make_key("scene-v3", prompts, cfg.model, cfg.projection,
                              cfg.density, cfg.top_k, cfg.n_components, cfg.seed,
                              cfg.grid_size, cfg.smooth_sigma, cfg.height_scale,
                              cfg.invert_terrain, cfg.trajectory_mode,
                              cfg.trajectory_token, cfg.frames_per_layer,
-                             cfg.capture_components, cfg.capture_attention)
+                             cfg.capture_components, cfg.capture_attention,
+                             cfg.density_bootstrap)
     if disk is not None and (hit := disk.get(key)) is not None:
         return hit
 
@@ -931,6 +943,30 @@ def main() -> None:
             summary = metrics_mod.summarize(traj, result["coords"], token=token)
             for name, value in summary.items():
                 st.write(f"{name.replace('_', ' ')}: **{value:.3f}**")
+
+        with st.expander("Uncertainty", expanded=False):
+            q = result.get("quality")
+            if q is not None:
+                if q.explained_variance is not None:
+                    st.write(f"projection keeps **{q.explained_variance:.0%}** "
+                             "of hidden-space variance")
+                st.write(f"neighborhood preservation (k={q.k}): "
+                         f"mean **{q.preservation.mean():.2f}** · "
+                         f"this state **{q.preservation[layer, token]:.2f}**")
+                if q.residual is not None:
+                    st.write(f"this state lies **{q.residual[layer, token]:.0%}** "
+                             "off the projection plane")
+                st.markdown("**Neighborhood preservation per layer** *(this token)*")
+                st.line_chart({"preservation": q.preservation[:, token]})
+            se = result["landscape"].density_se
+            if se is not None:
+                st.write(f"density bootstrap SE: mean **{se.mean():.3f}** · "
+                         f"max **{se.max():.3f}** (normalized density units)")
+            st.caption("The 2-D picture is a lossy view of hidden space and the "
+                       "terrain is an estimate from finitely many states — treat "
+                       "low-preservation states and high-SE regions as suggestive, "
+                       "not measured. The web viewer's uncertainty toggle shows "
+                       "the SE field on the terrain itself.")
 
         if result.get("traj_b") is not None:
             with st.expander("A/B comparison", expanded=True):

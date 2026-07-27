@@ -4,9 +4,16 @@ Plugin registry: any object with fit_transform / transform can be registered
 as a projection.  PCA is the deterministic default; UMAP is available when
 umap-learn is installed.  `transform` enables incremental projection of new
 states into an already-fitted space.
+
+Every projection distorts: `projection_quality` measures how much, per state
+(k-NN neighborhood preservation for any projection, reconstruction residual
+and explained variance for linear ones), so viewers can show where the 2-D
+picture is trustworthy and where it is not.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -57,6 +64,24 @@ class PCAProjection:
         """
         return self._pca.inverse_transform(
             np.asarray(Y, dtype=np.float64)).astype(np.float32)
+
+    @property
+    def explained_variance(self) -> float:
+        """Fraction of total variance the kept components explain."""
+        return float(self._pca.explained_variance_ratio_.sum())
+
+    def reconstruction_residual(self, X: np.ndarray) -> np.ndarray:
+        """Per-point relative projection loss in [0, 1].
+
+        ||x - reconstruct(project(x))|| / ||x - center||: the fraction of a
+        point's (centered) length that falls outside the fitted plane — 0
+        means the state lies exactly on the plane you are looking at.
+        """
+        X = np.asarray(X, dtype=np.float64)
+        recon = self._pca.inverse_transform(self._pca.transform(X))
+        lost = np.linalg.norm(X - recon, axis=1)
+        total = np.linalg.norm(X - self._pca.mean_, axis=1)
+        return (lost / np.maximum(total, 1e-12)).astype(np.float32)
 
 
 @register_projection("umap")
@@ -136,3 +161,86 @@ def project_joint(
         coords.append(flat[offset : offset + n].reshape(a.shape[0], a.shape[1], n_components))
         offset += n
     return coords, proj
+
+
+# ------------------------------------------------------------ distortion
+@dataclass
+class ProjectionQuality:
+    """How faithfully the projection preserved each state.
+
+    preservation: (L, T) fraction of each state's k hidden-space nearest
+        neighbors that are still among its k nearest neighbors in the
+        projected space — 1.0 means the local structure survived intact.
+        Defined for every projection.
+    residual: (L, T) relative reconstruction loss (see
+        `PCAProjection.reconstruction_residual`), or None when the
+        projection has no exact inverse.
+    explained_variance: global fraction of variance kept, or None for
+        nonlinear projections.
+    k: neighborhood size the preservation was measured at.
+    """
+
+    preservation: np.ndarray
+    residual: np.ndarray | None
+    explained_variance: float | None
+    k: int
+
+
+def neighborhood_preservation(X: np.ndarray, Y: np.ndarray, k: int = 10) -> np.ndarray:
+    """Per-point k-NN overlap between a high-dim cloud and its projection.
+
+    X: (N, D) original points, Y: (N, C) projected points.  Returns (N,)
+    values in [0, 1]: the fraction of each point's k nearest neighbors in X
+    that remain among its k nearest neighbors in Y.
+    """
+    from sklearn.neighbors import NearestNeighbors
+
+    X = np.asarray(X, dtype=np.float64)
+    Y = np.asarray(Y, dtype=np.float64)
+    n = len(X)
+    if n != len(Y):
+        raise ValueError("X and Y must contain the same number of points")
+    k = int(min(k, n - 1))
+    if k < 1:
+        return np.ones(n, dtype=np.float32)
+    # +1 for the point itself, dropped below
+    nn_x = NearestNeighbors(n_neighbors=k + 1).fit(X).kneighbors(X, return_distance=False)
+    nn_y = NearestNeighbors(n_neighbors=k + 1).fit(Y).kneighbors(Y, return_distance=False)
+    out = np.empty(n, dtype=np.float32)
+    for i in range(n):
+        a = set(nn_x[i].tolist()) - {i}
+        b = set(nn_y[i].tolist()) - {i}
+        out[i] = len(a & b) / max(len(a), 1)
+    return out
+
+
+def projection_quality(
+    hidden: np.ndarray,
+    coords: np.ndarray,
+    projector=None,
+    k: int = 10,
+) -> ProjectionQuality:
+    """Measure the distortion of a fitted projection, per state.
+
+    hidden: (L, T, D) states, coords: (L, T, C) their projections (from
+    `project` / `project_joint`).  Preservation is always computed;
+    residual / explained variance come from the projector when it exposes
+    them (PCA does, UMAP does not).
+    """
+    hidden = np.asarray(hidden)
+    coords = np.asarray(coords)
+    L, T, D = hidden.shape
+    flat_x = hidden.reshape(L * T, D)
+    flat_y = coords.reshape(L * T, coords.shape[-1])
+
+    preservation = neighborhood_preservation(flat_x, flat_y, k=k).reshape(L, T)
+
+    residual = None
+    if projector is not None and hasattr(projector, "reconstruction_residual"):
+        residual = projector.reconstruction_residual(flat_x).reshape(L, T)
+    explained = None
+    if projector is not None and hasattr(projector, "explained_variance"):
+        explained = float(projector.explained_variance)
+
+    return ProjectionQuality(preservation=preservation, residual=residual,
+                             explained_variance=explained, k=int(min(k, L * T - 1)))

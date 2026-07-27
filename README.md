@@ -135,9 +135,9 @@ density, terrain, metrics, comparison, every viewer) works unchanged.
 | Module | Role |
 |---|---|
 | `capture.py` | Forward hooks on every block + logit lens → `StateTrajectory` |
-| `projection.py` | PCA / UMAP plugin registry, incremental `transform` |
+| `projection.py` | PCA / UMAP plugin registry, incremental `transform`, per-state distortion (`projection_quality`) |
 | `neighbors.py` | FAISS or NumPy cosine k-NN over hidden states & token embeddings |
-| `density.py` | KDE / kNN-inverse-distance density → scalar potential field |
+| `density.py` | KDE / kNN-inverse-distance density → scalar potential field, with bootstrap standard-error field |
 | `terrain.py` | Density → smoothed height map → mesh; drapes trajectories on it |
 | `trajectory.py` | `StateTrajectory`, extraction modes (token / all / mean / CLS), spline densify |
 | `metrics.py` | Entropy, KL, path length, curvature, velocity, drift, NN-stability |
@@ -380,6 +380,43 @@ projected to ≤3-D is pickable. A volumetric (voxel-octree) renderer for
 *fields* (density / flow) will land once we render ensembles rather than single
 runs.
 
+### Uncertainty: where the picture is trustworthy
+
+Every step from hidden space to a 3-D scene loses information, and the tool
+now measures the loss instead of hiding it. Two sources:
+
+- **Projection distortion.** Flattening a `D`-dimensional residual stream to
+  two coordinates cannot preserve every neighborhood.
+  `projection.projection_quality(hidden, coords, projector)` reports, per
+  state, the fraction of its hidden-space nearest neighbors that survive in
+  the projection (`preservation`), and — for PCA — how far the state sits off
+  the fitted plane (`residual`) and the global explained variance. A state
+  with low preservation is drawn where the projection *could* put it, not
+  where it truly is.
+- **Density confidence.** The terrain is a KDE over one run's worth of
+  points, so it is an estimate. `density.compute_density(..., bootstrap=B)`
+  resamples the points `B` times and records the per-cell standard error
+  (`Landscape.density_se`) in the same normalized units as the height — high
+  SE marks relief that is bandwidth artifact rather than a real pile-up.
+
+```python
+from projection import project, projection_quality
+from density import compute_density
+
+coords, projector = project(traj.hidden, method="pca")
+q = projection_quality(traj.hidden, coords, projector)
+print(q.explained_variance, q.preservation.mean())   # global + per-state
+
+land = compute_density(coords, bootstrap=32)
+print(land.density_se.max())                          # confidence field
+```
+
+The explorer surfaces both in an **Uncertainty** inspector panel; the web
+viewer adds an **uncertainty** terrain overlay (amber = high SE) and shows
+per-state neighborhood fidelity on hover. Both quantities ride along in the
+`.mtj` scene format (`terrain.se`, per-run `quality`), so any consumer can
+render them.
+
 ### Design language
 
 Every surface — the Plotly renderer, the Streamlit shell, the web viewer —
@@ -454,6 +491,11 @@ research tool.
   basin forms and what it is made of, as measured prose, pinned callouts,
   and inspector panels; SAE feature field (`sae.feature_field`) — domain
   coloring of the projection plane, plane and relief views.
+- **Uncertainty** — ✅ projection distortion (`projection.projection_quality`:
+  neighborhood preservation, reconstruction residual, explained variance) and
+  a density confidence field (`density.compute_density(bootstrap=…)` →
+  `Landscape.density_se`), surfaced in the explorer's Uncertainty panel and a
+  web-viewer terrain overlay; both carried in the `.mtj` scene format.
 - **Next** — desktop shell, volumetric field rendering for ensembles, SAE
   feature flows across layers, feature field in the web viewer, richer
   scene management (pin/hide runs, saved scenes), diffusion / recording

@@ -106,7 +106,7 @@ def test_reader_ignores_unknown_fields(tmp_path, traj):
 # -------------------------------------------------------------------- scenes
 @pytest.fixture(scope="module")
 def scene_result():
-    cfg = MarbleConfig(model="synthetic", use_cache=False)
+    cfg = MarbleConfig(model="synthetic", use_cache=False, density_bootstrap=8)
     return run_scene(cfg, [PROMPT, "the capital of germany is"])
 
 
@@ -129,6 +129,30 @@ def test_scene_roundtrip(tmp_path, scene_result):
     cmp = scene["comparisons"][0]
     assert cmp["label"] == "B"
     assert cmp["hausdorff"] == pytest.approx(scene_result["comparisons"][0].hausdorff)
+
+
+def test_scene_carries_uncertainty_layers(tmp_path, scene_result):
+    """Bootstrap SE, density and per-run projection quality survive export."""
+    path = tmp_path / "scene.mtj"
+    F.save_scene(scene_result, path)
+    scene = F.load_scene(path)
+    assert np.array_equal(scene["terrain"]["se"], scene_result["landscape"].density_se)
+    assert np.array_equal(scene["terrain"]["density"], scene_result["landscape"].density)
+    for run, q in zip(scene["runs"], scene_result["quality_list"]):
+        assert np.array_equal(run["quality"], q.preservation)
+
+
+def test_scene_without_bootstrap_omits_se(tmp_path):
+    cfg = MarbleConfig(model="synthetic", use_cache=False, density_bootstrap=0)
+    result = run_scene(cfg, [PROMPT])
+    buf = io.BytesIO()
+    F.save_scene(result, buf)
+    buf.seek(0)
+    scene = F.load_scene(buf)
+    assert "se" not in scene["terrain"]
+    # quality is always present; density too
+    assert "density" in scene["terrain"]
+    assert "quality" in scene["runs"][0]
 
 
 def test_scene_contains_no_hidden_states(tmp_path, scene_result):
