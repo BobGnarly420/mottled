@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Generation axis (roadmap M1)
+- `ROADMAP.md`: the end goal (Mottled 1.0 — the honest atlas of latent
+  dynamics) decomposed into milestones M1–M6.
+- `capture.generate_and_capture`: autoregressive decode (greedy or seeded
+  sampling, EOS-aware) followed by a single capture of the completed
+  sequence — exact for causal models, so the decode axis costs no new
+  interchange type. Per-step decode records (token, id, probability,
+  entropy of the actual sampling distribution) travel in
+  `meta["generation"]`; tests pin causal exactness and step fidelity
+  against the model's own stepwise forward passes.
+- The synthetic backend generates with its own logit lens
+  (`models.synthetic.generate_and_capture`), so the decode axis works
+  without torch.
+
 ### Substance: real analysis, not demo
 - `sae.from_sae_lens` / `sae.from_state_dict` load a **real, trained** SAE
   (SAELens' standard SAE is a direct array copy of Mottled's ReLU forward);

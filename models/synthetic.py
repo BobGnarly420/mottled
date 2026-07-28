@@ -131,6 +131,62 @@ def capture(
     )
 
 
+def generate_and_capture(
+    prompt: str,
+    max_new_tokens: int = 8,
+    temperature: float = 0.0,
+    seed: int | None = None,
+    n_layers: int = N_LAYERS,
+    dim: int = DIM,
+    top_k: int = 5,
+    keep_logits: bool = True,
+    capture_components: bool = False,
+    capture_attention: bool = False,
+) -> StateTrajectory:
+    """Decode with the synthetic model's own logit lens, then capture.
+
+    Mirrors ``capture.generate_and_capture``: each step captures the sequence
+    so far and continues from the final layer's final-token distribution —
+    greedy at ``temperature=0``, seeded sampling above it.  The synthetic
+    generator is seeded per full prompt string, so the per-step records
+    describe each prefix's own capture; the returned trajectory is the
+    capture of the completed sequence, carrying the same
+    ``meta["generation"]`` schema as the transformers backend.
+    """
+    tokens = _tokenize(prompt)
+    n_prompt = len(tokens)
+    rng = np.random.default_rng(_seed_for(prompt) if seed is None else seed)
+
+    steps: list[dict] = []
+    for _ in range(max_new_tokens):
+        traj = capture(" ".join(tokens), n_layers=n_layers, dim=dim,
+                       top_k=top_k, keep_logits=True)
+        logits = traj.logits[-1, -1].astype(np.float64)
+        scaled = logits / temperature if temperature > 0 else logits
+        scaled -= scaled.max()
+        p = np.exp(scaled)
+        p /= p.sum()
+        entropy = float(-(p * np.log(np.where(p > 0, p, 1.0))).sum())
+        idx = int(rng.choice(len(p), p=p)) if temperature > 0 else int(np.argmax(logits))
+        steps.append({"token": VOCAB[idx], "id": idx,
+                      "p": float(p[idx]), "entropy": entropy})
+        tokens = tokens + [VOCAB[idx]]
+
+    out = capture(" ".join(tokens), n_layers=n_layers, dim=dim, top_k=top_k,
+                  keep_logits=keep_logits, capture_components=capture_components,
+                  capture_attention=capture_attention)
+    out.meta["prompt"] = prompt
+    out.meta["generation"] = {
+        "prompt_tokens": n_prompt,
+        "new_tokens": len(steps),
+        "mode": "sample" if temperature > 0 else "greedy",
+        "temperature": float(temperature),
+        "seed": seed,
+        "steps": steps,
+    }
+    return out
+
+
 def _entropy_and_topk(logits: np.ndarray, k: int):
     """Shared softmax/entropy/top-k computation (also used by tests)."""
     x = logits.astype(np.float64)

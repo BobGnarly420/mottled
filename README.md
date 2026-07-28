@@ -74,6 +74,7 @@ outputs in the test suite).*
 
 ```python
 from capture import capture                # StateTrajectory
+from capture import generate_and_capture   # decode, then capture prompt+continuation
 from projection import project             # (L, T, 2) coordinates
 from density import compute_density        # Landscape
 from terrain import mesh, drape            # TerrainMesh

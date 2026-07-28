@@ -241,21 +241,126 @@ def capture(
                 capture_attention=capture_attention)
 
 
-def _run(model, prompt, tokenizer=None, top_k=5, device="auto", dtype="float32",
-         keep_logits=True, state_edits: dict | None = None,
-         frozen_blocks: set | None = None, extra_meta: dict | None = None,
-         capture_components: bool = False,
-         capture_attention: bool = False) -> StateTrajectory:
-    """Forward pass (optionally intervened) -> StateTrajectory. Shared by
-    capture() and intervene()."""
+def generate_and_capture(
+    model,
+    prompt: str,
+    max_new_tokens: int = 8,
+    tokenizer=None,
+    temperature: float = 0.0,
+    seed: int | None = None,
+    top_k: int = 5,
+    device: str = "auto",
+    dtype: str = "float32",
+    keep_logits: bool = True,
+    capture_components: bool = False,
+    capture_attention: bool = False,
+) -> StateTrajectory:
+    """Autoregressively decode, then capture the completed sequence.
+
+    Attention is causal, so the hidden states of one forward pass over the
+    finished sequence are *exactly* the states that existed at every decode
+    step — the result is an ordinary StateTrajectory over prompt + generated
+    tokens, not an approximation and not a new interchange type.  The decode
+    itself is recorded in ``meta["generation"]``::
+
+        {"prompt_tokens": P, "new_tokens": N,
+         "mode": "greedy" | "sample", "temperature": t, "seed": s,
+         "steps": [{"token": str, "id": int, "p": float, "entropy": float}]}
+
+    ``p`` and ``entropy`` describe the actual sampling distribution at that
+    step (temperature applied when sampling).  ``temperature=0`` decodes
+    greedily; ``temperature>0`` samples with a seeded generator, so a run is
+    reproducible given (prompt, temperature, seed).  Decoding stops early at
+    the tokenizer's EOS token.  The decode loop runs one full forward pass
+    per step (no KV cache) — transparent and exact, sized for the short
+    continuations Mottled visualizes, not for bulk generation.
+    """
+    if isinstance(model, str) and model == "synthetic":
+        from models import synthetic
+
+        return synthetic.generate_and_capture(
+            prompt, max_new_tokens=max_new_tokens, temperature=temperature,
+            seed=seed, top_k=top_k, keep_logits=keep_logits,
+            capture_components=capture_components,
+            capture_attention=capture_attention)
+
+    _require_torch()
     if isinstance(model, str):
         model, tokenizer = load_model(model, device=device, dtype=dtype)
     if tokenizer is None:
         raise ValueError("a tokenizer is required when passing a model instance")
 
     model_device = next(model.parameters()).device
-    enc = tokenizer(prompt, return_tensors="pt")
-    input_ids = enc["input_ids"].to(model_device)
+    input_ids = tokenizer(prompt, return_tensors="pt")["input_ids"].to(model_device)
+    n_prompt = int(input_ids.shape[1])
+    eos_id = getattr(tokenizer, "eos_token_id", None)
+
+    gen = None
+    if temperature > 0:
+        gen = torch.Generator()
+        gen.manual_seed(0 if seed is None else int(seed))
+
+    steps: list[dict] = []
+    model.eval()
+    with torch.no_grad():
+        for _ in range(max_new_tokens):
+            logits = model(input_ids).logits[0, -1].float().cpu()
+            scaled = logits / temperature if temperature > 0 else logits
+            probs = torch.softmax(scaled, dim=-1)
+            entropy = float(-(probs * probs.clamp_min(1e-12).log()).sum())
+            if temperature > 0:
+                next_id = int(torch.multinomial(probs, 1, generator=gen))
+            else:
+                next_id = int(torch.argmax(logits))
+            steps.append({
+                "token": _clean_token(tokenizer.convert_ids_to_tokens([next_id])[0]),
+                "id": next_id,
+                "p": float(probs[next_id]),
+                "entropy": entropy,
+            })
+            input_ids = torch.cat(
+                [input_ids, torch.tensor([[next_id]], device=model_device)], dim=1)
+            if eos_id is not None and next_id == eos_id:
+                break
+
+    generation = {
+        "prompt_tokens": n_prompt,
+        "new_tokens": len(steps),
+        "mode": "sample" if temperature > 0 else "greedy",
+        "temperature": float(temperature),
+        "seed": seed,
+        "steps": steps,
+    }
+    return _run(model, prompt, tokenizer=tokenizer, top_k=top_k,
+                keep_logits=keep_logits, extra_meta={"generation": generation},
+                capture_components=capture_components,
+                capture_attention=capture_attention,
+                input_ids=input_ids)
+
+
+def _run(model, prompt, tokenizer=None, top_k=5, device="auto", dtype="float32",
+         keep_logits=True, state_edits: dict | None = None,
+         frozen_blocks: set | None = None, extra_meta: dict | None = None,
+         capture_components: bool = False,
+         capture_attention: bool = False,
+         input_ids: "torch.Tensor | None" = None) -> StateTrajectory:
+    """Forward pass (optionally intervened) -> StateTrajectory. Shared by
+    capture(), intervene() and generate_and_capture().
+
+    `input_ids` (1, T) overrides tokenization of `prompt` — used when the
+    exact token ids are already known (a decoded sequence must not be
+    re-tokenized, since detokenize->tokenize can move token boundaries).
+    """
+    if isinstance(model, str):
+        model, tokenizer = load_model(model, device=device, dtype=dtype)
+    if tokenizer is None:
+        raise ValueError("a tokenizer is required when passing a model instance")
+
+    model_device = next(model.parameters()).device
+    if input_ids is None:
+        enc = tokenizer(prompt, return_tensors="pt")
+        input_ids = enc["input_ids"]
+    input_ids = input_ids.to(model_device)
     tokens = [_clean_token(t) for t in tokenizer.convert_ids_to_tokens(input_ids[0].tolist())]
 
     model.eval()
