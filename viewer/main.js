@@ -11,6 +11,7 @@ const PALETTE = ["#4B7CF3", "#00CCA8", "#D4934A", "#E05050", "#38B07A",
 const DASH_CYCLE = [null, [5, 3], [1, 2], [9, 3], [5, 2, 1, 2]];
 const SEG = 8;              // Catmull-Rom subdivisions per layer span
 const OVERLAY_ALPHA = 0.55; // runs after the first
+const GEN_ALPHA = 0.55;     // extra fade on decoded-token ("+") trajectory lines
 const PICK_RADIUS = 14;     // px
 // Terrain potential ramp: void -> surfaces -> precision blue -> light blue.
 // Mirrors ui.py's _TERRAIN_COLORSCALE.
@@ -246,14 +247,19 @@ function buildRun(run, runIdx, colorBase, dashUnit) {
   const alpha = runIdx === 0 ? 1.0 : OVERLAY_ALPHA;
   const dash = DASH_CYCLE[runIdx % DASH_CYCLE.length];
   const patLen = dash ? dash.reduce((a, b) => a + b, 0) * dashUnit : 0;
+  // decode boundary: trajectories j >= genFrom trace generated ("+") tokens
+  // (-1 when the run has no decode record, or trajectories aren't 1:1 tokens)
+  const genFrom = MTJ.generationBoundary(run);
   const trajs = [], lineVerts = [], lineCols = [];
   for (let j = 0; j < N; j++) {
     const rgb = hexRGB(PALETTE[(colorBase + j) % PALETTE.length]);
+    const generated = genFrom >= 0 && j >= genFrom;
+    const lineAlpha = generated ? alpha * GEN_ALPHA : alpha;
     const fine = catmullRom(pts.subarray(j * L * 3, (j + 1) * L * 3), L);
     const nFine = fine.length / 3 - 1;
     const emit = (x0, y0, z0, x1, y1, z1) => {
       lineVerts.push(x0, y0, z0, x1, y1, z1);
-      lineCols.push(rgb[0], rgb[1], rgb[2], alpha, rgb[0], rgb[1], rgb[2], alpha);
+      lineCols.push(rgb[0], rgb[1], rgb[2], lineAlpha, rgb[0], rgb[1], rgb[2], lineAlpha);
     };
     // Dashes are cut by accumulated arc length (world units), so the
     // pattern stays even whether a layer span covers millimetres or
@@ -280,24 +286,32 @@ function buildRun(run, runIdx, colorBase, dashUnit) {
         done += chunk; dpos += chunk;
       }
     }
-    trajs.push({ fine, rgb, label: run.trajectoryLabels[j] != null ? String(run.trajectoryLabels[j]) : `#${j}` });
+    trajs.push({ fine, rgb, generated,
+                 label: (generated ? "+" : "") +
+                        (run.trajectoryLabels[j] != null ? String(run.trajectoryLabels[j]) : `#${j}`) });
   }
   const linePos = new Float32Array(lineVerts), lineCol = new Float32Array(lineCols);
   const lineVao = makeVAO(lineProg, [{ name: "pos", size: 3, data: linePos },
                                      { name: "col", size: 4, data: lineCol }]);
-  // small dot at every stored layer point (the "markers" of the reference)
-  const dotPos = new Float32Array(N * L * 3), dotCol = new Float32Array(N * L * 4), dotSize = new Float32Array(N * L);
+  // small dot at every stored layer point (the "markers" of the reference);
+  // decoded-token trajectories get a rimmed (open) dot — the viewer's version
+  // of the explorer's open-diamond markers for the decode axis
+  const dotSets = { base: { pos: [], col: [], size: [] }, gen: { pos: [], col: [], size: [] } };
   for (let j = 0; j < N; j++) for (let l = 0; l < L; l++) {
-    dotPos.set(pts.subarray((j * L + l) * 3, (j * L + l) * 3 + 3), (j * L + l) * 3);
-    dotCol.set([...trajs[j].rgb, alpha], (j * L + l) * 4);
-    dotSize[j * L + l] = 5;
+    const d = trajs[j].generated ? dotSets.gen : dotSets.base;
+    const o = (j * L + l) * 3;
+    d.pos.push(pts[o], pts[o + 1], pts[o + 2]);
+    d.col.push(trajs[j].rgb[0], trajs[j].rgb[1], trajs[j].rgb[2], alpha);
+    d.size.push(trajs[j].generated ? 6 : 5);
   }
-  const dotVao = makeVAO(pointProg, [{ name: "pos", size: 3, data: dotPos },
-                                     { name: "col", size: 4, data: dotCol },
-                                     { name: "size", size: 1, data: dotSize }]);
+  const mkDots = (d) => d.pos.length ? makeVAO(pointProg, [
+    { name: "pos", size: 3, data: new Float32Array(d.pos) },
+    { name: "col", size: 4, data: new Float32Array(d.col) },
+    { name: "size", size: 1, data: new Float32Array(d.size) }]).vao : null;
   return { run, N, L, trajs, alpha,
            lineVao: lineVao.vao, lineCount: linePos.length / 3,
-           dotVao: dotVao.vao, dotCount: N * L };
+           dotVao: mkDots(dotSets.base), dotCount: dotSets.base.size.length,
+           genDotVao: mkDots(dotSets.gen), genDotCount: dotSets.gen.size.length };
 }
 
 // dynamic point buffer (marbles + hover highlight)
@@ -499,9 +513,16 @@ function frame(now) {
   const rimLoc = gl.getUniformLocation(pointProg, "rim");
   gl.uniform1f(rimLoc, 0);
   state.runs.forEach((rd, i) => {
-    if (!state.visible[i]) return;
+    if (!state.visible[i] || !rd.dotCount) return;
     gl.bindVertexArray(rd.dotVao);
     gl.drawArrays(gl.POINTS, 0, rd.dotCount);
+  });
+  // decoded-token layer dots render rimmed ("open"), like the marbles
+  gl.uniform1f(rimLoc, 1);
+  state.runs.forEach((rd, i) => {
+    if (!state.visible[i] || !rd.genDotCount) return;
+    gl.bindVertexArray(rd.genDotVao);
+    gl.drawArrays(gl.POINTS, 0, rd.genDotCount);
   });
 
   // marbles + hover highlight through the dynamic buffer
@@ -567,8 +588,18 @@ function setPickInfo(pick) {
   const run = state.scene.runs[pick.runIdx];
   const T = run.tokens.length;
   const tok = pick.traj < T ? pick.traj : T - 1; // trajectory j reads out token j (last token if fewer)
+  // decoded tokens read "+"-prefixed, matching the explorer's convention
+  const genTok = MTJ.isGeneratedToken(run.generation, tok);
   let html = `<div class="ip-title">${esc(pick.label)}</div>` +
-             `<div>layer <b>${pick.layer}</b> · token <span class="mono">'${esc(run.tokens[tok] ?? "?")}'</span></div>`;
+             `<div>layer <b>${pick.layer}</b> · token <span class="mono">'${esc((genTok ? "+" : "") + (run.tokens[tok] ?? "?"))}'</span></div>`;
+  const step = genTok ? MTJ.generationStep(run.generation, tok) : null;
+  if (step) {
+    const bits = [];
+    if (typeof step.p === "number") bits.push(`p ${(step.p * 100).toFixed(1)}%`);
+    if (typeof step.entropy === "number") bits.push(`entropy ${step.entropy.toFixed(2)} nats`);
+    if (bits.length)
+      html += `<div><span class="dim">decode step</span> ${bits.join(" · ")}</div>`;
+  }
   if (run.entropy) {
     const [L, Te] = run.entropy.shape;
     if (pick.layer < L && tok < Te)
@@ -647,6 +678,14 @@ function buildUI(scene) {
     label.insertAdjacentHTML("beforeend",
       `<span class="swatch" style="background:${sw}"></span><b>${esc(run.label)}</b>` +
       `<span class="prompt" title="${esc(run.prompt)}">${esc(run.prompt)}</span>`);
+    if (run.generation) {
+      // decode summary: mode (+temperature when sampled), token count, and
+      // the decoded continuation — the "+" trajectories on the scene
+      const cont = MTJ.continuationText(run.generation, meta.backend);
+      label.insertAdjacentHTML("beforeend",
+        `<span class="gen-summary" title="${esc(cont)}">${esc(MTJ.decodeSummary(run.generation))}` +
+        (cont ? ` &#8594; <span class="mono">${esc(cont)}</span>` : "") + `</span>`);
+    }
     ui.runsList.appendChild(label);
   });
 

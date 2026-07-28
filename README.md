@@ -71,6 +71,18 @@ readouts differ from layer 2, and attention patterns and the attn/MLP
 residual decomposition are captured exactly (verified against HF's own
 outputs in the test suite).*
 
+### The decode axis, live
+
+`viewer/samples/gpt2-decode.mtj` is real GPT-2 *generating*: given the
+thesis sentence "The residual stream moves, turns, and settles", eight greedy
+decode steps produce " into the ground.\n\nThe residual" — the model
+completes the sentence and then begins repeating it, an attractor you can
+watch form.
+[View it live](https://bobgnarly420.github.io/mottled/viewer/?file=samples/gpt2-decode.mtj):
+generated tokens render faded with open (rimmed) dots and `+`-prefixed
+labels, the run header shows the decode summary, and hovering a generated
+state shows that step's probability and entropy.
+
 ## Programmatic API
 
 ```python

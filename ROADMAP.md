@@ -29,8 +29,9 @@ Today Mottled has one time axis: layers. Autoregressive decode is the second.
       works dependency-free.
 - [x] Scene + explorer wiring: decode knobs, inline decode header, generated
       trajectories visually distinct, per-step decode inspector.
-- [ ] Web viewer: render the decode axis; `.mtj` carries the generation
-      record (writer side done).
+- [x] Web viewer: decode axis rendered (faded lines, rimmed dots, `+` labels,
+      decode summary, per-step hover); `.mtj` carries the generation record;
+      real GPT-2 decode sample (`gpt2-decode.mtj`).
 - [x] CLI: `mottled export --generate N [--temperature T]`; the capture API
       accepts `generate` / `temperature`.
 

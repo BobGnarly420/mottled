@@ -132,6 +132,10 @@
         quality: r.quality ? resolve(r.quality, `run ${i} quality`) : null,
         attention: r.attention ? resolve(r.attention, `run ${i} attention`) : null,
         topk: r.topk || null,
+        // optional decode record (writers >= scene-v4): prompt/continuation
+        // boundary plus per-step token, id, p, entropy
+        generation: (r.generation && typeof r.generation === "object" &&
+                     !Array.isArray(r.generation)) ? r.generation : null,
       };
     });
     if (!runs.length) throw new Error("corrupt scene: no runs");
@@ -139,5 +143,63 @@
     return { manifest, arrays, meta: manifest.meta || {}, terrain, runs, comparisons: manifest.comparisons || [] };
   }
 
-  return { parse, loadScene, decodeFloat16, SUPPORTED_VERSION };
+  // ------------------------------------------------ generation (decode) helpers
+  // A run's optional `generation` record marks where the prompt ends and the
+  // decoded continuation begins (token indices >= prompt_tokens). Everything
+  // here is null-safe: an absent or malformed record reads as "no generation"
+  // so pre-decode scenes behave exactly as before.
+
+  function isGeneratedToken(generation, index) {
+    return !!generation && typeof generation === "object" &&
+           typeof generation.prompt_tokens === "number" &&
+           typeof index === "number" && index >= generation.prompt_tokens;
+  }
+
+  function generationStep(generation, index) {
+    // per-step decode record ({token, id, p, entropy}) for token `index`
+    if (!isGeneratedToken(generation, index) || !Array.isArray(generation.steps)) return null;
+    const step = generation.steps[index - generation.prompt_tokens];
+    return step && typeof step === "object" ? step : null;
+  }
+
+  function continuationText(generation, backend) {
+    if (!generation || !Array.isArray(generation.steps)) return "";
+    const toks = generation.steps.map((s) => (s && s.token != null ? String(s.token) : ""));
+    // synthetic tokens are bare words; BPE/SentencePiece pieces carry their
+    // own leading spaces
+    return toks.join(backend === "synthetic" ? " " : "");
+  }
+
+  function decodeSummary(generation) {
+    // "greedy · +3 tokens" / "sample · T=0.8 · +5 tokens" (continuation text
+    // is rendered separately so callers can style it as data)
+    if (!generation || typeof generation !== "object") return "";
+    const mode = generation.mode != null ? String(generation.mode) : "?";
+    const n = typeof generation.new_tokens === "number" ? generation.new_tokens
+            : Array.isArray(generation.steps) ? generation.steps.length : 0;
+    let s = mode;
+    if (mode === "sample" && typeof generation.temperature === "number")
+      s += ` · T=${generation.temperature.toFixed(1)}`;
+    return `${s} · +${n} token${n === 1 ? "" : "s"}`;
+  }
+
+  function generationBoundary(run) {
+    // First generated trajectory index for a loaded run, or -1 when the run
+    // has no usable decode record or trajectories aren't 1:1 with tokens
+    // (single-token exports): per-trajectory decode styling only makes sense
+    // when trajectory i reads out token i.
+    if (!run || !run.generation) return -1;
+    const g = run.generation;
+    if (typeof g.prompt_tokens !== "number" || g.prompt_tokens < 0) return -1;
+    const n = run.points && Array.isArray(run.points.shape) ? run.points.shape[0] : -1;
+    const tokens = run.tokens || [], labels = run.trajectoryLabels || [];
+    if (n <= 0 || n !== tokens.length || labels.length !== n) return -1;
+    for (let i = 0; i < n; i++)
+      if (String(labels[i]) !== String(tokens[i])) return -1;
+    return g.prompt_tokens < n ? g.prompt_tokens : -1;
+  }
+
+  return { parse, loadScene, decodeFloat16, SUPPORTED_VERSION,
+           isGeneratedToken, generationStep, continuationText, decodeSummary,
+           generationBoundary };
 });
