@@ -18,6 +18,7 @@ import attractor as attractor_mod
 import cache as cache_mod
 import compare as compare_mod
 import density as density_mod
+import design_tokens as tokens
 import metrics as metrics_mod
 import sae as sae_mod
 import statefile as statefile_mod
@@ -274,15 +275,13 @@ def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
 # Renderer — styled to the Incision design language: dark navy void, one
 # precision-blue accent, semantic data colors, mono for data values.
 # --------------------------------------------------------------------------
-_MARBLE_COLORS = ["#4B7CF3", "#00CCA8", "#D4934A", "#E05050", "#38B07A",
-                  "#8FA7F7", "#5CE0C6", "#E6B884", "#F08A8A", "#7FD0AC"]
-
-# Terrain potential ramp: void -> surfaces -> precision blue -> light blue.
-_TERRAIN_COLORSCALE = [[0.0, "#04060E"], [0.22, "#0C1020"], [0.45, "#1C2A55"],
-                       [0.68, "#2F55B8"], [0.86, "#4B7CF3"], [1.0, "#C8D4FB"]]
-
-_FONT_SANS = "DM Sans, -apple-system, Segoe UI, Helvetica, Arial, sans-serif"
-_FONT_MONO = "JetBrains Mono, SF Mono, Menlo, Consolas, monospace"
+# Design tokens come from the single source of truth (design_tokens.py); the
+# Streamlit config and the web viewer mirror the same values, guarded by
+# tests/test_tokens.py.
+_MARBLE_COLORS = tokens.MARBLE_COLORS
+_TERRAIN_COLORSCALE = tokens.TERRAIN_COLORSCALE
+_FONT_SANS = tokens.FONT_SANS
+_FONT_MONO = tokens.FONT_MONO
 
 
 def _hover_text(traj: StateTrajectory, t: trajectory_mod.Trajectory) -> list[str]:

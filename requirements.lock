@@ -1,0 +1,25 @@
+# requirements.lock — direct dependencies pinned to the exact versions the
+# test suite runs against (Python 3.11), for reproducible dev/CI installs.
+# Transitive versions resolve normally; this pins the top-level surface the
+# code is verified on. Regenerate after bumping any dependency.
+#
+# torch here is the CPU wheel; install it with its index:
+#   pip install -r requirements.lock \
+#       --extra-index-url https://download.pytorch.org/whl/cpu
+#
+# For a plain install prefer `pip install mottled[models]` (see pyproject.toml
+# for supported version floors). The synthetic backend needs only the core five.
+
+# --- core (always required) ---
+numpy==2.4.6
+scipy==1.17.1
+scikit-learn==1.9.0
+plotly==6.9.0
+streamlit==1.60.0
+
+# --- models extra (real transformer captures) ---
+torch==2.13.0+cpu
+transformers==5.14.1
+
+# --- dev ---
+pytest==9.1.1

@@ -1,5 +1,12 @@
 """Bounding-volume hierarchy over trajectory segments.
 
+⚠️ EXPERIMENTAL / not yet wired into a live surface. This is the spatial index
+the planned interactive fly-through canvas will need; it is fully tested in
+isolation (`tests/test_bvh.py`) but no shipping surface calls it yet — the web
+viewer does its own GPU-side picking. It is kept (rather than deleted) because
+the interaction layer is on the near roadmap and the queries below are the
+contract that layer will build on. Treat its API as unstable until then.
+
 The fly-through canvas renders trajectories as polylines (curves), not voxels:
 in any 3-D projection the states occupy a vanishing fraction of the volume, so
 a spatial *acceleration structure over the curve segments* — not a grid over

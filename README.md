@@ -1,6 +1,7 @@
 # 🔮 Mottled
 
 [![CI](https://github.com/BobGnarly420/mottled/actions/workflows/ci.yml/badge.svg)](https://github.com/BobGnarly420/mottled/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 **Interactive latent trajectory explorer for transformer forward passes.**
 
@@ -147,7 +148,7 @@ density, terrain, metrics, comparison, every viewer) works unchanged.
 | `cache.py` | Disk cache keyed by prompt + config hash |
 | `config.py` | One dataclass for every pipeline knob |
 | `ui.py` | Pure pipeline + pure Plotly renderer + Streamlit shell |
-| `bvh.py` | Spatial index over trajectory segments (ray-pick / nearest / box / frustum) for the fly-through canvas |
+| `bvh.py` | ⚠️ *experimental* — spatial index (ray-pick / nearest / box / frustum) for the not-yet-built fly-through canvas; tested in isolation, not yet wired into a live surface |
 | `intervene.py` | Causal interventions: perturb / set / noise / freeze a state via a resumable forward pass → counterfactual trajectory |
 | `compare.py` | Trajectory comparison: Hausdorff, dynamic time warping, shared-prefix alignment, layerwise divergence profiles |
 | `sae.py` | Sparse-autoencoder features: apply (never train) an SAE to every captured state; demo dictionary + npz interchange |
@@ -449,9 +450,10 @@ Every surface — the Plotly renderer, the Streamlit shell, the web viewer —
 shares one design language (dark navy void `#080B18`, a single
 precision-blue accent `#4B7CF3`, semantic data colors, 1px borders,
 near-sharp corners, monospace for data values, no emoji in product UI).
-The tokens live in three mirrored places: `ui.py` (`_MARBLE_COLORS`,
-`_TERRAIN_COLORSCALE`), `.streamlit/config.toml`, and `viewer/style.css` —
-change a value in all three to retheme.
+The tokens have **one source of truth** — `design_tokens.py`. `ui.py` imports
+them; `.streamlit/config.toml` and `viewer/style.css` mirror the same values,
+and `tests/test_tokens.py` fails if any mirror drifts — so retheming is a
+one-line edit guarded by CI, not a three-file hunt.
 
 The design language is also expected to *explain*, not just style: the
 scene carries a measured callout at the density peak, captions state what
@@ -549,3 +551,9 @@ research tool.
   feature flows across layers, feature field in the web viewer, richer
   scene management (pin/hide runs, saved scenes), diffusion / recording
   producers.
+
+## License
+
+[Apache License 2.0](LICENSE) — permissive, with an explicit patent grant, to
+match the mechanistic-interpretability ecosystem Mottled interoperates with
+(TransformerLens, SAELens, nnsight). See [`NOTICE`](NOTICE).
