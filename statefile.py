@@ -215,6 +215,10 @@ def save_scene(result: dict, path_or_fh) -> None:
         if traj.topk is not None:
             run["topk"] = [[[[tok, float(p)] for tok, p in state] for state in layer]
                            for layer in traj.topk]
+        if isinstance(traj.meta.get("generation"), dict):
+            # the decode record (prompt/continuation boundary + per-step
+            # token, id, p, entropy) — additive, so old readers ignore it
+            run["generation"] = _jsonable(traj.meta["generation"])
         runs.append(run)
 
     manifest: dict[str, Any] = {

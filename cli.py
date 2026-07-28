@@ -33,6 +33,11 @@ def main(argv: list[str] | None = None) -> int:
     p_export.add_argument("prompts", nargs="+", help="one or more prompts")
     p_export.add_argument("-o", "--output", default="scene.mtj")
     p_export.add_argument("--model", default="synthetic")
+    p_export.add_argument("--generate", type=int, default=0, metavar="N",
+                          help="decode N tokens per prompt before capturing "
+                               "(the decode axis; default 0 = prompt only)")
+    p_export.add_argument("--temperature", type=float, default=0.0,
+                          help="decode temperature (0 = greedy, seeded above 0)")
 
     args = parser.parse_args(argv)
 
@@ -47,7 +52,9 @@ def main(argv: list[str] | None = None) -> int:
         from config import MarbleConfig
         from ui import run_scene
 
-        cfg = MarbleConfig(model=args.model, use_cache=False)
+        cfg = MarbleConfig(model=args.model, use_cache=False,
+                           generate_tokens=args.generate,
+                           generate_temperature=args.temperature)
         statefile.save_scene(run_scene(cfg, args.prompts), args.output)
         print(f"wrote {args.output}")
         return 0

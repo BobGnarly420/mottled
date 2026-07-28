@@ -9,7 +9,9 @@ JSON API the viewer discovers at runtime:
 
     GET  /api/health          -> {"ok": true, "model": "..."}
     POST /api/scene           -> .mtj scene bytes
-         body: {"prompts": ["...", ...]}
+         body: {"prompts": ["...", ...],
+                "generate": 0..32,        # optional: decode N tokens first
+                "temperature": 0.0..2.0}  # optional: 0 = greedy
 
 The model is chosen server-side at startup (never by the request), captures
 run one at a time behind a lock, and scene generation reuses the exact
@@ -35,6 +37,7 @@ from ui import run_scene
 ROOT = Path(__file__).resolve().parent
 _MAX_PROMPTS = 6
 _MAX_PROMPT_CHARS = 500
+_MAX_GENERATE = 32
 
 
 class _Backend:
@@ -49,14 +52,23 @@ class _Backend:
 
             self._model, self._tokenizer = load_model(model)
 
-    def scene_bytes(self, prompts: list[str]) -> bytes:
+    def scene_bytes(self, prompts: list[str], generate: int = 0,
+                    temperature: float = 0.0) -> bytes:
         if not prompts:
             raise ValueError("no prompts given")
         if len(prompts) > _MAX_PROMPTS:
             raise ValueError(f"too many prompts (max {_MAX_PROMPTS})")
         if any(len(p) > _MAX_PROMPT_CHARS for p in prompts):
             raise ValueError(f"prompt too long (max {_MAX_PROMPT_CHARS} chars)")
-        cfg = MarbleConfig(model=self.model_name, use_cache=False)
+        generate = int(generate)
+        if not 0 <= generate <= _MAX_GENERATE:
+            raise ValueError(f"generate out of range (0..{_MAX_GENERATE})")
+        temperature = float(temperature)
+        if not 0.0 <= temperature <= 2.0:
+            raise ValueError("temperature out of range (0..2)")
+        cfg = MarbleConfig(model=self.model_name, use_cache=False,
+                           generate_tokens=generate,
+                           generate_temperature=temperature)
         with self._lock:
             result = run_scene(cfg, prompts, model=self._model, tokenizer=self._tokenizer)
         buf = io.BytesIO()
@@ -79,8 +91,10 @@ class Handler(SimpleHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length) or b"{}")
             prompts = [str(p).strip() for p in body.get("prompts", []) if str(p).strip()]
-            data = self.backend.scene_bytes(prompts)
-        except (ValueError, KeyError, json.JSONDecodeError) as exc:
+            data = self.backend.scene_bytes(
+                prompts, generate=body.get("generate", 0),
+                temperature=body.get("temperature", 0.0))
+        except (TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
             return self._json(400, {"error": str(exc)})
         self.send_response(200)
         self.send_header("Content-Type", "application/octet-stream")

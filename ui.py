@@ -25,7 +25,7 @@ import statefile as statefile_mod
 import projection as projection_mod
 import terrain as terrain_mod
 import trajectory as trajectory_mod
-from capture import capture
+from capture import capture, generate_and_capture
 from config import (
     DEFAULT_PROMPT,
     DENSITY_CHOICES,
@@ -48,13 +48,14 @@ def run_pipeline(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) -> 
     omitted, `cfg.model` is loaded by name ("synthetic" needs no loading).
     """
     disk = cache_mod.DiskCache(cfg.cache_dir) if cfg.use_cache else None
-    key = cache_mod.make_key("pipeline-v5", prompt, cfg.model, cfg.projection,
+    key = cache_mod.make_key("pipeline-v6", prompt, cfg.model, cfg.projection,
                              cfg.density, cfg.top_k, cfg.n_components, cfg.seed,
                              cfg.grid_size, cfg.smooth_sigma, cfg.height_scale,
                              cfg.invert_terrain, cfg.trajectory_mode,
                              cfg.trajectory_token, cfg.frames_per_layer,
                              cfg.capture_components, cfg.capture_attention,
-                             cfg.density_bootstrap)
+                             cfg.density_bootstrap, cfg.generate_tokens,
+                             cfg.generate_temperature)
     if disk is not None and (hit := disk.get(key)) is not None:
         return hit
 
@@ -98,10 +99,13 @@ def run_pipeline(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) -> 
 
 
 def _capture_with(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) -> StateTrajectory:
-    """One validated capture under the config's capture knobs."""
-    traj = capture(
-        model if model is not None else cfg.model,
-        prompt,
+    """One validated capture under the config's capture knobs.
+
+    With `cfg.generate_tokens > 0` the capture decodes that many tokens
+    first (greedy, or seeded sampling at `cfg.generate_temperature`) and
+    returns the trajectory of prompt + continuation, decode record in
+    `meta["generation"]`."""
+    kwargs = dict(
         tokenizer=tokenizer,
         top_k=cfg.top_k,
         device=cfg.device,
@@ -110,6 +114,14 @@ def _capture_with(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) ->
         capture_components=cfg.capture_components,
         capture_attention=cfg.capture_attention,
     )
+    target = model if model is not None else cfg.model
+    if cfg.generate_tokens > 0:
+        traj = generate_and_capture(target, prompt,
+                                    max_new_tokens=cfg.generate_tokens,
+                                    temperature=cfg.generate_temperature,
+                                    seed=cfg.seed, **kwargs)
+    else:
+        traj = capture(target, prompt, **kwargs)
     traj.validate()
     return traj
 
@@ -192,13 +204,14 @@ def run_scene(cfg: MarbleConfig, prompts: list[str], model=None, tokenizer=None)
     if not prompts:
         raise ValueError("run_scene needs at least one prompt")
     disk = cache_mod.DiskCache(cfg.cache_dir) if cfg.use_cache else None
-    key = cache_mod.make_key("scene-v3", prompts, cfg.model, cfg.projection,
+    key = cache_mod.make_key("scene-v4", prompts, cfg.model, cfg.projection,
                              cfg.density, cfg.top_k, cfg.n_components, cfg.seed,
                              cfg.grid_size, cfg.smooth_sigma, cfg.height_scale,
                              cfg.invert_terrain, cfg.trajectory_mode,
                              cfg.trajectory_token, cfg.frames_per_layer,
                              cfg.capture_components, cfg.capture_attention,
-                             cfg.density_bootstrap)
+                             cfg.density_bootstrap, cfg.generate_tokens,
+                             cfg.generate_temperature)
     if disk is not None and (hit := disk.get(key)) is not None:
         return hit
 
@@ -268,6 +281,16 @@ _MARBLE_COLORS = tokens.MARBLE_COLORS
 _TERRAIN_COLORSCALE = tokens.TERRAIN_COLORSCALE
 _FONT_SANS = tokens.FONT_SANS
 _FONT_MONO = tokens.FONT_MONO
+
+
+def _continuation_text(meta: dict) -> str:
+    """Human-readable decoded continuation from meta["generation"]."""
+    steps = meta.get("generation", {}).get("steps", [])
+    toks = [str(s.get("token", "")) for s in steps]
+    # synthetic tokens are bare words; BPE/SentencePiece pieces carry their
+    # own leading spaces after _clean_token
+    joined = " ".join(toks) if meta.get("backend") == "synthetic" else "".join(toks)
+    return joined.strip()
 
 
 def _hover_text(traj: StateTrajectory, t: trajectory_mod.Trajectory) -> list[str]:
@@ -383,13 +406,21 @@ def render(
         vmax = float(max(max(v.max() for v in overlay), vmin + 1e-6))
     i = 0
     for run_idx, (src, trajs, prefix, dash) in enumerate(runs):
+        gen = src.meta.get("generation") if isinstance(src.meta, dict) else None
+        boundary = gen.get("prompt_tokens") if isinstance(gen, dict) else None
         for j, t in enumerate(trajs):
             color = _MARBLE_COLORS[i % len(_MARBLE_COLORS)]
             i += 1
             line = {"color": color, "width": 5}
             if dash:
                 line["dash"] = dash
+            # generated tokens (the decode axis) read differently from the
+            # prompt: "+"-prefixed name, open-diamond markers
+            generated = (boundary is not None and isinstance(t.token, int)
+                         and t.token >= boundary)
             marker = {"size": 3, "color": color}
+            if generated:
+                marker = {"size": 4, "color": color, "symbol": "diamond-open"}
             if overlay is not None and run_idx == 0 and j < len(overlay):
                 marker = {"size": 5, "color": overlay[j], "colorscale": "Turbo",
                           "cmin": vmin, "cmax": vmax, "showscale": j == 0,
@@ -401,7 +432,7 @@ def render(
                 mode="lines+markers",
                 line=line,
                 marker=marker,
-                name=prefix + str(t.label or t.token),
+                name=prefix + ("+" if generated else "") + str(t.label or t.token),
                 text=_hover_text(src, t),
                 hoverinfo="text",
             ))
@@ -729,6 +760,17 @@ def main() -> None:
         proj_name = st.selectbox("Projection", PROJECTION_CHOICES, key="projection")
         dens_name = st.selectbox("Density estimator", DENSITY_CHOICES, key="density")
         top_k = st.slider("Top-k", 1, 10, 5, key="top_k")
+        gen_tokens = st.slider("Generate tokens", 0, 32, 0, key="generate_tokens",
+                               help="Decode this many tokens before capturing: the "
+                                    "scene then covers prompt + continuation — the "
+                                    "decode axis. Exact: the captured states are "
+                                    "the ones that existed at each decode step.")
+        gen_temp = 0.0
+        if gen_tokens:
+            gen_temp = st.slider("Decode temperature", 0.0, 2.0, 0.0, 0.1,
+                                 key="generate_temperature",
+                                 help="0 decodes greedily; above 0 samples from the "
+                                      "tempered distribution (seeded, reproducible).")
         mode = st.selectbox("Trajectory", TRAJECTORY_MODES, key="trajectory_mode")
         invert = st.checkbox("Dense regions as valleys", value=False, key="invert")
         sae_on = st.checkbox("SAE feature overlay", value=False, key="sae_overlay",
@@ -755,7 +797,8 @@ def main() -> None:
 
     if run and prompt.strip():
         cfg = MarbleConfig(model=model_name, projection=proj_name, density=dens_name,
-                           top_k=top_k, trajectory_mode=mode, invert_terrain=invert)
+                           top_k=top_k, trajectory_mode=mode, invert_terrain=invert,
+                           generate_tokens=gen_tokens, generate_temperature=gen_temp)
         model = tokenizer = None
         if model_name != "synthetic":
             model, tokenizer = load_model_cached(model_name)
@@ -881,6 +924,14 @@ def main() -> None:
                 f"**{quality.preservation.mean():.2f}** (k={quality.k}). "
                 f"**{low:.0%}** of states are low-fidelity — flagged ✕ on the scene "
                 f"and drawn where the projection *could* put them, not where they truly are.")
+        gen0 = traj.meta.get("generation")
+        if isinstance(gen0, dict):
+            st.markdown(
+                f"**Decode** — {gen0['mode']}"
+                + (f" · T={gen0['temperature']:.1f}" if gen0["mode"] == "sample" else "")
+                + f" · +{gen0['new_tokens']} tokens after the {gen0['prompt_tokens']}-token "
+                  f"prompt: `{_continuation_text(traj.meta)}` — generated tokens are "
+                  f"drawn with open-diamond markers and a `+` name prefix.")
         fig = render(traj, result["mesh"], result["trajectories"], result["fine_paths"],
                      current_layer=layer, frames_per_layer=cfg.frames_per_layer,
                      frame_ms=cfg.frame_ms,
@@ -1016,6 +1067,19 @@ def main() -> None:
             summary = metrics_mod.summarize(traj, result["coords"], token=token)
             for name, value in summary.items():
                 st.write(f"{name.replace('_', ' ')}: **{value:.3f}**")
+
+        gen_rec = traj.meta.get("generation")
+        if isinstance(gen_rec, dict) and gen_rec.get("steps"):
+            with st.expander("Decode steps", expanded=False):
+                st.caption("The sampling distribution at each decode step — "
+                           "p is the chosen token's probability, entropy is "
+                           "the distribution's spread (nats).")
+                st.dataframe(
+                    [{"step": s_i + 1, "token": s["token"],
+                      "p": round(float(s["p"]), 4),
+                      "entropy": round(float(s["entropy"]), 3)}
+                     for s_i, s in enumerate(gen_rec["steps"])],
+                    use_container_width=True, hide_index=True)
 
         with st.expander("Uncertainty", expanded=False):
             q = result.get("quality")
