@@ -202,3 +202,89 @@ def test_perturbation_flips_prediction_gpt2():
     assert branch_top != base_top                # the prediction changed
     dv = divergence(base, branch, token=-1)
     assert dv.readout_changed is not None        # and we can locate where
+
+
+# ------------------------------------------------ data-derived steering (1b)
+def test_direction_from_contrast_is_normalized_diff_of_means():
+    """Backend-agnostic: a diff-of-means direction from synthetic runs."""
+    from intervene import direction_from_contrast
+    from models import synthetic
+
+    a = synthetic.capture("the capital of france is")
+    b = synthetic.capture("the capital of germany is")
+
+    d = direction_from_contrast(a, b, layer=-1, token=-1)
+    assert d.shape == (a.dim,)
+    assert np.isclose(np.linalg.norm(d), 1.0, atol=1e-5)  # unit direction
+
+    manual = a.hidden[-1, -1] - b.hidden[-1, -1]
+    manual = manual / np.linalg.norm(manual)
+    assert np.allclose(d, manual, atol=1e-4)
+
+    # groups average, so symmetric groups cancel to (nearly) nothing
+    sym = direction_from_contrast([a, b], [b, a], layer=-1, token=-1)
+    assert np.allclose(sym, 0.0, atol=1e-5)
+
+    # un-normalized keeps magnitude (the caller may want the raw contrast)
+    raw = direction_from_contrast(a, b, layer=-1, token=-1, normalize=False)
+    assert np.allclose(raw, a.hidden[-1, -1] - b.hidden[-1, -1], atol=1e-4)
+
+
+# ------------------------------------------------------ faithfulness (1c)
+def test_faithfulness_prefers_the_targeted_direction():
+    """A steer along a token's own (tied) embedding direction moves the logit
+    lens toward that token far more than a random delta of equal norm — the
+    effect is the *direction*, not merely the perturbation's size."""
+    from intervene import direction_from_token, faithfulness
+
+    torch.manual_seed(0)
+    cfg = transformers.LlamaConfig(
+        vocab_size=VOCAB_SIZE, hidden_size=32, intermediate_size=64,
+        num_hidden_layers=4, num_attention_heads=4, num_key_value_heads=2,
+        max_position_embeddings=64, tie_word_embeddings=True,
+    )
+    model = transformers.LlamaForCausalLM(cfg).eval()
+    tok = DummyTokenizer()
+    base = capture(model, PROMPT, tokenizer=tok, top_k=3)
+
+    target = 7
+    direction = direction_from_token(base, target)      # unit embedding axis
+    assert np.isclose(np.linalg.norm(direction), 1.0, atol=1e-5)
+
+    fth = faithfulness(model, PROMPT, layer=base.n_layers - 1,
+                       direction=direction, target=target, scale=50.0,
+                       tokenizer=tok, baseline=base)
+
+    assert fth.steer_shift > fth.control_shift   # direction-specific gain
+    assert fth.effect > 0
+    assert fth.steer_hits_target                 # steering made target top-1
+    assert fth.target == target
+
+
+def test_run_intervention_attaches_faithfulness():
+    """The UI pipeline surfaces a faithfulness readout for a directional steer."""
+    from config import MarbleConfig
+    from intervene import Perturb, direction_from_token
+    from ui import run_intervention
+
+    torch.manual_seed(0)
+    mcfg = transformers.LlamaConfig(
+        vocab_size=VOCAB_SIZE, hidden_size=32, intermediate_size=64,
+        num_hidden_layers=4, num_attention_heads=4, num_key_value_heads=2,
+        max_position_embeddings=64, tie_word_embeddings=True,
+    )
+    model = transformers.LlamaForCausalLM(mcfg).eval()
+    tok = DummyTokenizer()
+    base = capture(model, PROMPT, tokenizer=tok, top_k=3)
+    target = 7
+    direction = direction_from_token(base, target)
+
+    cfg = MarbleConfig(model="tiny", use_cache=False,
+                       capture_components=False, capture_attention=False)
+    edits = [Perturb(base.n_layers - 1, 50.0 * direction, token=-1)]
+    result = run_intervention(cfg, PROMPT, edits, model, tok, target_id=target)
+
+    assert "divergence" in result
+    fth = result["faithfulness"]
+    assert fth.target == target
+    assert fth.effect > 0                         # direction beat the control

@@ -217,7 +217,7 @@ def run_compare(cfg: MarbleConfig, prompt_a: str, prompt_b: str,
 
 
 def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
-                     model, tokenizer) -> dict:
+                     model, tokenizer, target_id: int | None = None) -> dict:
     """Interactive patching: baseline capture vs perturb-and-replay branch.
 
     Runs the same prompt twice — once untouched, once under `interventions`
@@ -225,8 +225,14 @@ def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
     runs as a scene: shared projection, one terrain, comparison, plus an
     `intervene.divergence` readout.  Requires a torch model; results are not
     cached (the edit space is unbounded).
+
+    When `target_id` is given for a single directional steer, also attaches a
+    `Faithfulness` readout: the run measures a norm-matched *random* control so
+    the UI can say how much of the effect is the steering direction rather than
+    the perturbation's raw size.
     """
-    from intervene import divergence, intervene
+    from intervene import (Faithfulness, Perturb, divergence, intervene,
+                           target_logit_shift)
 
     baseline = _capture_with(cfg, prompt, model=model, tokenizer=tokenizer)
     branch = intervene(model, prompt, interventions, tokenizer=tokenizer,
@@ -238,6 +244,29 @@ def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
               "prompt_b": "patched: " + ", ".join(iv.describe() for iv in interventions),
               **_assemble_scene(cfg, [baseline, branch])}
     result["divergence"] = divergence(baseline, branch)
+
+    if (target_id is not None and baseline.logits is not None
+            and len(interventions) == 1 and interventions[0].kind == "perturb"
+            and interventions[0].vector is not None):
+        iv = interventions[0]
+        delta = np.asarray(iv.vector, dtype=np.float32)
+        rng = np.random.default_rng(cfg.seed)
+        r = rng.normal(size=delta.shape).astype(np.float32)
+        r *= float(np.linalg.norm(delta)) / max(float(np.linalg.norm(r)), 1e-12)
+        control = intervene(model, prompt, [Perturb(iv.layer, r, token=iv.token)],
+                            tokenizer=tokenizer, top_k=cfg.top_k, device=cfg.device,
+                            dtype=cfg.dtype, keep_logits=cfg.keep_logits)
+        tok = iv.token if iv.token is not None else -1
+        t = int(tok) % baseline.n_tokens
+        steer_shift = target_logit_shift(baseline, branch, target_id, tok)
+        control_shift = target_logit_shift(baseline, control, target_id, tok)
+        hits = bool(int(np.asarray(branch.logits[-1, t]).argmax()) == int(target_id))
+        tt = (baseline.vocab[target_id]
+              if baseline.vocab and 0 <= target_id < len(baseline.vocab) else None)
+        result["faithfulness"] = Faithfulness(
+            target=int(target_id), target_token=tt, steer_shift=steer_shift,
+            control_shift=control_shift, effect=steer_shift - control_shift,
+            steer_hits_target=hits, scale=float(np.linalg.norm(delta)), token=t)
     return result
 
 
@@ -784,15 +813,19 @@ def main() -> None:
                     iv_target = st.text_input("Target token", "Berlin", key="iv_target")
                 iv_scale = st.slider("Strength", 0.0, 100.0, 30.0, key="iv_scale")
                 if st.button("Run intervention", key="iv_run"):
-                    from intervene import FreezeLayer, InjectNoise, Perturb
+                    from intervene import (FreezeLayer, InjectNoise, Perturb,
+                                           direction_from_token)
 
                     model, tokenizer = load_model_cached(cfg.model)
+                    target_id = None
                     if iv_kind == "push toward token":
                         ids = tokenizer(iv_target, add_special_tokens=False)["input_ids"]
                         if not ids:
                             st.warning("target token is empty")
                             st.stop()
-                        direction = traj.embedding_matrix[ids[0]]
+                        target_id = int(ids[0])
+                        # data-derived: the target token's own embedding axis
+                        direction = direction_from_token(traj, target_id)
                         edits = [Perturb(iv_layer, iv_scale * direction, token=-1)]
                     elif iv_kind == "inject noise":
                         edits = [InjectNoise(iv_layer, iv_scale, token=-1)]
@@ -800,7 +833,8 @@ def main() -> None:
                         edits = [FreezeLayer(min(iv_layer, traj.n_layers - 2))]
                     with st.spinner("Replaying under intervention…"):
                         st.session_state["result"] = run_intervention(
-                            cfg, result["prompt"], edits, model, tokenizer)
+                            cfg, result["prompt"], edits, model, tokenizer,
+                            target_id=target_id)
                     st.rerun()
 
     @st.cache_resource(show_spinner=False)
@@ -993,6 +1027,17 @@ def main() -> None:
                 else:
                     st.write("top-1 prediction unchanged")
                 st.line_chart(div.profile)
+                if (fth := result.get("faithfulness")) is not None:
+                    tt = fth.target_token or f"id {fth.target}"
+                    hit = "yes" if fth.steer_hits_target else "no"
+                    st.write(f"faithfulness toward `{tt}` — steer shifts its logit "
+                             f"**{fth.steer_shift:+.2f}**, a norm-matched random "
+                             f"delta **{fth.control_shift:+.2f}** "
+                             f"(direction-specific effect **{fth.effect:+.2f}**; "
+                             f"top-1 now the target: {hit})")
+                    st.caption("A large *effect* means the steering direction, not "
+                               "just the perturbation's size, moved the model. This "
+                               "is a measured counterfactual, not an isolated circuit.")
 
         if result.get("comparisons") and len(result["comparisons"]) > 1:
             with st.expander("Scene comparisons (vs A)", expanded=True):

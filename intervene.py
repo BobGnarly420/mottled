@@ -199,3 +199,158 @@ def divergence(baseline: StateTrajectory, branch: StateTrajectory,
 
     return Divergence(profile=profile.astype(np.float32), onset=onset,
                       readout_changed=readout_changed, token=t)
+
+
+# --------------------------------------------------------------------------
+# Steering directions — deltas from data, not hand-picked numbers
+# --------------------------------------------------------------------------
+# A `Perturb` takes a raw delta vector; where that vector comes from is what
+# separates a principled steer from a magic number. These helpers derive the
+# direction from the model's own representations: a token's embedding
+# direction, or a diff-of-means contrast between two sets of runs. The caller
+# still chooses the magnitude (how far to push), but the *direction* is
+# measured, so the intervention is reproducible and interpretable.
+
+def _as_trajectories(x) -> list[StateTrajectory]:
+    if isinstance(x, StateTrajectory):
+        return [x]
+    xs = list(x)
+    if not xs:
+        raise ValueError("expected at least one StateTrajectory")
+    return xs
+
+
+def direction_from_token(traj: StateTrajectory, token_id: int,
+                         normalize: bool = True) -> np.ndarray:
+    """Unit direction of a vocabulary token's embedding (the readout axis).
+
+    For a model with tied embeddings (GPT-2) this row is also the unembedding
+    direction, so pushing a late state along it moves the logit lens toward
+    that token — the mechanism behind the README's " Berlin" example, here as
+    a named, reusable helper instead of an inline expression.
+    """
+    if traj.embedding_matrix is None:
+        raise ValueError("trajectory has no embedding_matrix; capture with a "
+                         "torch model (keep_logits=True) to get one")
+    d = np.asarray(traj.embedding_matrix[int(token_id)], dtype=np.float32)
+    if normalize:
+        d = d / max(float(np.linalg.norm(d)), 1e-12)
+    return d
+
+
+def direction_from_contrast(pos, neg, layer: int, token: int = -1,
+                            normalize: bool = True) -> np.ndarray:
+    """Diff-of-means steering direction between two groups of runs.
+
+    `pos` and `neg` are each a StateTrajectory or a list of them (e.g. runs
+    that do vs. don't exhibit a behavior). The direction is the difference of
+    the groups' mean hidden state at `(layer, token)` — the classic
+    activation-steering construction. Backend-agnostic: it reads only
+    `hidden`, so it works on synthetic runs too.
+    """
+    pos_t, neg_t = _as_trajectories(pos), _as_trajectories(neg)
+
+    def _mean(group: list[StateTrajectory]) -> np.ndarray:
+        vecs = []
+        for t in group:
+            tok = int(token) % t.n_tokens
+            vecs.append(np.asarray(t.hidden[int(layer), tok], dtype=np.float64))
+        return np.mean(vecs, axis=0)
+
+    d = (_mean(pos_t) - _mean(neg_t)).astype(np.float32)
+    if normalize:
+        d = d / max(float(np.linalg.norm(d)), 1e-12)
+    return d
+
+
+# --------------------------------------------------------------------------
+# Faithfulness — how much of a steer's effect is the *direction*, not the norm
+# --------------------------------------------------------------------------
+@dataclass
+class Faithfulness:
+    """Effect-size of a targeted steer against a norm-matched random control.
+
+    A perturbation of any direction, if large enough, disturbs the readout;
+    the question that matters is whether *this* direction specifically drives
+    the intended `target`. We answer it by comparing the steer to a random
+    delta of identical norm:
+
+        steer_shift   — logit-lens shift toward `target` under the steer
+        control_shift — the same shift under a random delta of equal norm
+        effect        — steer_shift - control_shift (direction-specific gain)
+
+    A large positive `effect` means the direction, not merely the magnitude,
+    is what moved the model. `steer_hits_target` reports whether the steered
+    branch's final top-1 actually became the target. This is a measurement,
+    not a mechanistic proof — it quantifies a counterfactual, it does not
+    isolate a circuit.
+    """
+
+    target: int
+    target_token: str | None
+    steer_shift: float
+    control_shift: float
+    effect: float
+    steer_hits_target: bool
+    scale: float
+    token: int
+
+
+def target_logit_shift(baseline: StateTrajectory, branch: StateTrajectory,
+                       target: int, token: int = -1) -> float:
+    """Final-layer logit-lens shift toward `target` from baseline to branch."""
+    if baseline.logits is None or branch.logits is None:
+        raise ValueError("both trajectories need logits (keep_logits=True)")
+    t = int(token) % baseline.n_tokens
+    base = float(baseline.logits[-1, t, int(target)])
+    new = float(branch.logits[-1, t, int(target)])
+    return new - base
+
+
+def faithfulness(model, prompt: str, layer: int, direction: np.ndarray,
+                 target: int, *, token: int = -1, scale: float = 1.0,
+                 tokenizer=None, baseline: StateTrajectory | None = None,
+                 seed: int = 0, device: str = "auto", dtype: str = "float32",
+                 top_k: int = 5) -> Faithfulness:
+    """Score a targeted steer against a norm-matched random control.
+
+    Normalizes `direction`, applies `scale * direction` as a `Perturb` at
+    `(layer, token)`, then applies a random delta of the *same* L2 norm, and
+    compares how far each moves the logit lens toward `target`. Requires a
+    torch model. `baseline` is captured if not supplied.
+    """
+    from capture import capture
+
+    direction = np.asarray(direction, dtype=np.float32)
+    unit = direction / max(float(np.linalg.norm(direction)), 1e-12)
+    delta = (scale * unit).astype(np.float32)
+
+    if baseline is None:
+        baseline = capture(model, prompt, tokenizer=tokenizer, top_k=top_k,
+                           device=device, dtype=dtype, keep_logits=True)
+
+    branch = intervene(model, prompt, [Perturb(layer, delta, token=token)],
+                       tokenizer=tokenizer, top_k=top_k, device=device,
+                       dtype=dtype, keep_logits=True)
+
+    rng = np.random.default_rng(seed)
+    r = rng.normal(size=delta.shape).astype(np.float32)
+    r *= float(np.linalg.norm(delta)) / max(float(np.linalg.norm(r)), 1e-12)
+    control = intervene(model, prompt, [Perturb(layer, r, token=token)],
+                        tokenizer=tokenizer, top_k=top_k, device=device,
+                        dtype=dtype, keep_logits=True)
+
+    steer_shift = target_logit_shift(baseline, branch, target, token)
+    control_shift = target_logit_shift(baseline, control, target, token)
+    t = int(token) % baseline.n_tokens
+    hits = bool(int(np.asarray(branch.logits[-1, t]).argmax()) == int(target))
+    target_token = None
+    if baseline.vocab is not None and 0 <= int(target) < len(baseline.vocab):
+        target_token = baseline.vocab[int(target)]
+
+    return Faithfulness(
+        target=int(target), target_token=target_token,
+        steer_shift=steer_shift, control_shift=control_shift,
+        effect=steer_shift - control_shift, steer_hits_target=hits,
+        scale=float(scale), token=t,
+    )
