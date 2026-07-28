@@ -7,22 +7,35 @@ name = "mottled"
 version = "0.1.0"
 description = "Interactive latent trajectory explorer for transformer forward passes"
 readme = "README.md"
-license = "GPL-2.0-only"
+license = "Apache-2.0"
 requires-python = ">=3.11"
+keywords = ["interpretability", "mechanistic-interpretability", "transformers",
+            "visualization", "sae", "residual-stream"]
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
+# Lower-bound floors; requirements.lock pins the exact known-good closure.
 dependencies = [
-    "numpy",
-    "scipy",
-    "scikit-learn",
-    "plotly",
-    "streamlit",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "scikit-learn>=1.3",
+    "plotly>=5.18",
+    "streamlit>=1.30",
 ]
 
 [project.optional-dependencies]
 # Real transformer captures (the synthetic producer needs none of these).
-models = ["torch", "transformers"]
-umap = ["umap-learn"]
-faiss = ["faiss-cpu"]
-dev = ["pytest"]
+models = ["torch>=2.1", "transformers>=4.44"]
+umap = ["umap-learn>=0.5"]
+faiss = ["faiss-cpu>=1.7"]
+# Ecosystem interop (optional): TransformerLens producer, SAELens conversion.
+tlens = ["transformer-lens>=1.14"]
+sae = ["sae-lens>=3.0"]
+dev = ["pytest>=7.4"]
 
 [project.urls]
 Homepage = "https://github.com/BobGnarly420/mottled"
@@ -30,9 +43,11 @@ Documentation = "https://github.com/BobGnarly420/mottled#readme"
 
 [project.scripts]
 mottled = "cli:main"
+mottled-convert-sae = "convert_sae:main"
 
 [tool.setuptools]
-py-modules = ["bvh", "cache", "capture", "cli", "compare", "config", "density",
-              "intervene", "metrics", "neighbors", "projection", "sae",
-              "serve", "statefile", "terrain", "trajectory", "ui"]
+py-modules = ["bvh", "cache", "capture", "cli", "compare", "config", "convert_sae",
+              "density", "design_tokens", "intervene", "metrics", "neighbors",
+              "projection", "sae", "serve", "statefile", "terrain", "trajectory",
+              "ui"]
 packages = ["models"]

@@ -114,6 +114,118 @@ def load_npz(path: str | Path) -> SAE:
     return sae
 
 
+def _to_numpy(x) -> np.ndarray:
+    """Array from a numpy array or a torch tensor, without importing torch."""
+    if hasattr(x, "detach"):          # torch.Tensor
+        x = x.detach().cpu().numpy()
+    return np.asarray(x, dtype=np.float32)
+
+
+def _orient(w, rows: int, cols: int, name: str) -> np.ndarray:
+    """Return `w` as (rows, cols), transposing if it arrived the other way.
+
+    Trainers disagree on weight orientation; we pin ours to Mottled's
+    convention (w_enc is (D, F), w_dec is (F, D)) and accept either layout.
+    """
+    w = _to_numpy(w)
+    if w.shape == (rows, cols):
+        return w
+    if w.shape == (cols, rows):
+        return np.ascontiguousarray(w.T)
+    raise ValueError(f"{name} shape {w.shape} is neither {(rows, cols)} nor its transpose")
+
+
+def from_state_dict(state_dict, labels: list[str] | None = None) -> SAE:
+    """Build an SAE from a pretrained weight mapping (the real-weights path).
+
+    Accepts the standard four-array convention shared by SAELens and most
+    dictionary-learning runs — keys `W_enc`/`b_enc`/`W_dec`/`b_dec` (case
+    tolerant) — as numpy arrays or torch tensors. `b_dec` fixes the hidden
+    dimension D, `b_enc` the feature count F; encoder/decoder weights are
+    oriented to Mottled's (D, F) / (F, D) layout automatically. This applies
+    a *trained* dictionary — the whole point of the feature overlay: real
+    features instead of `demo_sae`'s random directions.
+    """
+    def _pick(*names):
+        for n in names:
+            for key in (n, n.lower(), n.upper()):
+                if key in state_dict:
+                    return state_dict[key]
+        raise KeyError(f"state dict is missing any of {names}; keys: {list(state_dict)[:8]}")
+
+    b_dec = _to_numpy(_pick("b_dec"))
+    b_enc = _to_numpy(_pick("b_enc"))
+    D, F = int(b_dec.shape[0]), int(b_enc.shape[0])
+    w_enc = _orient(_pick("W_enc", "w_enc"), D, F, "W_enc")
+    w_dec = _orient(_pick("W_dec", "w_dec"), F, D, "W_dec")
+    sae = SAE(w_enc=w_enc, b_enc=b_enc, w_dec=w_dec, b_dec=b_dec, labels=labels)
+    sae.validate()
+    return sae
+
+
+def from_sae_lens(sae, labels: list[str] | None = None) -> SAE:
+    """Convert a loaded SAELens SAE object into a Mottled SAE.
+
+    SAELens' *standard* SAE stores `W_enc` (d_in, d_sae), `b_enc`, `W_dec`
+    (d_sae, d_in), `b_dec` and runs the same ReLU forward Mottled applies, so
+    conversion is a direct array copy. Two config options change that forward,
+    and we handle each explicitly rather than silently mis-encoding a nominally
+    "standard" SAE:
+
+    * ``apply_b_dec_to_input=False`` — the source encodes ``h @ W_enc + b_enc``
+      without the ``b_dec`` subtraction Mottled always does. That constant folds
+      exactly into ``b_enc`` (``b_enc += b_dec @ W_enc``), so the converted
+      encoder stays numerically identical.
+    * ``normalize_activations`` — a runtime input rescaling Mottled does not do
+      and cannot fold into a fixed dictionary, so it is rejected loudly.
+
+    Non-standard architectures (gated / jumprelu / top-k) use a different
+    nonlinearity than our plain ReLU and are rejected — detected from
+    ``cfg.architecture`` / ``activation_fn`` and, so the gate cannot fail open
+    when a config is missing, from the tell-tale weights they carry.
+    """
+    cfg = getattr(sae, "cfg", None)
+
+    def _cfg(name):
+        v = getattr(cfg, name, None) if cfg is not None else None
+        return v() if callable(v) else v
+
+    arch = _cfg("architecture")
+    if arch is not None and str(arch).lower() not in {"standard", "relu"}:
+        raise ValueError(
+            f"unsupported SAE architecture {arch!r}: Mottled applies a plain ReLU "
+            "(standard) SAE. Gated / JumpReLU / top-k SAEs encode differently and "
+            "must be converted with their own tooling first.")
+    act = _cfg("activation_fn") or _cfg("activation_fn_str")
+    if act is not None and str(act).lower() not in {"relu", "", "none"}:
+        raise ValueError(
+            f"unsupported SAE activation_fn {act!r}: Mottled applies a plain ReLU. "
+            "Top-k / other activations must be converted with their own tooling.")
+    # Fail closed even if the config is absent: these weights exist only on
+    # gated SAEs, whose forward is not our ReLU.
+    for attr, kind in (("W_gate", "gated"), ("r_mag", "gated")):
+        if getattr(sae, attr, None) is not None:
+            raise ValueError(
+                f"this looks like a {kind} SAE (carries {attr!r}); Mottled applies "
+                "a plain ReLU. Convert it with its own tooling first.")
+    norm = _cfg("normalize_activations")
+    if norm not in (None, False, "none", "None"):
+        raise ValueError(
+            f"this SAE normalizes activations (normalize_activations={norm!r}), an "
+            "input rescaling Mottled does not apply; its features would not match. "
+            "Export it without activation normalization first.")
+
+    out = from_state_dict({"W_enc": sae.W_enc, "b_enc": sae.b_enc,
+                           "W_dec": sae.W_dec, "b_dec": sae.b_dec}, labels=labels)
+    if _cfg("apply_b_dec_to_input") is False:
+        # Source skipped the b_dec subtraction on the encoder input; Mottled's
+        # forward always subtracts it, so fold the constant back into b_enc:
+        # (h - b_dec) @ W_enc + (b_enc + b_dec @ W_enc) == h @ W_enc + b_enc.
+        out.b_enc = (out.b_enc + out.b_dec @ out.w_enc).astype(np.float32)
+        out.validate()
+    return out
+
+
 def demo_sae(dim: int, n_features: int = 256, seed: int = 0, bias: float = 0.05) -> SAE:
     """Untrained random dictionary: tied weights, unit decoder rows.
 

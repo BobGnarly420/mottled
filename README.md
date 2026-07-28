@@ -1,6 +1,7 @@
 # 🔮 Mottled
 
 [![CI](https://github.com/BobGnarly420/mottled/actions/workflows/ci.yml/badge.svg)](https://github.com/BobGnarly420/mottled/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 **Interactive latent trajectory explorer for transformer forward passes.**
 
@@ -81,6 +82,8 @@ from metrics import summarize              # research metrics
 from compare import compare                # A/B trajectory comparison
 from sae import demo_sae, feature_trajectory  # SAE feature activations
 from sae import feature_field                 # SAE over the projection plane
+from sae import from_sae_lens, from_state_dict  # load a real trained SAE
+from intervene import direction_from_token, faithfulness  # data-derived steering
 from attractor import analyze, explain        # why the basin forms, in prose
 from ui import run_pipeline, render        # everything at once → plotly Figure
 from ui import run_scene, run_intervention  # multi-prompt scenes, patching
@@ -145,7 +148,7 @@ density, terrain, metrics, comparison, every viewer) works unchanged.
 | `cache.py` | Disk cache keyed by prompt + config hash |
 | `config.py` | One dataclass for every pipeline knob |
 | `ui.py` | Pure pipeline + pure Plotly renderer + Streamlit shell |
-| `bvh.py` | Spatial index over trajectory segments (ray-pick / nearest / box / frustum) for the fly-through canvas |
+| `bvh.py` | ⚠️ *experimental* — spatial index (ray-pick / nearest / box / frustum) for the not-yet-built fly-through canvas; tested in isolation, not yet wired into a live surface |
 | `intervene.py` | Causal interventions: perturb / set / noise / freeze a state via a resumable forward pass → counterfactual trajectory |
 | `compare.py` | Trajectory comparison: Hausdorff, dynamic time warping, shared-prefix alignment, layerwise divergence profiles |
 | `sae.py` | Sparse-autoencoder features: apply (never train) an SAE to every captured state; demo dictionary + npz interchange |
@@ -183,6 +186,15 @@ in one pass. `divergence(baseline, branch)` measures where a branch separates
 (state-space profile + the layer the top-1 prediction flips) — a measurement,
 not a claimed cause. Interventions require a torch model; the synthetic backend
 is analytic and not resumable.
+
+Steering directions come from **data, not magic numbers**:
+`direction_from_token(traj, id)` is a token's own (un)embedding axis and
+`direction_from_contrast(pos, neg, layer)` is a diff-of-means between two sets
+of runs. And a steer's effect is only trustworthy if it beats the perturbation
+*size*: `faithfulness(model, prompt, layer, direction, target)` scores the
+steer against a **norm-matched random control** (`effect = steer − control`
+logit shift toward the target), so the UI can say how much of the flip was the
+direction rather than the push. This is an effect-size, still not a circuit.
 
 ### Trajectory comparison (prompt A/B)
 
@@ -226,11 +238,22 @@ balance, and the UI plots it in the inspector.  The synthetic backend emits
 an analogous exact decomposition, so the whole path works without torch.
 
 `sae.py` applies sparse autoencoders to trajectories — it never trains them.
-An SAE is four plain numpy arrays (`w_enc`, `b_enc`, `w_dec`, `b_dec`);
-export any pretrained SAE (SAELens, dictionary-learning runs) to `.npz` and
-`load_npz` it.  `demo_sae` builds an untrained random dictionary so the
-feature pipeline — activations, top-features, UI overlay — runs offline
-(demo activations are sparse projections, *not* interpretable features).
+An SAE is four plain numpy arrays (`w_enc`, `b_enc`, `w_dec`, `b_dec`).
+SAELens' *standard* SAE runs the exact ReLU forward Mottled uses, so bringing
+a **real, trained** dictionary in is a direct copy: `sae.from_sae_lens(sae)`
+on a loaded SAELens object, `sae.from_state_dict(sd)` on any
+`W_enc`/`b_enc`/`W_dec`/`b_dec` checkpoint, or the CLI —
+
+```bash
+mottled-convert-sae from-saelens gpt2-small-res-jb \
+    blocks.8.hook_resid_pre -o gpt2-res-l8.npz     # needs `pip install "mottled[sae]"`
+```
+
+— then `load_npz` it. Gated / JumpReLU / top-k SAEs use a different
+nonlinearity and are rejected loudly rather than mis-encoded. `demo_sae`
+builds an untrained random dictionary so the feature pipeline — activations,
+top-features, UI overlay — runs offline (demo activations are sparse
+projections, *not* interpretable features).
 
 ```python
 from sae import load_npz, demo_sae, feature_trajectory, top_features
@@ -411,10 +434,14 @@ land = compute_density(coords, bootstrap=32)
 print(land.density_se.max())                          # confidence field
 ```
 
-The explorer surfaces both in an **Uncertainty** inspector panel; the web
-viewer adds an **uncertainty** terrain overlay (amber = high SE) and shows
-per-state neighborhood fidelity on hover. Both quantities ride along in the
-`.mtj` scene format (`terrain.se`, per-run `quality`), so any consumer can
+Fidelity is stated **inline, not opt-in**: the explorer prints a projection
+fidelity header above every scene and flags low-preservation states with an
+amber ✕ right on the terrain (the full numbers stay in the **Uncertainty**
+panel); `attractor.explain` folds the basin's own preservation into its prose
+("read the shape as suggestive, not established" when it is low); and the web
+viewer's **uncertainty** terrain overlay (amber = high SE) is **on by default**
+whenever a scene carries a standard-error field. Both quantities ride along in
+the `.mtj` scene format (`terrain.se`, per-run `quality`), so any consumer can
 render them.
 
 ### Design language
@@ -423,9 +450,10 @@ Every surface — the Plotly renderer, the Streamlit shell, the web viewer —
 shares one design language (dark navy void `#080B18`, a single
 precision-blue accent `#4B7CF3`, semantic data colors, 1px borders,
 near-sharp corners, monospace for data values, no emoji in product UI).
-The tokens live in three mirrored places: `ui.py` (`_MARBLE_COLORS`,
-`_TERRAIN_COLORSCALE`), `.streamlit/config.toml`, and `viewer/style.css` —
-change a value in all three to retheme.
+The tokens have **one source of truth** — `design_tokens.py`. `ui.py` imports
+them; `.streamlit/config.toml` and `viewer/style.css` mirror the same values,
+and `tests/test_tokens.py` fails if any mirror drifts — so retheming is a
+one-line edit guarded by CI, not a three-file hunt.
 
 The design language is also expected to *explain*, not just style: the
 scene carries a measured callout at the density peak, captions state what
@@ -465,6 +493,29 @@ scene assembly, the intervention pipeline, and headless runs of the actual
 Streamlit app — single-prompt, A/B, N-prompt scene, and SAE overlay —
 (`streamlit.testing.v1.AppTest`).
 
+## What this is — and is not
+
+Mottled visualizes the **geometry of latent dynamics** — where a run's hidden
+states travel and pile up — and measures how much of that geometry survives
+the projection. It is deliberately *not* a proof of mechanism:
+
+- A basin shows states **accumulating**, not a circuit **computing**. Attention
+  flow and the intervention divergence/faithfulness readouts are *measurements*
+  of what happened, not identified causes.
+- An SAE overlay is only as interpretable as the SAE you load. The bundled
+  `demo_sae` is a random dictionary (decorative); load real weights with
+  `sae.load_npz`, `sae.from_sae_lens`, or the `mottled-convert-sae` CLI.
+- Every scene states its **projection fidelity** inline and flags the states
+  whose neighborhoods did not survive the flattening, so a low-fidelity picture
+  can't be mistaken for solid structure.
+
+For **verified causal claims** — circuit discovery, path patching, activation
+patching at scale — reach for a dedicated tool
+([TransformerLens](https://github.com/TransformerLensOrg/TransformerLens),
+ACDC, EAP). Mottled is the honest map you read *before* and *alongside* them,
+and it interoperates: any `HookedTransformer` is a producer via
+`models.hooked.from_hooked_transformer`.
+
 ## Non-goals (MVP)
 
 No training or finetuning (SAEs are *applied*, never trained), no circuit
@@ -500,3 +551,9 @@ research tool.
   feature flows across layers, feature field in the web viewer, richer
   scene management (pin/hide runs, saved scenes), diffusion / recording
   producers.
+
+## License
+
+[Apache License 2.0](LICENSE) — permissive, with an explicit patent grant, to
+match the mechanistic-interpretability ecosystem Mottled interoperates with
+(TransformerLens, SAELens, nnsight). See [`NOTICE`](NOTICE).

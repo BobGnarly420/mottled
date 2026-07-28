@@ -84,3 +84,18 @@ def test_streamlit_app_interactive():
     at.selectbox(key="token").select(traj.n_tokens - 1)
     at.run()
     assert not at.exception
+
+
+def test_streamlit_app_surfaces_projection_fidelity_inline():
+    """Fidelity is stated in the main view, not buried in a collapsed panel."""
+    AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
+
+    at = AppTest.from_file("ui.py", default_timeout=120)
+    at.run()
+    at.text_area(key="prompt").set_value("The capital of France is")
+    at.selectbox(key="model").select("synthetic")
+    at.button(key="run").click()
+    at.run()
+    assert not at.exception
+    texts = [m.value for m in at.markdown]
+    assert any("Projection fidelity" in t for t in texts)

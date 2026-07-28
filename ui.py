@@ -18,6 +18,7 @@ import attractor as attractor_mod
 import cache as cache_mod
 import compare as compare_mod
 import density as density_mod
+import design_tokens as tokens
 import metrics as metrics_mod
 import sae as sae_mod
 import statefile as statefile_mod
@@ -217,7 +218,7 @@ def run_compare(cfg: MarbleConfig, prompt_a: str, prompt_b: str,
 
 
 def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
-                     model, tokenizer) -> dict:
+                     model, tokenizer, target_id: int | None = None) -> dict:
     """Interactive patching: baseline capture vs perturb-and-replay branch.
 
     Runs the same prompt twice — once untouched, once under `interventions`
@@ -225,8 +226,13 @@ def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
     runs as a scene: shared projection, one terrain, comparison, plus an
     `intervene.divergence` readout.  Requires a torch model; results are not
     cached (the edit space is unbounded).
+
+    When `target_id` is given for a single directional steer, also attaches a
+    `Faithfulness` readout: the run measures a norm-matched *random* control so
+    the UI can say how much of the effect is the steering direction rather than
+    the perturbation's raw size.
     """
-    from intervene import divergence, intervene
+    from intervene import divergence, intervene, score_against_control
 
     baseline = _capture_with(cfg, prompt, model=model, tokenizer=tokenizer)
     branch = intervene(model, prompt, interventions, tokenizer=tokenizer,
@@ -238,6 +244,16 @@ def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
               "prompt_b": "patched: " + ", ".join(iv.describe() for iv in interventions),
               **_assemble_scene(cfg, [baseline, branch])}
     result["divergence"] = divergence(baseline, branch)
+
+    if (target_id is not None and baseline.logits is not None
+            and len(interventions) == 1 and interventions[0].kind == "perturb"
+            and interventions[0].vector is not None):
+        iv = interventions[0]
+        tok = iv.token if iv.token is not None else -1
+        result["faithfulness"] = score_against_control(
+            model, prompt, baseline, branch, iv.vector, iv.layer, int(target_id),
+            token=tok, tokenizer=tokenizer, seed=cfg.seed, device=cfg.device,
+            dtype=cfg.dtype, top_k=cfg.top_k)
     return result
 
 
@@ -245,15 +261,13 @@ def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
 # Renderer — styled to the Incision design language: dark navy void, one
 # precision-blue accent, semantic data colors, mono for data values.
 # --------------------------------------------------------------------------
-_MARBLE_COLORS = ["#4B7CF3", "#00CCA8", "#D4934A", "#E05050", "#38B07A",
-                  "#8FA7F7", "#5CE0C6", "#E6B884", "#F08A8A", "#7FD0AC"]
-
-# Terrain potential ramp: void -> surfaces -> precision blue -> light blue.
-_TERRAIN_COLORSCALE = [[0.0, "#04060E"], [0.22, "#0C1020"], [0.45, "#1C2A55"],
-                       [0.68, "#2F55B8"], [0.86, "#4B7CF3"], [1.0, "#C8D4FB"]]
-
-_FONT_SANS = "DM Sans, -apple-system, Segoe UI, Helvetica, Arial, sans-serif"
-_FONT_MONO = "JetBrains Mono, SF Mono, Menlo, Consolas, monospace"
+# Design tokens come from the single source of truth (design_tokens.py); the
+# Streamlit config and the web viewer mirror the same values, guarded by
+# tests/test_tokens.py.
+_MARBLE_COLORS = tokens.MARBLE_COLORS
+_TERRAIN_COLORSCALE = tokens.TERRAIN_COLORSCALE
+_FONT_SANS = tokens.FONT_SANS
+_FONT_MONO = tokens.FONT_MONO
 
 
 def _hover_text(traj: StateTrajectory, t: trajectory_mod.Trajectory) -> list[str]:
@@ -321,6 +335,8 @@ def render(
     overlay_label: str = "feature",
     show_attention: bool = False,
     basin: attractor_mod.BasinReport | None = None,
+    quality: projection_mod.ProjectionQuality | None = None,
+    low_fidelity: float = 0.5,
 ) -> go.Figure:
     """Build the 3-D scene: terrain surface, token trajectories, animated marbles.
 
@@ -389,6 +405,30 @@ def render(
                 text=_hover_text(src, t),
                 hoverinfo="text",
             ))
+
+    # Inline honesty: flag the primary run's states whose local neighborhood
+    # did not survive the projection, right on the scene — so a low-fidelity
+    # basin can't be read as solid structure. The full numbers live in the
+    # Uncertainty panel; this is the unavoidable at-a-glance mark.
+    if quality is not None:
+        pres = np.asarray(quality.preservation)
+        lx, ly, lz, ltext = [], [], [], []
+        for t in trajectories:
+            tok = t.token if isinstance(t.token, int) else traj.n_tokens - 1
+            series = pres[:, tok]
+            for l in range(min(len(t.points), len(series))):
+                if series[l] < low_fidelity:
+                    lx.append(t.points[l, 0]); ly.append(t.points[l, 1])
+                    lz.append(t.points[l, 2] + 0.02)
+                    ltext.append(f"low fidelity · {series[l]:.0%} of k-NN kept"
+                                 f"<br>layer {l} · {t.label or t.token}")
+        if lx:
+            fig.add_trace(go.Scatter3d(
+                x=lx, y=ly, z=lz, mode="markers",
+                marker={"size": 7, "symbol": "x", "color": tokens.AMBER,
+                        "line": {"color": tokens.AMBER, "width": 1}},
+                name=f"low fidelity (<{low_fidelity:.0%} k-NN kept)",
+                hoverinfo="text", text=ltext))
 
     if show_attention and traj.attention is not None and len(trajectories) == traj.n_tokens:
         att = _attention_trace(trajectories, traj.attention, current_layer)
@@ -784,15 +824,19 @@ def main() -> None:
                     iv_target = st.text_input("Target token", "Berlin", key="iv_target")
                 iv_scale = st.slider("Strength", 0.0, 100.0, 30.0, key="iv_scale")
                 if st.button("Run intervention", key="iv_run"):
-                    from intervene import FreezeLayer, InjectNoise, Perturb
+                    from intervene import (FreezeLayer, InjectNoise, Perturb,
+                                           direction_from_token)
 
                     model, tokenizer = load_model_cached(cfg.model)
+                    target_id = None
                     if iv_kind == "push toward token":
                         ids = tokenizer(iv_target, add_special_tokens=False)["input_ids"]
                         if not ids:
                             st.warning("target token is empty")
                             st.stop()
-                        direction = traj.embedding_matrix[ids[0]]
+                        target_id = int(ids[0])
+                        # data-derived: the target token's own embedding axis
+                        direction = direction_from_token(traj, target_id)
                         edits = [Perturb(iv_layer, iv_scale * direction, token=-1)]
                     elif iv_kind == "inject noise":
                         edits = [InjectNoise(iv_layer, iv_scale, token=-1)]
@@ -800,7 +844,8 @@ def main() -> None:
                         edits = [FreezeLayer(min(iv_layer, traj.n_layers - 2))]
                     with st.spinner("Replaying under intervention…"):
                         st.session_state["result"] = run_intervention(
-                            cfg, result["prompt"], edits, model, tokenizer)
+                            cfg, result["prompt"], edits, model, tokenizer,
+                            target_id=target_id)
                     st.rerun()
 
     @st.cache_resource(show_spinner=False)
@@ -824,7 +869,18 @@ def main() -> None:
 
     basin = attractor_mod.analyze(traj, result["coords"], result["landscape"])
 
+    quality = result.get("quality")
     with col_viz:
+        low_fidelity = 0.5  # one threshold drives both the prose and the ✕ markers
+        if quality is not None:
+            ev = (f"keeps **{quality.explained_variance:.0%}** of the variance · "
+                  if quality.explained_variance is not None else "")
+            low = float((np.asarray(quality.preservation) < low_fidelity).mean())
+            st.markdown(
+                f"**Projection fidelity** — {ev}mean neighborhood preservation "
+                f"**{quality.preservation.mean():.2f}** (k={quality.k}). "
+                f"**{low:.0%}** of states are low-fidelity — flagged ✕ on the scene "
+                f"and drawn where the projection *could* put them, not where they truly are.")
         fig = render(traj, result["mesh"], result["trajectories"], result["fine_paths"],
                      current_layer=layer, frames_per_layer=cfg.frames_per_layer,
                      frame_ms=cfg.frame_ms,
@@ -834,12 +890,29 @@ def main() -> None:
                      extra_runs=extra_runs,
                      overlay=overlay, overlay_label=overlay_label,
                      show_attention=attention_on,
-                     basin=basin)
+                     basin=basin, quality=quality, low_fidelity=low_fidelity)
         st.plotly_chart(fig, use_container_width=True, key="scene")
         st.caption('The terrain is a density field over the projected states '
                    'themselves — height means "many states landed here", not an '
                    'external landscape. The pinned callout marks the basin; open '
                    '**Why this attractor** in the inspector for this run\'s numbers.')
+
+        with st.expander("What this is — and is not", expanded=False):
+            st.markdown(
+                "Mottled visualizes the **geometry of latent dynamics** — where a "
+                "run's hidden states go and pile up — and measures how much of that "
+                "geometry survives the projection. It is **not** a proof of "
+                "mechanism.\n\n"
+                "- A basin shows states *accumulating*, not a circuit *computing*. "
+                "Attention flow and the intervention divergence are **measurements** "
+                "of what happened, not identified causes.\n"
+                "- An SAE overlay is only as interpretable as the SAE you load; the "
+                "bundled `demo_sae` is a random dictionary (decorative). Load real "
+                "weights with `sae.load_npz` / the `mottled-convert-sae` CLI.\n"
+                "- For **verified causal claims** — circuit discovery, path patching, "
+                "activation patching at scale — use a dedicated tool "
+                "(TransformerLens, ACDC, EAP). Mottled is the honest map you read "
+                "*before* and *alongside* them, not a substitute.")
 
         if field_on:
             projector = result.get("projector")
@@ -931,7 +1004,7 @@ def main() -> None:
             report = (basin if basin.token == token % traj.n_tokens else
                       attractor_mod.analyze(traj, result["coords"],
                                             result["landscape"], token=token))
-            st.markdown(attractor_mod.explain(report, traj))
+            st.markdown(attractor_mod.explain(report, traj, quality=quality))
             if len(report.step):
                 st.markdown("**Per-layer step of this token** *(hidden space)*")
                 st.line_chart({"step": report.step})
@@ -993,6 +1066,17 @@ def main() -> None:
                 else:
                     st.write("top-1 prediction unchanged")
                 st.line_chart(div.profile)
+                if (fth := result.get("faithfulness")) is not None:
+                    tt = fth.target_token or f"id {fth.target}"
+                    hit = "yes" if fth.steer_hits_target else "no"
+                    st.write(f"faithfulness toward `{tt}` — steer shifts its logit "
+                             f"**{fth.steer_shift:+.2f}**, a norm-matched random "
+                             f"delta **{fth.control_shift:+.2f}** "
+                             f"(direction-specific effect **{fth.effect:+.2f}**; "
+                             f"top-1 now the target: {hit})")
+                    st.caption("A large *effect* means the steering direction, not "
+                               "just the perturbation's size, moved the model. This "
+                               "is a measured counterfactual, not an isolated circuit.")
 
         if result.get("comparisons") and len(result["comparisons"]) > 1:
             with st.expander("Scene comparisons (vs A)", expanded=True):

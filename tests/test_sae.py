@@ -68,6 +68,142 @@ def test_npz_roundtrip(tmp_path):
     assert S.demo_sae(8, 12, 1).feature_label(3) == "f3"  # unlabeled fallback
 
 
+# -------------------------------------------------- real-weights loading (1a)
+def test_from_state_dict_maps_and_orients():
+    """The standard four-array convention maps directly; either weight
+    orientation is accepted and normalized to Mottled's (D, F) / (F, D)."""
+    rng = np.random.default_rng(0)
+    D, F = 6, 10
+    w_enc = rng.normal(size=(D, F)).astype(np.float32)
+    w_dec = rng.normal(size=(F, D)).astype(np.float32)
+    b_enc = rng.normal(size=F).astype(np.float32)
+    b_dec = rng.normal(size=D).astype(np.float32)
+
+    sae = S.from_state_dict({"W_enc": w_enc, "b_enc": b_enc,
+                             "W_dec": w_dec, "b_dec": b_dec})
+    assert (sae.dim, sae.n_features) == (D, F)
+    h = rng.normal(size=(4, D)).astype(np.float32)
+    expected = np.maximum((h - b_dec) @ w_enc + b_enc, 0.0)
+    assert np.allclose(sae.encode(h), expected, atol=1e-5)
+
+    # a transposed encoder (F, D) is auto-oriented back to (D, F)
+    flipped = S.from_state_dict({"W_enc": w_enc.T, "b_enc": b_enc,
+                                 "W_dec": w_dec, "b_dec": b_dec})
+    assert np.allclose(flipped.w_enc, w_enc, atol=1e-6)
+
+    with pytest.raises(KeyError):
+        S.from_state_dict({"b_enc": b_enc, "b_dec": b_dec})  # missing weights
+
+
+def test_from_sae_lens_stub_and_rejects_nonstandard():
+    rng = np.random.default_rng(1)
+    D, F = 5, 8
+
+    class _Cfg:
+        architecture = "standard"
+
+    class _StubSAE:
+        cfg = _Cfg()
+        W_enc = rng.normal(size=(D, F)).astype(np.float32)
+        b_enc = rng.normal(size=F).astype(np.float32)
+        W_dec = rng.normal(size=(F, D)).astype(np.float32)
+        b_dec = rng.normal(size=D).astype(np.float32)
+
+    stub = _StubSAE()
+    sae = S.from_sae_lens(stub)
+    assert np.allclose(sae.w_enc, stub.W_enc) and np.allclose(sae.b_dec, stub.b_dec)
+
+    stub.cfg.architecture = "jumprelu"   # different nonlinearity → refuse
+    with pytest.raises(ValueError, match="architecture"):
+        S.from_sae_lens(stub)
+
+
+def _saelens_stub(D=5, F=8, seed=1, **cfg_attrs):
+    rng = np.random.default_rng(seed)
+    cfg = type("Cfg", (), {"architecture": "standard", **cfg_attrs})()
+    return type("Stub", (), {
+        "cfg": cfg,
+        "W_enc": rng.normal(size=(D, F)).astype(np.float32),
+        "b_enc": rng.normal(size=F).astype(np.float32),
+        "W_dec": rng.normal(size=(F, D)).astype(np.float32),
+        "b_dec": rng.normal(size=D).astype(np.float32),
+    })()
+
+
+def test_from_sae_lens_folds_b_dec_when_not_applied_to_input():
+    """A standard SAE trained with apply_b_dec_to_input=False encodes
+    `h @ W_enc + b_enc` (no b_dec subtraction). Mottled's forward always
+    subtracts b_dec, so the converter must fold that constant into b_enc and
+    reproduce the source encode exactly — not silently mis-encode it."""
+    stub = _saelens_stub(apply_b_dec_to_input=False)
+    sae = S.from_sae_lens(stub)
+    h = np.random.default_rng(7).normal(size=(4, 5)).astype(np.float32)
+    source = np.maximum(h @ stub.W_enc + stub.b_enc, 0.0)  # no b_dec on input
+    assert np.allclose(sae.encode(h), source, atol=1e-5)
+    assert np.allclose(sae.b_dec, stub.b_dec)              # decode still uses b_dec
+    # the default (apply_b_dec_to_input=True) path is an untouched copy
+    plain = S.from_sae_lens(_saelens_stub(apply_b_dec_to_input=True))
+    ref = _saelens_stub(apply_b_dec_to_input=True)
+    assert np.allclose(plain.b_enc, ref.b_enc)
+
+
+def test_from_sae_lens_rejects_unrepresentable_configs():
+    """The gate refuses forwards Mottled cannot reproduce, and fails closed on a
+    gated SAE even when the config does not name its architecture."""
+    with pytest.raises(ValueError, match="normalize"):
+        S.from_sae_lens(_saelens_stub(normalize_activations="layer_norm"))
+    with pytest.raises(ValueError, match="activation_fn"):
+        S.from_sae_lens(_saelens_stub(activation_fn="topk"))
+    gated = _saelens_stub()                 # cfg says "standard" …
+    gated.W_gate = gated.W_enc.copy()       # … but the gate weight gives it away
+    with pytest.raises(ValueError, match="gated"):
+        S.from_sae_lens(gated)
+
+
+def test_convert_sae_cli_accepts_out_after_subcommand():
+    """Regression: -o/--out must parse *after* the subcommand name. argparse's
+    subparser action consumes everything following the subcommand, so a required
+    option on the parent parser (before add_subparsers) is unreachable."""
+    import convert_sae
+
+    p = convert_sae._build_parser()
+    a = p.parse_args(["from-file", "sae.safetensors", "-o", "out.npz"])
+    assert a.out == "out.npz" and a.path == "sae.safetensors"
+    a = p.parse_args(["from-saelens", "rel", "sid", "-o", "d.npz"])
+    assert a.out == "d.npz" and a.release == "rel" and a.sae_id == "sid"
+
+
+def _fitted_sae(hidden_flat: np.ndarray) -> S.SAE:
+    """A data-aligned dictionary built (in-test) from the states' own SVD.
+
+    Antipodal singular directions + a ReLU encoder reconstruct signed hidden
+    states in their own subspace — this is *not* training shipped in the
+    library (a non-goal); it stands in for a real trained SAE so we can show
+    the reconstruction metric separates a meaningful dictionary from
+    `demo_sae`'s random one."""
+    H = np.asarray(hidden_flat, dtype=np.float64)
+    mean = H.mean(axis=0)
+    _, _, vt = np.linalg.svd(H - mean, full_matrices=False)
+    dirs = np.vstack([vt, -vt]).astype(np.float32)      # (2k, D) antipodal
+    return S.SAE(w_enc=dirs.T.copy(), b_enc=np.zeros(len(dirs), np.float32),
+                 w_dec=dirs, b_dec=mean.astype(np.float32))
+
+
+def test_fitted_sae_beats_demo_reconstruction():
+    """The acceptance check: a real (data-aligned) dictionary reconstructs
+    captured states far better than the untrained demo dictionary."""
+    traj = synthetic.capture(PROMPT)
+    H = traj.flat_hidden()
+
+    real = _fitted_sae(H)
+    demo = S.demo_sae(traj.dim, n_features=256)
+
+    real_err = float(real.reconstruction_error(H).mean())
+    demo_err = float(demo.reconstruction_error(H).mean())
+    assert real_err < 0.05                     # near-exact on the real states
+    assert real_err < 0.3 * demo_err           # and materially below the demo
+
+
 # ------------------------------------------------------------- features
 def test_feature_trajectory_shapes():
     traj = synthetic.capture(PROMPT)

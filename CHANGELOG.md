@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+### Substance: real analysis, not demo
+- `sae.from_sae_lens` / `sae.from_state_dict` load a **real, trained** SAE
+  (SAELens' standard SAE is a direct array copy of Mottled's ReLU forward);
+  non-standard architectures (gated/JumpReLU/top-k) are rejected loudly, and an
+  `apply_b_dec_to_input=False` SAE is folded into `b_enc` so it still converts
+  exactly. The `mottled-convert-sae` CLI (`convert_sae.py`) drives it (`sae-lens`
+  optional).
+- `intervene.direction_from_token` / `direction_from_contrast`: steering deltas
+  derived from data (an embedding axis, a diff-of-means) instead of hand-picked
+  numbers. `intervene.faithfulness` + `target_logit_shift` score a steer against
+  a **norm-matched random control**, so a flip's cause can be attributed to the
+  direction rather than the perturbation size. Surfaced in `ui.run_intervention`.
+- `models.hooked.from_hooked_transformer`: optional **TransformerLens**
+  producer — any `HookedTransformer` becomes a `StateTrajectory` (no hard dep).
+
+### Trust: fidelity made unavoidable
+- The explorer prints a **projection-fidelity header** above every scene and
+  flags low-preservation states with an amber ✕ on the terrain; the collapsed
+  Uncertainty panel is no longer the only place fidelity is shown.
+- `attractor.explain(..., quality=)` folds the basin's own neighborhood
+  preservation into the prose ("suggestive, not established" when low).
+- New **"What this is — and is not"** panel (UI) + README section; the web
+  viewer's uncertainty overlay now defaults **on** when a scene carries SE.
+
+### Adoption & sustainability
+- **Relicensed to Apache-2.0** (from GPL-2.0) to match the interpretability
+  ecosystem; added `NOTICE`.
+- `design_tokens.py` is now the **single source of truth** for the design
+  language; `.streamlit/config.toml` and `viewer/style.css` mirror it and
+  `tests/test_tokens.py` fails on drift.
+- Dependency **floors** in `pyproject.toml`/`requirements.txt`, a pinned
+  `requirements.lock`, optional `tlens`/`sae` extras, and a **PyPI publish**
+  workflow (Trusted Publishing).
+- A cross-language **`.mtj` conformance test** (Python writer ↔ `viewer/mtj.js`
+  reader + little-endian header). `bvh.py` is marked experimental (not yet
+  wired into a live surface).
+
 ### Uncertainty visualization
 - `projection.projection_quality`: measures how much a fitted projection
   distorts, per state — k-NN neighborhood preservation for any projection,
