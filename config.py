@@ -40,6 +40,13 @@ class MarbleConfig:
     capture_attention: bool = True   # record head-averaged attention patterns
     # (forces the eager attention path on torch models)
 
+    # generation (the decode axis): 0 keeps plain prompt capture; N > 0
+    # decodes N tokens first and captures prompt + continuation, with the
+    # per-step record in traj.meta["generation"].  temperature 0 = greedy;
+    # sampling above 0 is seeded by `seed` for reproducible scenes.
+    generate_tokens: int = 0
+    generate_temperature: float = 0.0
+
     # SAE feature overlay (demo dictionary; see sae.py for real weights)
     sae_features: int = 256
 

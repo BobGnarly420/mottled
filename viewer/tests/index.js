@@ -3,3 +3,4 @@
 // directory form work. `node --test viewer/tests/parser.test.js` also works.
 "use strict";
 require("./parser.test.js");
+require("./generation.test.js");

@@ -152,3 +152,53 @@ def test_generation_decode_matches_stepwise_forward(tiny_llama):
             logits = tiny_llama(torch.tensor([ids])).logits[0, -1]
             assert int(torch.argmax(logits)) == step["id"]
             ids.append(step["id"])
+
+
+# ------------------------------------------------------------ pipeline wiring
+
+def test_pipeline_generates_when_configured():
+    from config import MarbleConfig
+    from ui import run_pipeline
+
+    cfg = MarbleConfig(model="synthetic", use_cache=False, generate_tokens=3,
+                       density_bootstrap=0)
+    traj = run_pipeline(cfg, PROMPT)["traj"]
+    assert traj.n_tokens == len(PROMPT.split()) + 3
+    assert traj.meta["generation"]["new_tokens"] == 3
+
+
+def test_render_marks_generated_tokens():
+    from config import MarbleConfig
+    from ui import render, run_pipeline
+
+    cfg = MarbleConfig(model="synthetic", use_cache=False, generate_tokens=2,
+                       density_bootstrap=0)
+    r = run_pipeline(cfg, PROMPT)
+    fig = render(r["traj"], r["mesh"], r["trajectories"], r["fine_paths"])
+    plus = [t.name for t in fig.data if t.name and t.name.startswith("+")]
+    assert len(plus) == 2  # one per generated token
+
+
+def test_scene_mtj_carries_generation(tmp_path):
+    import statefile
+    from config import MarbleConfig
+    from ui import run_scene
+
+    cfg = MarbleConfig(model="synthetic", use_cache=False, generate_tokens=2,
+                       density_bootstrap=0)
+    path = tmp_path / "scene.mtj"
+    statefile.save_scene(run_scene(cfg, [PROMPT]), path)
+    run = statefile.load_scene(path)["runs"][0]
+    gen = run["generation"]
+    assert gen["prompt_tokens"] == len(PROMPT.split())
+    assert gen["new_tokens"] == 2
+    assert [s["token"] for s in gen["steps"]] == run["tokens"][-2:]
+
+
+def test_cli_export_generate(tmp_path):
+    import statefile
+    from cli import main
+
+    out = tmp_path / "scene.mtj"
+    assert main(["export", PROMPT, "-o", str(out), "--generate", "2"]) == 0
+    assert statefile.load_scene(out)["runs"][0]["generation"]["new_tokens"] == 2

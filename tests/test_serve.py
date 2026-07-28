@@ -80,3 +80,20 @@ def test_cli_export(tmp_path):
     scene = statefile.load_scene(out)
     assert len(scene["runs"]) == 2
     assert scene["runs"][1]["prompt"] == PROMPT_B
+
+
+def test_scene_capture_with_generation(base_url):
+    import io
+
+    with _post(f"{base_url}/api/scene",
+               {"prompts": [PROMPT_A], "generate": 2, "temperature": 0.0}) as res:
+        manifest, _ = statefile.read_container(io.BytesIO(res.read()))
+    gen = manifest["runs"][0]["generation"]
+    assert gen["new_tokens"] == 2
+    assert len(manifest["runs"][0]["tokens"]) == gen["prompt_tokens"] + 2
+
+
+def test_scene_generate_out_of_range(base_url):
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _post(f"{base_url}/api/scene", {"prompts": [PROMPT_A], "generate": 999})
+    assert exc.value.code == 400
