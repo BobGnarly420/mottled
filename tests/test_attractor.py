@@ -85,6 +85,56 @@ def test_explain_contains_the_measurements():
     assert text == A.explain(A.analyze(traj, coords, landscape), traj)
 
 
+def test_explain_fidelity_clause_reflects_preservation():
+    """explain() threads projection distortion into the prose: a low-fidelity
+    basin is called suggestive, a high-fidelity one faithful; absent quality,
+    the trust clause is omitted entirely."""
+    from projection import ProjectionQuality
+
+    traj = synthetic.capture(PROMPT)
+    coords, projector = P.project(traj.hidden)
+    landscape = D.compute_density(coords)
+    r = A.analyze(traj, coords, landscape)
+
+    q = P.projection_quality(traj.hidden, coords, projector)
+    text = A.explain(r, traj, quality=q)
+    assert "How much to trust this" in text
+    assert "How much to trust this" not in A.explain(r, traj)  # opt-in
+
+    shape = (traj.n_layers, traj.n_tokens)
+    low = ProjectionQuality(preservation=np.full(shape, 0.2, np.float32),
+                            residual=None, explained_variance=0.5, k=10)
+    assert "suggestive, not" in A.explain(r, traj, quality=low)
+
+    high = ProjectionQuality(preservation=np.full(shape, 0.95, np.float32),
+                             residual=None, explained_variance=0.99, k=10)
+    high_text = A.explain(r, traj, quality=high)
+    assert "faithful view" in high_text and "suggestive" not in high_text
+
+
+def test_render_flags_low_fidelity_states_on_the_scene():
+    from config import MarbleConfig
+    from projection import ProjectionQuality
+    from ui import render, run_pipeline
+
+    cfg = MarbleConfig(model="synthetic", use_cache=False)
+    result = run_pipeline(cfg, PROMPT)
+    traj = result["traj"]
+    shape = (traj.n_layers, traj.n_tokens)
+
+    bad = ProjectionQuality(preservation=np.zeros(shape, np.float32),
+                            residual=None, explained_variance=0.5, k=10)
+    flagged = render(traj, result["mesh"], result["trajectories"],
+                     result["fine_paths"], quality=bad)
+    assert any("low fidelity" in (tr.name or "") for tr in flagged.data)
+
+    good = ProjectionQuality(preservation=np.ones(shape, np.float32),
+                             residual=None, explained_variance=0.99, k=10)
+    clean = render(traj, result["mesh"], result["trajectories"],
+                   result["fine_paths"], quality=good)
+    assert not any("low fidelity" in (tr.name or "") for tr in clean.data)
+
+
 def test_density_at_matches_grid_nodes():
     _, coords, landscape = _pipeline()
     gx, gy = landscape.grid_x, landscape.grid_y

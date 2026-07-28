@@ -350,6 +350,8 @@ def render(
     overlay_label: str = "feature",
     show_attention: bool = False,
     basin: attractor_mod.BasinReport | None = None,
+    quality: projection_mod.ProjectionQuality | None = None,
+    low_fidelity: float = 0.5,
 ) -> go.Figure:
     """Build the 3-D scene: terrain surface, token trajectories, animated marbles.
 
@@ -418,6 +420,30 @@ def render(
                 text=_hover_text(src, t),
                 hoverinfo="text",
             ))
+
+    # Inline honesty: flag the primary run's states whose local neighborhood
+    # did not survive the projection, right on the scene — so a low-fidelity
+    # basin can't be read as solid structure. The full numbers live in the
+    # Uncertainty panel; this is the unavoidable at-a-glance mark.
+    if quality is not None:
+        pres = np.asarray(quality.preservation)
+        lx, ly, lz, ltext = [], [], [], []
+        for t in trajectories:
+            tok = t.token if isinstance(t.token, int) else traj.n_tokens - 1
+            series = pres[:, tok]
+            for l in range(min(len(t.points), len(series))):
+                if series[l] < low_fidelity:
+                    lx.append(t.points[l, 0]); ly.append(t.points[l, 1])
+                    lz.append(t.points[l, 2] + 0.02)
+                    ltext.append(f"low fidelity · {series[l]:.0%} of k-NN kept"
+                                 f"<br>layer {l} · {t.label or t.token}")
+        if lx:
+            fig.add_trace(go.Scatter3d(
+                x=lx, y=ly, z=lz, mode="markers",
+                marker={"size": 7, "symbol": "x", "color": "#D4934A",
+                        "line": {"color": "#D4934A", "width": 1}},
+                name=f"low fidelity (<{low_fidelity:.0%} k-NN kept)",
+                hoverinfo="text", text=ltext))
 
     if show_attention and traj.attention is not None and len(trajectories) == traj.n_tokens:
         att = _attention_trace(trajectories, traj.attention, current_layer)
@@ -858,7 +884,17 @@ def main() -> None:
 
     basin = attractor_mod.analyze(traj, result["coords"], result["landscape"])
 
+    quality = result.get("quality")
     with col_viz:
+        if quality is not None:
+            ev = (f"keeps **{quality.explained_variance:.0%}** of the variance · "
+                  if quality.explained_variance is not None else "")
+            low = float((np.asarray(quality.preservation) < 0.5).mean())
+            st.markdown(
+                f"**Projection fidelity** — {ev}mean neighborhood preservation "
+                f"**{quality.preservation.mean():.2f}** (k={quality.k}). "
+                f"**{low:.0%}** of states are low-fidelity — flagged ✕ on the scene "
+                f"and drawn where the projection *could* put them, not where they truly are.")
         fig = render(traj, result["mesh"], result["trajectories"], result["fine_paths"],
                      current_layer=layer, frames_per_layer=cfg.frames_per_layer,
                      frame_ms=cfg.frame_ms,
@@ -868,12 +904,29 @@ def main() -> None:
                      extra_runs=extra_runs,
                      overlay=overlay, overlay_label=overlay_label,
                      show_attention=attention_on,
-                     basin=basin)
+                     basin=basin, quality=quality)
         st.plotly_chart(fig, use_container_width=True, key="scene")
         st.caption('The terrain is a density field over the projected states '
                    'themselves — height means "many states landed here", not an '
                    'external landscape. The pinned callout marks the basin; open '
                    '**Why this attractor** in the inspector for this run\'s numbers.')
+
+        with st.expander("What this is — and is not", expanded=False):
+            st.markdown(
+                "Mottled visualizes the **geometry of latent dynamics** — where a "
+                "run's hidden states go and pile up — and measures how much of that "
+                "geometry survives the projection. It is **not** a proof of "
+                "mechanism.\n\n"
+                "- A basin shows states *accumulating*, not a circuit *computing*. "
+                "Attention flow and the intervention divergence are **measurements** "
+                "of what happened, not identified causes.\n"
+                "- An SAE overlay is only as interpretable as the SAE you load; the "
+                "bundled `demo_sae` is a random dictionary (decorative). Load real "
+                "weights with `sae.load_npz` / `scripts/convert_sae.py`.\n"
+                "- For **verified causal claims** — circuit discovery, path patching, "
+                "activation patching at scale — use a dedicated tool "
+                "(TransformerLens, ACDC, EAP). Mottled is the honest map you read "
+                "*before* and *alongside* them, not a substitute.")
 
         if field_on:
             projector = result.get("projector")
@@ -965,7 +1018,7 @@ def main() -> None:
             report = (basin if basin.token == token % traj.n_tokens else
                       attractor_mod.analyze(traj, result["coords"],
                                             result["landscape"], token=token))
-            st.markdown(attractor_mod.explain(report, traj))
+            st.markdown(attractor_mod.explain(report, traj, quality=quality))
             if len(report.step):
                 st.markdown("**Per-layer step of this token** *(hidden space)*")
                 st.line_chart({"step": report.step})

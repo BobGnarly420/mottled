@@ -149,11 +149,47 @@ def analyze(
     )
 
 
-def explain(report: BasinReport, traj: StateTrajectory) -> str:
+def _fidelity_clause(report: BasinReport, quality) -> str:
+    """A trust sentence generated from the projection's own distortion.
+
+    A basin is a pile-up *in the 2-D projection*; if the states that form it
+    lost their hidden-space neighborhoods on the way down, its shape is an
+    artifact of the flattening, not structure in the model. This turns
+    `projection_quality` into prose so the explanation never oversells the
+    picture — the exact failure mode the tool is most at risk of.
+    """
+    pres = np.asarray(quality.preservation)
+    if report.n_members:
+        m = report.members
+        basin_pres = float(pres[m[:, 0], m[:, 1]].mean())
+    else:
+        basin_pres = float(pres[:, report.token].mean())
+
+    ev = quality.explained_variance
+    var_phrase = f"keeps **{ev:.0%}** of the variance globally and " if ev is not None else ""
+    lead = (f"**How much to trust this** — the projection {var_phrase}the states "
+            f"that make up this basin retain **{basin_pres:.0%}** of their "
+            f"hidden-space nearest neighbors (k={quality.k}) on average. ")
+    if basin_pres < 0.5:
+        tail = ("That is low: read the basin's *shape* as suggestive, not "
+                "established — much of the local structure did not survive the "
+                "flattening.")
+    elif basin_pres < 0.8:
+        tail = ("That is moderate: the basin's broad location is meaningful, its "
+                "fine structure less so.")
+    else:
+        tail = "That is high, so the geometry you are looking at is a faithful view."
+    return lead + tail
+
+
+def explain(report: BasinReport, traj: StateTrajectory, quality=None) -> str:
     """One report → markdown prose: the design language doing explanatory work.
 
     Every sentence is generated from measurements in the report — nothing is
-    canned lore about transformers in general.
+    canned lore about transformers in general. Pass `quality` (a
+    `projection.ProjectionQuality`) to append a trust sentence measured from
+    the projection's distortion, so the prose states how much of the basin's
+    shape survived the flattening.
     """
     tok = traj.tokens[report.token]
     parts = [
@@ -227,6 +263,9 @@ def explain(report: BasinReport, traj: StateTrajectory) -> str:
     if meaning:
         parts.append("**What it means** — inside the basin the computation is "
                      "largely decided: " + "; ".join(meaning) + ".")
+
+    if quality is not None:
+        parts.append(_fidelity_clause(report, quality))
 
     parts.append(
         "*\"Attractor\" here is descriptive geometry — where this run's "

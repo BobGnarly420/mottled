@@ -81,6 +81,8 @@ from metrics import summarize              # research metrics
 from compare import compare                # A/B trajectory comparison
 from sae import demo_sae, feature_trajectory  # SAE feature activations
 from sae import feature_field                 # SAE over the projection plane
+from sae import from_sae_lens, from_state_dict  # load a real trained SAE
+from intervene import direction_from_token, faithfulness  # data-derived steering
 from attractor import analyze, explain        # why the basin forms, in prose
 from ui import run_pipeline, render        # everything at once → plotly Figure
 from ui import run_scene, run_intervention  # multi-prompt scenes, patching
@@ -184,6 +186,15 @@ in one pass. `divergence(baseline, branch)` measures where a branch separates
 not a claimed cause. Interventions require a torch model; the synthetic backend
 is analytic and not resumable.
 
+Steering directions come from **data, not magic numbers**:
+`direction_from_token(traj, id)` is a token's own (un)embedding axis and
+`direction_from_contrast(pos, neg, layer)` is a diff-of-means between two sets
+of runs. And a steer's effect is only trustworthy if it beats the perturbation
+*size*: `faithfulness(model, prompt, layer, direction, target)` scores the
+steer against a **norm-matched random control** (`effect = steer − control`
+logit shift toward the target), so the UI can say how much of the flip was the
+direction rather than the push. This is an effect-size, still not a circuit.
+
 ### Trajectory comparison (prompt A/B)
 
 Two forward passes become comparable once their states live in **one shared
@@ -226,11 +237,22 @@ balance, and the UI plots it in the inspector.  The synthetic backend emits
 an analogous exact decomposition, so the whole path works without torch.
 
 `sae.py` applies sparse autoencoders to trajectories — it never trains them.
-An SAE is four plain numpy arrays (`w_enc`, `b_enc`, `w_dec`, `b_dec`);
-export any pretrained SAE (SAELens, dictionary-learning runs) to `.npz` and
-`load_npz` it.  `demo_sae` builds an untrained random dictionary so the
-feature pipeline — activations, top-features, UI overlay — runs offline
-(demo activations are sparse projections, *not* interpretable features).
+An SAE is four plain numpy arrays (`w_enc`, `b_enc`, `w_dec`, `b_dec`).
+SAELens' *standard* SAE runs the exact ReLU forward Mottled uses, so bringing
+a **real, trained** dictionary in is a direct copy: `sae.from_sae_lens(sae)`
+on a loaded SAELens object, `sae.from_state_dict(sd)` on any
+`W_enc`/`b_enc`/`W_dec`/`b_dec` checkpoint, or the CLI —
+
+```bash
+python scripts/convert_sae.py from-saelens gpt2-small-res-jb \
+    blocks.8.hook_resid_pre -o gpt2-res-l8.npz     # needs `pip install sae-lens`
+```
+
+— then `load_npz` it. Gated / JumpReLU / top-k SAEs use a different
+nonlinearity and are rejected loudly rather than mis-encoded. `demo_sae`
+builds an untrained random dictionary so the feature pipeline — activations,
+top-features, UI overlay — runs offline (demo activations are sparse
+projections, *not* interpretable features).
 
 ```python
 from sae import load_npz, demo_sae, feature_trajectory, top_features
@@ -411,10 +433,14 @@ land = compute_density(coords, bootstrap=32)
 print(land.density_se.max())                          # confidence field
 ```
 
-The explorer surfaces both in an **Uncertainty** inspector panel; the web
-viewer adds an **uncertainty** terrain overlay (amber = high SE) and shows
-per-state neighborhood fidelity on hover. Both quantities ride along in the
-`.mtj` scene format (`terrain.se`, per-run `quality`), so any consumer can
+Fidelity is stated **inline, not opt-in**: the explorer prints a projection
+fidelity header above every scene and flags low-preservation states with an
+amber ✕ right on the terrain (the full numbers stay in the **Uncertainty**
+panel); `attractor.explain` folds the basin's own preservation into its prose
+("read the shape as suggestive, not established" when it is low); and the web
+viewer's **uncertainty** terrain overlay (amber = high SE) is **on by default**
+whenever a scene carries a standard-error field. Both quantities ride along in
+the `.mtj` scene format (`terrain.se`, per-run `quality`), so any consumer can
 render them.
 
 ### Design language
@@ -464,6 +490,29 @@ attention-pattern capture on locally-built Llama/GPT-2 models, multi-prompt
 scene assembly, the intervention pipeline, and headless runs of the actual
 Streamlit app — single-prompt, A/B, N-prompt scene, and SAE overlay —
 (`streamlit.testing.v1.AppTest`).
+
+## What this is — and is not
+
+Mottled visualizes the **geometry of latent dynamics** — where a run's hidden
+states travel and pile up — and measures how much of that geometry survives
+the projection. It is deliberately *not* a proof of mechanism:
+
+- A basin shows states **accumulating**, not a circuit **computing**. Attention
+  flow and the intervention divergence/faithfulness readouts are *measurements*
+  of what happened, not identified causes.
+- An SAE overlay is only as interpretable as the SAE you load. The bundled
+  `demo_sae` is a random dictionary (decorative); load real weights with
+  `sae.load_npz`, `sae.from_sae_lens`, or `scripts/convert_sae.py`.
+- Every scene states its **projection fidelity** inline and flags the states
+  whose neighborhoods did not survive the flattening, so a low-fidelity picture
+  can't be mistaken for solid structure.
+
+For **verified causal claims** — circuit discovery, path patching, activation
+patching at scale — reach for a dedicated tool
+([TransformerLens](https://github.com/TransformerLensOrg/TransformerLens),
+ACDC, EAP). Mottled is the honest map you read *before* and *alongside* them,
+and it interoperates: any `HookedTransformer` is a producer via
+`models.hooked.from_hooked_transformer`.
 
 ## Non-goals (MVP)
 

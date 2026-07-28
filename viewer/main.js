@@ -661,10 +661,13 @@ function buildUI(scene) {
   ui.attnRow.hidden = !hasAttn;
   ui.attnToggle.checked = state.showAttention = false;
 
+  // Uncertainty defaults ON when the scene carries a standard-error field:
+  // the confidence of the terrain should be visible before the viewer trusts
+  // its shape, not something a user has to opt into.
   const hasSE = !!(scene.terrain && scene.terrain.se);
   ui.uncertaintyRow.hidden = !hasSE;
-  ui.uncertaintyToggle.checked = state.showUncertainty = false;
-  setTerrainColors(false);
+  ui.uncertaintyToggle.checked = state.showUncertainty = hasSE;
+  setTerrainColors(state.showUncertainty);
 }
 const fmt = (v) => (typeof v === "number" ? v.toFixed(3) : "–");
 
