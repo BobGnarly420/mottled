@@ -5,8 +5,10 @@
 ### Substance: real analysis, not demo
 - `sae.from_sae_lens` / `sae.from_state_dict` load a **real, trained** SAE
   (SAELens' standard SAE is a direct array copy of Mottled's ReLU forward);
-  non-standard architectures (gated/JumpReLU/top-k) are rejected loudly.
-  `scripts/convert_sae.py` is the CLI (`sae-lens` optional).
+  non-standard architectures (gated/JumpReLU/top-k) are rejected loudly, and an
+  `apply_b_dec_to_input=False` SAE is folded into `b_enc` so it still converts
+  exactly. The `mottled-convert-sae` CLI (`convert_sae.py`) drives it (`sae-lens`
+  optional).
 - `intervene.direction_from_token` / `direction_from_contrast`: steering deltas
   derived from data (an embedding axis, a diff-of-means) instead of hand-picked
   numbers. `intervene.faithfulness` + `target_logit_shift` score a steer against

@@ -43,9 +43,11 @@ Documentation = "https://github.com/BobGnarly420/mottled#readme"
 
 [project.scripts]
 mottled = "cli:main"
+mottled-convert-sae = "convert_sae:main"
 
 [tool.setuptools]
-py-modules = ["bvh", "cache", "capture", "cli", "compare", "config", "density",
-              "design_tokens", "intervene", "metrics", "neighbors", "projection",
-              "sae", "serve", "statefile", "terrain", "trajectory", "ui"]
+py-modules = ["bvh", "cache", "capture", "cli", "compare", "config", "convert_sae",
+              "density", "design_tokens", "intervene", "metrics", "neighbors",
+              "projection", "sae", "serve", "statefile", "terrain", "trajectory",
+              "ui"]
 packages = ["models"]

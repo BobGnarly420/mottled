@@ -232,8 +232,7 @@ def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
     the UI can say how much of the effect is the steering direction rather than
     the perturbation's raw size.
     """
-    from intervene import (Faithfulness, Perturb, divergence, intervene,
-                           target_logit_shift)
+    from intervene import divergence, intervene, score_against_control
 
     baseline = _capture_with(cfg, prompt, model=model, tokenizer=tokenizer)
     branch = intervene(model, prompt, interventions, tokenizer=tokenizer,
@@ -250,24 +249,11 @@ def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
             and len(interventions) == 1 and interventions[0].kind == "perturb"
             and interventions[0].vector is not None):
         iv = interventions[0]
-        delta = np.asarray(iv.vector, dtype=np.float32)
-        rng = np.random.default_rng(cfg.seed)
-        r = rng.normal(size=delta.shape).astype(np.float32)
-        r *= float(np.linalg.norm(delta)) / max(float(np.linalg.norm(r)), 1e-12)
-        control = intervene(model, prompt, [Perturb(iv.layer, r, token=iv.token)],
-                            tokenizer=tokenizer, top_k=cfg.top_k, device=cfg.device,
-                            dtype=cfg.dtype, keep_logits=cfg.keep_logits)
         tok = iv.token if iv.token is not None else -1
-        t = int(tok) % baseline.n_tokens
-        steer_shift = target_logit_shift(baseline, branch, target_id, tok)
-        control_shift = target_logit_shift(baseline, control, target_id, tok)
-        hits = bool(int(np.asarray(branch.logits[-1, t]).argmax()) == int(target_id))
-        tt = (baseline.vocab[target_id]
-              if baseline.vocab and 0 <= target_id < len(baseline.vocab) else None)
-        result["faithfulness"] = Faithfulness(
-            target=int(target_id), target_token=tt, steer_shift=steer_shift,
-            control_shift=control_shift, effect=steer_shift - control_shift,
-            steer_hits_target=hits, scale=float(np.linalg.norm(delta)), token=t)
+        result["faithfulness"] = score_against_control(
+            model, prompt, baseline, branch, iv.vector, iv.layer, int(target_id),
+            token=tok, tokenizer=tokenizer, seed=cfg.seed, device=cfg.device,
+            dtype=cfg.dtype, top_k=cfg.top_k)
     return result
 
 
@@ -439,8 +425,8 @@ def render(
         if lx:
             fig.add_trace(go.Scatter3d(
                 x=lx, y=ly, z=lz, mode="markers",
-                marker={"size": 7, "symbol": "x", "color": "#D4934A",
-                        "line": {"color": "#D4934A", "width": 1}},
+                marker={"size": 7, "symbol": "x", "color": tokens.AMBER,
+                        "line": {"color": tokens.AMBER, "width": 1}},
                 name=f"low fidelity (<{low_fidelity:.0%} k-NN kept)",
                 hoverinfo="text", text=ltext))
 
@@ -885,10 +871,11 @@ def main() -> None:
 
     quality = result.get("quality")
     with col_viz:
+        low_fidelity = 0.5  # one threshold drives both the prose and the ✕ markers
         if quality is not None:
             ev = (f"keeps **{quality.explained_variance:.0%}** of the variance · "
                   if quality.explained_variance is not None else "")
-            low = float((np.asarray(quality.preservation) < 0.5).mean())
+            low = float((np.asarray(quality.preservation) < low_fidelity).mean())
             st.markdown(
                 f"**Projection fidelity** — {ev}mean neighborhood preservation "
                 f"**{quality.preservation.mean():.2f}** (k={quality.k}). "
@@ -903,7 +890,7 @@ def main() -> None:
                      extra_runs=extra_runs,
                      overlay=overlay, overlay_label=overlay_label,
                      show_attention=attention_on,
-                     basin=basin, quality=quality)
+                     basin=basin, quality=quality, low_fidelity=low_fidelity)
         st.plotly_chart(fig, use_container_width=True, key="scene")
         st.caption('The terrain is a density field over the projected states '
                    'themselves — height means "many states landed here", not an '
@@ -921,7 +908,7 @@ def main() -> None:
                 "of what happened, not identified causes.\n"
                 "- An SAE overlay is only as interpretable as the SAE you load; the "
                 "bundled `demo_sae` is a random dictionary (decorative). Load real "
-                "weights with `sae.load_npz` / `scripts/convert_sae.py`.\n"
+                "weights with `sae.load_npz` / the `mottled-convert-sae` CLI.\n"
                 "- For **verified causal claims** — circuit discovery, path patching, "
                 "activation patching at scale — use a dedicated tool "
                 "(TransformerLens, ACDC, EAP). Mottled is the honest map you read "

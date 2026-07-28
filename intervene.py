@@ -307,6 +307,46 @@ def target_logit_shift(baseline: StateTrajectory, branch: StateTrajectory,
     return new - base
 
 
+def score_against_control(model, prompt: str, baseline: StateTrajectory,
+                          branch: StateTrajectory, delta: np.ndarray, layer: int,
+                          target: int, *, token: int = -1,
+                          scale: float | None = None, tokenizer=None, seed: int = 0,
+                          device: str = "auto", dtype: str = "float32",
+                          top_k: int = 5) -> Faithfulness:
+    """Score an already-computed steer against a norm-matched random control.
+
+    Given `baseline` and the `branch` produced by applying `delta` at
+    `(layer, token)`, apply a random delta of *identical* L2 norm and compare
+    how far each moves the logit lens toward `target`. Factored out so both
+    `faithfulness()` and `ui.run_intervention` — which already holds
+    `baseline`/`branch` and must not pay for a second branch forward pass —
+    construct the control the same way. `scale` records the steer magnitude and
+    defaults to ``||delta||``.
+    """
+    delta = np.asarray(delta, dtype=np.float32)
+    rng = np.random.default_rng(seed)
+    r = rng.normal(size=delta.shape).astype(np.float32)
+    r *= float(np.linalg.norm(delta)) / max(float(np.linalg.norm(r)), 1e-12)
+    control = intervene(model, prompt, [Perturb(layer, r, token=token)],
+                        tokenizer=tokenizer, top_k=top_k, device=device,
+                        dtype=dtype, keep_logits=True)
+
+    steer_shift = target_logit_shift(baseline, branch, target, token)
+    control_shift = target_logit_shift(baseline, control, target, token)
+    t = int(token) % baseline.n_tokens
+    hits = bool(int(np.asarray(branch.logits[-1, t]).argmax()) == int(target))
+    target_token = None
+    if baseline.vocab is not None and 0 <= int(target) < len(baseline.vocab):
+        target_token = baseline.vocab[int(target)]
+
+    return Faithfulness(
+        target=int(target), target_token=target_token,
+        steer_shift=steer_shift, control_shift=control_shift,
+        effect=steer_shift - control_shift, steer_hits_target=hits,
+        scale=float(np.linalg.norm(delta) if scale is None else scale), token=t,
+    )
+
+
 def faithfulness(model, prompt: str, layer: int, direction: np.ndarray,
                  target: int, *, token: int = -1, scale: float = 1.0,
                  tokenizer=None, baseline: StateTrajectory | None = None,
@@ -333,24 +373,7 @@ def faithfulness(model, prompt: str, layer: int, direction: np.ndarray,
                        tokenizer=tokenizer, top_k=top_k, device=device,
                        dtype=dtype, keep_logits=True)
 
-    rng = np.random.default_rng(seed)
-    r = rng.normal(size=delta.shape).astype(np.float32)
-    r *= float(np.linalg.norm(delta)) / max(float(np.linalg.norm(r)), 1e-12)
-    control = intervene(model, prompt, [Perturb(layer, r, token=token)],
-                        tokenizer=tokenizer, top_k=top_k, device=device,
-                        dtype=dtype, keep_logits=True)
-
-    steer_shift = target_logit_shift(baseline, branch, target, token)
-    control_shift = target_logit_shift(baseline, control, target, token)
-    t = int(token) % baseline.n_tokens
-    hits = bool(int(np.asarray(branch.logits[-1, t]).argmax()) == int(target))
-    target_token = None
-    if baseline.vocab is not None and 0 <= int(target) < len(baseline.vocab):
-        target_token = baseline.vocab[int(target)]
-
-    return Faithfulness(
-        target=int(target), target_token=target_token,
-        steer_shift=steer_shift, control_shift=control_shift,
-        effect=steer_shift - control_shift, steer_hits_target=hits,
-        scale=float(scale), token=t,
-    )
+    return score_against_control(
+        model, prompt, baseline, branch, delta, layer, target, token=token,
+        scale=scale, tokenizer=tokenizer, seed=seed, device=device, dtype=dtype,
+        top_k=top_k)

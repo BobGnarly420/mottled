@@ -167,24 +167,63 @@ def from_sae_lens(sae, labels: list[str] | None = None) -> SAE:
     """Convert a loaded SAELens SAE object into a Mottled SAE.
 
     SAELens' *standard* SAE stores `W_enc` (d_in, d_sae), `b_enc`, `W_dec`
-    (d_sae, d_in), `b_dec` and runs the exact forward Mottled applies
-    (subtract `b_dec`, affine encode, ReLU, decode), so conversion is a direct
-    array copy. Non-standard architectures (gated / jumprelu / top-k) use a
-    different nonlinearity than our plain ReLU, so they are rejected loudly
-    rather than silently mis-encoded — convert those with their own tooling.
+    (d_sae, d_in), `b_dec` and runs the same ReLU forward Mottled applies, so
+    conversion is a direct array copy. Two config options change that forward,
+    and we handle each explicitly rather than silently mis-encoding a nominally
+    "standard" SAE:
+
+    * ``apply_b_dec_to_input=False`` — the source encodes ``h @ W_enc + b_enc``
+      without the ``b_dec`` subtraction Mottled always does. That constant folds
+      exactly into ``b_enc`` (``b_enc += b_dec @ W_enc``), so the converted
+      encoder stays numerically identical.
+    * ``normalize_activations`` — a runtime input rescaling Mottled does not do
+      and cannot fold into a fixed dictionary, so it is rejected loudly.
+
+    Non-standard architectures (gated / jumprelu / top-k) use a different
+    nonlinearity than our plain ReLU and are rejected — detected from
+    ``cfg.architecture`` / ``activation_fn`` and, so the gate cannot fail open
+    when a config is missing, from the tell-tale weights they carry.
     """
     cfg = getattr(sae, "cfg", None)
-    arch = getattr(cfg, "architecture", None) if cfg is not None else None
-    if callable(arch):
-        arch = arch()
+
+    def _cfg(name):
+        v = getattr(cfg, name, None) if cfg is not None else None
+        return v() if callable(v) else v
+
+    arch = _cfg("architecture")
     if arch is not None and str(arch).lower() not in {"standard", "relu"}:
         raise ValueError(
             f"unsupported SAE architecture {arch!r}: Mottled applies a plain ReLU "
             "(standard) SAE. Gated / JumpReLU / top-k SAEs encode differently and "
             "must be converted with their own tooling first.")
-    state = {"W_enc": sae.W_enc, "b_enc": sae.b_enc,
-             "W_dec": sae.W_dec, "b_dec": sae.b_dec}
-    return from_state_dict(state, labels=labels)
+    act = _cfg("activation_fn") or _cfg("activation_fn_str")
+    if act is not None and str(act).lower() not in {"relu", "", "none"}:
+        raise ValueError(
+            f"unsupported SAE activation_fn {act!r}: Mottled applies a plain ReLU. "
+            "Top-k / other activations must be converted with their own tooling.")
+    # Fail closed even if the config is absent: these weights exist only on
+    # gated SAEs, whose forward is not our ReLU.
+    for attr, kind in (("W_gate", "gated"), ("r_mag", "gated")):
+        if getattr(sae, attr, None) is not None:
+            raise ValueError(
+                f"this looks like a {kind} SAE (carries {attr!r}); Mottled applies "
+                "a plain ReLU. Convert it with its own tooling first.")
+    norm = _cfg("normalize_activations")
+    if norm not in (None, False, "none", "None"):
+        raise ValueError(
+            f"this SAE normalizes activations (normalize_activations={norm!r}), an "
+            "input rescaling Mottled does not apply; its features would not match. "
+            "Export it without activation normalization first.")
+
+    out = from_state_dict({"W_enc": sae.W_enc, "b_enc": sae.b_enc,
+                           "W_dec": sae.W_dec, "b_dec": sae.b_dec}, labels=labels)
+    if _cfg("apply_b_dec_to_input") is False:
+        # Source skipped the b_dec subtraction on the encoder input; Mottled's
+        # forward always subtracts it, so fold the constant back into b_enc:
+        # (h - b_dec) @ W_enc + (b_enc + b_dec @ W_enc) == h @ W_enc + b_enc.
+        out.b_enc = (out.b_enc + out.b_dec @ out.w_enc).astype(np.float32)
+        out.validate()
+    return out
 
 
 def demo_sae(dim: int, n_features: int = 256, seed: int = 0, bias: float = 0.05) -> SAE:

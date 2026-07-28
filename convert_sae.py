@@ -5,15 +5,16 @@ Mottled *applies* SAEs, it never trains them (a non-goal); this is how you
 bring a real, trained dictionary in so the feature overlay shows interpretable
 features instead of ``demo_sae``'s random directions.
 
-Two sources:
+Installed with the package as the ``mottled-convert-sae`` command (from a
+source checkout without installing, use ``python -m convert_sae``). Two sources:
 
-    # a SAELens release (needs `pip install sae-lens`)
-    python scripts/convert_sae.py from-saelens \
+    # a SAELens release (needs `pip install "mottled[sae]"`)
+    mottled-convert-sae from-saelens \
         gpt2-small-res-jb blocks.8.hook_resid_pre -o gpt2-res-l8.npz
 
     # a raw state dict (.safetensors or torch .pt) using the standard
     # W_enc / b_enc / W_dec / b_dec keys
-    python scripts/convert_sae.py from-file sae.safetensors -o sae.npz
+    mottled-convert-sae from-file sae.safetensors -o sae.npz
 
 The output round-trips through ``sae.load_npz`` and drops straight into
 ``feature_trajectory`` / ``feature_field`` and the UI overlay.
@@ -21,13 +22,9 @@ The output round-trips through ``sae.load_npz`` and drops straight into
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
-# Allow running as a plain script (python scripts/convert_sae.py ...).
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import sae as S  # noqa: E402
+import sae as S
 
 
 def _load_state_dict(path: str) -> dict:
@@ -60,23 +57,33 @@ def _from_file(args) -> S.SAE:
     return S.from_state_dict(_load_state_dict(args.path))
 
 
-def main(argv=None) -> None:
+def _build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("-o", "--out", required=True, help="output .npz path")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    sl = sub.add_parser("from-saelens", help="fetch a SAELens release")
+    # -o/--out belongs on each subcommand, not the parent: the subparsers action
+    # consumes the subcommand name and everything after it, so a required option
+    # added to the parent before add_subparsers can never be given on the command
+    # line (it would have to precede the subcommand). A shared parent parser keeps
+    # the definition in one place.
+    out = argparse.ArgumentParser(add_help=False)
+    out.add_argument("-o", "--out", required=True, help="output .npz path")
+
+    sl = sub.add_parser("from-saelens", parents=[out], help="fetch a SAELens release")
     sl.add_argument("release")
     sl.add_argument("sae_id")
     sl.add_argument("--device", default="cpu")
     sl.set_defaults(func=_from_saelens)
 
-    ff = sub.add_parser("from-file", help="convert a local state dict")
+    ff = sub.add_parser("from-file", parents=[out], help="convert a local state dict")
     ff.add_argument("path")
     ff.set_defaults(func=_from_file)
+    return ap
 
-    args = ap.parse_args(argv)
+
+def main(argv=None) -> None:
+    args = _build_parser().parse_args(argv)
     sae = args.func(args)
     S.save_npz(sae, args.out)
     print(f"wrote {args.out}: dim={sae.dim}, features={sae.n_features}")

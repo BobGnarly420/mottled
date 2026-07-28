@@ -245,8 +245,8 @@ on a loaded SAELens object, `sae.from_state_dict(sd)` on any
 `W_enc`/`b_enc`/`W_dec`/`b_dec` checkpoint, or the CLI —
 
 ```bash
-python scripts/convert_sae.py from-saelens gpt2-small-res-jb \
-    blocks.8.hook_resid_pre -o gpt2-res-l8.npz     # needs `pip install sae-lens`
+mottled-convert-sae from-saelens gpt2-small-res-jb \
+    blocks.8.hook_resid_pre -o gpt2-res-l8.npz     # needs `pip install "mottled[sae]"`
 ```
 
 — then `load_npz` it. Gated / JumpReLU / top-k SAEs use a different
@@ -504,7 +504,7 @@ the projection. It is deliberately *not* a proof of mechanism:
   of what happened, not identified causes.
 - An SAE overlay is only as interpretable as the SAE you load. The bundled
   `demo_sae` is a random dictionary (decorative); load real weights with
-  `sae.load_npz`, `sae.from_sae_lens`, or `scripts/convert_sae.py`.
+  `sae.load_npz`, `sae.from_sae_lens`, or the `mottled-convert-sae` CLI.
 - Every scene states its **projection fidelity** inline and flags the states
   whose neighborhoods did not survive the flattening, so a low-fidelity picture
   can't be mistaken for solid structure.
