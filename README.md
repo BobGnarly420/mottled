@@ -35,6 +35,7 @@ pip install "mottled[models] @ git+https://github.com/BobGnarly420/mottled"
 mottled                      # the Streamlit explorer
 mottled serve --model gpt2   # web viewer + in-browser capture API
 mottled export "The capital of France is" -o scene.mtj
+mottled export "The residual stream" --generate 8 -o decode.mtj   # + continuation
 ```
 
 (Or from a clone: `pip install -r requirements.txt && streamlit run ui.py`.)
@@ -100,6 +101,14 @@ print(summarize(traj, coords, token=-1))
 `capture(model, prompt)` returns `hidden[layer][token][dimension]` wrapped in
 a `StateTrajectory`, with logit-lens logits, entropy, and top-k predictions
 attached per state.
+
+`generate_and_capture(model, prompt, max_new_tokens=8)` adds the second time
+axis: it decodes (greedy, or seeded sampling with `temperature=`) and then
+captures prompt + continuation in one pass. Because attention is causal that
+single pass reproduces the states that existed at every decode step exactly,
+so the result is an ordinary `StateTrajectory`; the per-step decode record
+(token, probability, entropy) travels in `meta["generation"]` and follows the
+trajectory into scene files, both viewers, and `mottled export --generate N`.
 
 ## Architecture
 

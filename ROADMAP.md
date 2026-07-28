@@ -27,11 +27,12 @@ Today Mottled has one time axis: layers. Autoregressive decode is the second.
       `meta["generation"]`.
 - [x] Synthetic backend generates with its own logit lens, so the decode axis
       works dependency-free.
-- [ ] Scene + explorer wiring: decode-boundary marker on the terrain, decode
-      scrubber alongside the layer scrubber.
-- [ ] Web viewer: animate the trajectory *per generated token*; `.mtj` carries
-      the generation record.
-- [ ] CLI: `mottled export --generate N`.
+- [x] Scene + explorer wiring: decode knobs, inline decode header, generated
+      trajectories visually distinct, per-step decode inspector.
+- [ ] Web viewer: render the decode axis; `.mtj` carries the generation
+      record (writer side done).
+- [x] CLI: `mottled export --generate N [--temperature T]`; the capture API
+      accepts `generate` / `temperature`.
 
 ### M2 — Real SAEs by default
 `from_sae_lens` exists; nobody sees a real feature without work.

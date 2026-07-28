@@ -15,6 +15,13 @@
 - The synthetic backend generates with its own logit lens
   (`models.synthetic.generate_and_capture`), so the decode axis works
   without torch.
+- The decode axis is wired through every surface: `MarbleConfig`
+  (`generate_tokens`, `generate_temperature`; cache keys bumped), scene
+  `.mtj` files (additive per-run `generation` record), the capture API
+  (`POST /api/scene` accepts `generate` / `temperature`, validated),
+  `mottled export --generate N [--temperature T]`, and the explorer
+  (decode knobs, inline decode header, `+`-prefixed open-diamond
+  generated trajectories, per-step decode inspector).
 
 ### Substance: real analysis, not demo
 - `sae.from_sae_lens` / `sae.from_state_dict` load a **real, trained** SAE
