@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Real SAEs, measured (roadmap M2, first slice)
+- `sae.fetch_from_hub`: download a trained SAE from any SAELens-format HF
+  repo (default: `jbloom/GPT2-Small-SAEs-Reformatted`, layer-8 resid_pre)
+  with no `sae-lens` dependency — same fail-closed gates (standard ReLU
+  only, no activation normalization, exact `apply_b_dec_to_input` fold,
+  now shared via `_require_standard`). `mottled-convert-sae fetch` drives
+  it from the CLI.
+- `sae.fit_report`: measured calibration of a dictionary against a capture
+  (per-layer median reconstruction error + firing density, best layer).
+  Provenance is not calibration — public GPT-2 SAEs are trained on
+  TransformerLens-processed residuals (folding/centering changes residual
+  values while preserving the function), so the same SAE reads ~24% error
+  on a TL capture and ~340% on raw HF states. The explorer prints the
+  measured fit wherever features are shown and calls a bad fit
+  extrapolation, pointing at the calibrated TL pairing.
+- The explorer defaults GPT-2-width captures to the trained dictionary
+  (fetched once, cached; untick for the demo), and feature labels flow
+  through `SAE.feature_label` everywhere.
+
 ### Generation axis (roadmap M1)
 - `ROADMAP.md`: the end goal (Mottled 1.0 — the honest atlas of latent
   dynamics) decomposed into milestones M1–M6.

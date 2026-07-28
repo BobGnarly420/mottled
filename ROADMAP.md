@@ -37,10 +37,18 @@ Today Mottled has one time axis: layers. Autoregressive decode is the second.
 
 ### M2 — Real SAEs by default
 `from_sae_lens` exists; nobody sees a real feature without work.
-- [ ] Fetch-on-demand small trained GPT-2 SAE (cached, checksummed, optional).
-- [ ] Regenerate bundled sample scenes with real features; the feature-field
-      domain coloring shows actual semantics on first contact.
-- [ ] Feature labels (from SAELens metadata when present) in both viewers.
+- [x] Fetch-on-demand trained GPT-2 SAE (`sae.fetch_from_hub`, HF-hub cached,
+      no sae-lens dep; `mottled-convert-sae fetch`); explorer defaults to it
+      for GPT-2-width captures.
+- [x] Measured calibration (`sae.fit_report`) printed wherever features are
+      shown — provenance is not calibration (TL-processed vs raw HF
+      residuals differ), so the fit is measured, and a bad fit is labeled
+      extrapolation.
+- [ ] Regenerate bundled sample scenes with real features (via the TL
+      pairing); the feature-field domain coloring shows actual semantics on
+      first contact.
+- [ ] Feature labels (from SAELens/Neuronpedia metadata when present) in
+      both viewers.
 
 ### M3 — A tangible viewer
 - [ ] Wire `bvh.py` (built, tested, currently unwired) into the WebGL viewer:

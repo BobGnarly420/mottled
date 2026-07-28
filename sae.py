@@ -190,17 +190,9 @@ def from_sae_lens(sae, labels: list[str] | None = None) -> SAE:
         v = getattr(cfg, name, None) if cfg is not None else None
         return v() if callable(v) else v
 
-    arch = _cfg("architecture")
-    if arch is not None and str(arch).lower() not in {"standard", "relu"}:
-        raise ValueError(
-            f"unsupported SAE architecture {arch!r}: Mottled applies a plain ReLU "
-            "(standard) SAE. Gated / JumpReLU / top-k SAEs encode differently and "
-            "must be converted with their own tooling first.")
-    act = _cfg("activation_fn") or _cfg("activation_fn_str")
-    if act is not None and str(act).lower() not in {"relu", "", "none"}:
-        raise ValueError(
-            f"unsupported SAE activation_fn {act!r}: Mottled applies a plain ReLU. "
-            "Top-k / other activations must be converted with their own tooling.")
+    _require_standard(_cfg("architecture"),
+                      _cfg("activation_fn") or _cfg("activation_fn_str"),
+                      _cfg("normalize_activations"))
     # Fail closed even if the config is absent: these weights exist only on
     # gated SAEs, whose forward is not our ReLU.
     for attr, kind in (("W_gate", "gated"), ("r_mag", "gated")):
@@ -208,22 +200,126 @@ def from_sae_lens(sae, labels: list[str] | None = None) -> SAE:
             raise ValueError(
                 f"this looks like a {kind} SAE (carries {attr!r}); Mottled applies "
                 "a plain ReLU. Convert it with its own tooling first.")
-    norm = _cfg("normalize_activations")
+    out = from_state_dict({"W_enc": sae.W_enc, "b_enc": sae.b_enc,
+                           "W_dec": sae.W_dec, "b_dec": sae.b_dec}, labels=labels)
+    if _cfg("apply_b_dec_to_input") is False:
+        out.b_enc = _fold_b_dec(out)
+        out.validate()
+    return out
+
+
+def _require_standard(arch, act, norm) -> None:
+    """Reject SAE configs whose forward is not Mottled's plain ReLU."""
+    if arch is not None and str(arch).lower() not in {"standard", "relu"}:
+        raise ValueError(
+            f"unsupported SAE architecture {arch!r}: Mottled applies a plain ReLU "
+            "(standard) SAE. Gated / JumpReLU / top-k SAEs encode differently and "
+            "must be converted with their own tooling first.")
+    if act is not None and str(act).lower() not in {"relu", "", "none"}:
+        raise ValueError(
+            f"unsupported SAE activation_fn {act!r}: Mottled applies a plain ReLU. "
+            "Top-k / other activations must be converted with their own tooling.")
     if norm not in (None, False, "none", "None"):
         raise ValueError(
             f"this SAE normalizes activations (normalize_activations={norm!r}), an "
             "input rescaling Mottled does not apply; its features would not match. "
             "Export it without activation normalization first.")
 
-    out = from_state_dict({"W_enc": sae.W_enc, "b_enc": sae.b_enc,
-                           "W_dec": sae.W_dec, "b_dec": sae.b_dec}, labels=labels)
-    if _cfg("apply_b_dec_to_input") is False:
-        # Source skipped the b_dec subtraction on the encoder input; Mottled's
-        # forward always subtracts it, so fold the constant back into b_enc:
-        # (h - b_dec) @ W_enc + (b_enc + b_dec @ W_enc) == h @ W_enc + b_enc.
-        out.b_enc = (out.b_enc + out.b_dec @ out.w_enc).astype(np.float32)
+
+def _fold_b_dec(out: SAE) -> np.ndarray:
+    """b_enc with the missing b_dec subtraction folded in, exactly:
+    (h - b_dec) @ W_enc + (b_enc + b_dec @ W_enc) == h @ W_enc + b_enc."""
+    return (out.b_enc + out.b_dec @ out.w_enc).astype(np.float32)
+
+
+def fetch_from_hub(
+    repo_id: str = "jbloom/GPT2-Small-SAEs-Reformatted",
+    subfolder: str = "blocks.8.hook_resid_pre",
+    revision: str | None = None,
+    cache_dir: str | Path | None = None,
+) -> SAE:
+    """Download a trained SAE from a SAELens-format Hugging Face repo.
+
+    The real-weights path with no ``sae-lens`` dependency: SAELens releases
+    store ``sae_weights.safetensors`` (the standard four arrays) next to a
+    ``cfg.json`` per hook point. This fetches both through
+    ``huggingface_hub`` (cached under the standard HF cache, integrity
+    checked against the repo's manifest), applies the same fail-closed
+    gates as ``from_sae_lens`` (standard ReLU forward only, no activation
+    normalization, exact ``apply_b_dec_to_input`` fold), and returns a
+    ready SAE.
+
+    The default is Joseph Bloom's GPT-2-small residual-stream release —
+    ~150 MB on first fetch, then cached. Remember what an SAE is calibrated
+    on: this dictionary was trained at one hook point (layer 8's
+    ``resid_pre``); applying it at other layers is extrapolation, and the
+    UI says so.
+
+    Needs ``huggingface_hub`` + ``safetensors`` (both ship with the
+    ``models`` extra via transformers).
+    """
+    import json
+
+    try:
+        from huggingface_hub import hf_hub_download
+        from safetensors.numpy import load_file
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError(
+            "fetching a trained SAE needs huggingface_hub and safetensors "
+            '(pip install "mottled[models]")') from exc
+
+    common = {"repo_id": repo_id, "subfolder": subfolder,
+              "revision": revision, "cache_dir": cache_dir}
+    cfg_path = hf_hub_download(filename="cfg.json", **common)
+    cfg = json.loads(Path(cfg_path).read_text())
+    _require_standard(cfg.get("architecture"),
+                      cfg.get("activation_fn_str") or cfg.get("activation_fn"),
+                      cfg.get("normalize_activations"))
+
+    weights_path = hf_hub_download(filename="sae_weights.safetensors", **common)
+    out = from_state_dict(dict(load_file(weights_path)))
+    if cfg.get("apply_b_dec_to_input") is False:
+        out.b_enc = _fold_b_dec(out)
         out.validate()
     return out
+
+
+@dataclass
+class SAEFit:
+    """Measured fit of a dictionary to one capture — not assumed, computed.
+
+    recon_error : (L,) median relative L2 reconstruction error per layer
+    active_frac : (L,) mean fraction of features firing per layer
+    best_layer  : layer where the dictionary reconstructs best
+    """
+
+    recon_error: np.ndarray
+    active_frac: np.ndarray
+    best_layer: int
+
+    @property
+    def best_error(self) -> float:
+        return float(self.recon_error[self.best_layer])
+
+
+def fit_report(sae: SAE, traj: StateTrajectory) -> SAEFit:
+    """How well does this dictionary fit this capture's activations?
+
+    An SAE is only calibrated to the activation distribution it was trained
+    on — a specific model, hook point, *and preprocessing* (TransformerLens'
+    weight folding/centering changes residual values while preserving the
+    function, so a TL-trained SAE mis-fits raw HF states). This measures the
+    fit instead of trusting provenance: reconstruction error and firing
+    density per layer. A best-layer error near the SAE's training loss
+    (~0.1–0.3 for public residual SAEs) means calibrated; errors ≫ 1 mean
+    the features shown are extrapolation, and the UI says so.
+    """
+    hidden = traj.hidden.astype(np.float32)
+    err = np.median(sae.reconstruction_error(hidden), axis=-1)     # (L,)
+    active = (sae.encode(hidden) > 0).mean(axis=(1, 2))            # (L,)
+    return SAEFit(recon_error=err.astype(np.float32),
+                  active_frac=active.astype(np.float32),
+                  best_layer=int(np.argmin(err)))
 
 
 def demo_sae(dim: int, n_features: int = 256, seed: int = 0, bias: float = 0.05) -> SAE:

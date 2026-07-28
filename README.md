@@ -97,6 +97,7 @@ from compare import compare                # A/B trajectory comparison
 from sae import demo_sae, feature_trajectory  # SAE feature activations
 from sae import feature_field                 # SAE over the projection plane
 from sae import from_sae_lens, from_state_dict  # load a real trained SAE
+from sae import fetch_from_hub, fit_report      # fetch one + measure its fit
 from intervene import direction_from_token, faithfulness  # data-derived steering
 from attractor import analyze, explain        # why the basin forms, in prose
 from ui import run_pipeline, render        # everything at once → plotly Figure
@@ -524,9 +525,17 @@ the projection. It is deliberately *not* a proof of mechanism:
 - A basin shows states **accumulating**, not a circuit **computing**. Attention
   flow and the intervention divergence/faithfulness readouts are *measurements*
   of what happened, not identified causes.
-- An SAE overlay is only as interpretable as the SAE you load. The bundled
-  `demo_sae` is a random dictionary (decorative); load real weights with
-  `sae.load_npz`, `sae.from_sae_lens`, or the `mottled-convert-sae` CLI.
+- An SAE overlay is only as interpretable as the SAE you load — *on the
+  activation distribution it was trained on*. The explorer fetches a real
+  trained dictionary for GPT-2 (`sae.fetch_from_hub`, no sae-lens needed) and
+  prints its **measured fit** (`sae.fit_report`: reconstruction error and
+  firing density per layer) wherever features are shown, because provenance
+  is not calibration: public GPT-2 SAEs are trained on TransformerLens-
+  processed residuals, which differ from raw HF states even though the model
+  computes the same function. When the fit is bad the UI says the features
+  are extrapolation and points at the calibrated pairing
+  (`models.hooked.from_hooked_transformer`). The bundled `demo_sae` remains
+  a random dictionary (decorative), and now measures as such.
 - Every scene states its **projection fidelity** inline and flags the states
   whose neighborhoods did not survive the flattening, so a low-fidelity picture
   can't be mistaken for solid structure.

@@ -466,3 +466,103 @@ def test_streamlit_app_sae_overlay():
     at.selectbox(key="feature").select(at.selectbox(key="feature").options[1])
     at.run()
     assert not at.exception
+
+
+# ------------------------------------------------------------- hub fetching
+
+def _fake_saelens_repo(tmp_path, cfg: dict, seed=3):
+    """Write sae_weights.safetensors + cfg.json the way SAELens releases do."""
+    import json
+
+    from safetensors.numpy import save_file
+
+    rng = np.random.default_rng(seed)
+    d, f = 8, 16
+    sd = {"W_enc": rng.normal(size=(d, f)).astype(np.float32),
+          "b_enc": rng.normal(size=f).astype(np.float32),
+          "W_dec": rng.normal(size=(f, d)).astype(np.float32),
+          "b_dec": rng.normal(size=d).astype(np.float32)}
+    folder = tmp_path / "blocks.8.hook_resid_pre"
+    folder.mkdir(parents=True, exist_ok=True)
+    save_file(sd, str(folder / "sae_weights.safetensors"))
+    (folder / "cfg.json").write_text(json.dumps(cfg))
+    return sd, folder
+
+
+def _patch_hub(monkeypatch, folder):
+    import huggingface_hub
+
+    def fake_download(filename, repo_id=None, subfolder=None, revision=None,
+                      cache_dir=None, **kw):
+        return str(folder / filename)
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_download)
+
+
+def test_fetch_from_hub_converts_exactly(tmp_path, monkeypatch):
+    sd, folder = _fake_saelens_repo(
+        tmp_path, {"architecture": "standard", "activation_fn_str": "relu",
+                   "apply_b_dec_to_input": True, "normalize_activations": "none"})
+    _patch_hub(monkeypatch, folder)
+    out = S.fetch_from_hub("any/repo", "blocks.8.hook_resid_pre")
+    h = np.random.default_rng(0).normal(size=(5, 8)).astype(np.float32)
+    ref = np.maximum((h - sd["b_dec"]) @ sd["W_enc"] + sd["b_enc"], 0.0)
+    np.testing.assert_allclose(out.encode(h), ref, rtol=1e-6)
+
+
+def test_fetch_from_hub_folds_b_dec(tmp_path, monkeypatch):
+    """apply_b_dec_to_input=False sources still convert exactly."""
+    sd, folder = _fake_saelens_repo(
+        tmp_path, {"architecture": "standard", "apply_b_dec_to_input": False})
+    _patch_hub(monkeypatch, folder)
+    out = S.fetch_from_hub("any/repo", "blocks.8.hook_resid_pre")
+    h = np.random.default_rng(1).normal(size=(5, 8)).astype(np.float32)
+    ref = np.maximum(h @ sd["W_enc"] + sd["b_enc"], 0.0)  # the source forward
+    np.testing.assert_allclose(out.encode(h), ref, rtol=1e-5, atol=1e-6)
+
+
+def test_fetch_from_hub_rejects_nonstandard(tmp_path, monkeypatch):
+    _, folder = _fake_saelens_repo(tmp_path, {"architecture": "jumprelu"})
+    _patch_hub(monkeypatch, folder)
+    with pytest.raises(ValueError, match="architecture"):
+        S.fetch_from_hub("any/repo", "blocks.8.hook_resid_pre")
+
+
+def test_fetch_from_hub_rejects_normalized(tmp_path, monkeypatch):
+    _, folder = _fake_saelens_repo(
+        tmp_path, {"architecture": "standard",
+                   "normalize_activations": "expected_average_only_in"})
+    _patch_hub(monkeypatch, folder)
+    with pytest.raises(ValueError, match="normalize"):
+        S.fetch_from_hub("any/repo", "blocks.8.hook_resid_pre")
+
+
+# ------------------------------------------------------------ fit reporting
+
+def test_fit_report_identity_reconstructs_perfectly():
+    traj = synthetic.capture(PROMPT)
+    fit = S.fit_report(_identity_sae(traj.dim), traj)
+    L = traj.n_layers
+    assert fit.recon_error.shape == (L,) and fit.active_frac.shape == (L,)
+    # identity dictionary reconstructs every state exactly (up to ReLU halving:
+    # only non-negative components survive, so error is not zero — but the
+    # ordering vs an unrelated dictionary is what the UI relies on)
+    assert 0 <= fit.best_layer < L
+    assert fit.best_error == fit.recon_error[fit.best_layer]
+
+
+def test_fit_report_flags_mismatched_dictionary():
+    """A dictionary that fits the activations reads near-zero error; an
+    unrelated one reads high — the signal the UI's warning rests on."""
+    traj = synthetic.capture(PROMPT)
+    D = traj.dim
+    # exact ReLU autoencoder: acts = [ReLU(h), ReLU(-h)], decode restores h
+    eye = np.eye(D, dtype=np.float32)
+    signed = np.concatenate([eye, -eye], axis=1)          # (D, 2D)
+    matched = S.SAE(w_enc=signed, b_enc=np.zeros(2 * D, np.float32),
+                    w_dec=signed.T.copy(), b_dec=np.zeros(D, np.float32))
+    mismatched = S.demo_sae(D, 2 * D, seed=9)
+    fit_m = S.fit_report(matched, traj)
+    fit_x = S.fit_report(mismatched, traj)
+    assert fit_m.best_error < 1e-5
+    assert fit_x.best_error > 10 * max(fit_m.best_error, 1e-6)

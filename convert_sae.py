@@ -79,6 +79,17 @@ def _build_parser() -> argparse.ArgumentParser:
     ff = sub.add_parser("from-file", parents=[out], help="convert a local state dict")
     ff.add_argument("path")
     ff.set_defaults(func=_from_file)
+
+    # no sae-lens needed: pulls sae_weights.safetensors + cfg.json straight
+    # from a SAELens-format HF repo through huggingface_hub's cache
+    fh = sub.add_parser("fetch", parents=[out],
+                        help="fetch a SAELens-format repo from the HF hub "
+                             "(no sae-lens install needed)")
+    fh.add_argument("repo_id", nargs="?", default="jbloom/GPT2-Small-SAEs-Reformatted")
+    fh.add_argument("subfolder", nargs="?", default="blocks.8.hook_resid_pre")
+    fh.add_argument("--revision", default=None)
+    fh.set_defaults(func=lambda a: S.fetch_from_hub(a.repo_id, a.subfolder,
+                                                    revision=a.revision))
     return ap
 
 
