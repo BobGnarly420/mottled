@@ -44,11 +44,12 @@ Today Mottled has one time axis: layers. Autoregressive decode is the second.
       shown — provenance is not calibration (TL-processed vs raw HF
       residuals differ), so the fit is measured, and a bad fit is labeled
       extrapolation.
-- [ ] Regenerate bundled sample scenes with real features (via the TL
-      pairing); the feature-field domain coloring shows actual semantics on
-      first contact.
+- [x] Scenes carry real features (`ui.attach_features` → additive `.mtj`
+      `features` layer with measured fit); bundled `gpt2-features.mtj`
+      sample from the calibrated TL pairing.
 - [ ] Feature labels (from SAELens/Neuronpedia metadata when present) in
-      both viewers.
+      both viewers; feature-field domain coloring with real semantics on
+      first contact.
 
 ### M3 — A tangible viewer
 - [ ] Wire `bvh.py` (built, tested, currently unwired) into the WebGL viewer:

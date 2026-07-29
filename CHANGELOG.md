@@ -20,6 +20,13 @@
 - The explorer defaults GPT-2-width captures to the trained dictionary
   (fetched once, cached; untick for the demo), and feature labels flow
   through `SAE.feature_label` everywhere.
+- Scenes carry real features: `ui.attach_features` computes the dominant
+  feature per state plus the dictionary's measured fit, `.mtj` scene runs
+  carry it additively (`features`: top_id/top_act/recon_error/best_layer/
+  source/hook), and the explorer's export attaches it whenever a trained
+  dictionary is active. New sample `viewer/samples/gpt2-features.mtj`: the
+  calibrated TL pairing (capitals A/B), where the measured fit finds the
+  training hook on its own — best layer 8, ~21% error, 0.15% firing.
 
 ### Generation axis (roadmap M1)
 - `ROADMAP.md`: the end goal (Mottled 1.0 — the honest atlas of latent

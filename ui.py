@@ -224,6 +224,33 @@ def run_scene(cfg: MarbleConfig, prompts: list[str], model=None, tokenizer=None)
     return result
 
 
+def attach_features(result: dict, sae, source: str | None = None,
+                    hook: str | None = None) -> dict:
+    """Attach an SAE feature layer to a pipeline/scene result, for export.
+
+    Per run: the dominant feature per state (top-1 id + activation) and the
+    dictionary's **measured fit** (`sae.fit_report`), so a viewer never shows
+    a feature without its calibration attached. `source`/`hook` say where the
+    dictionary came from. Mutates and returns `result` (adds
+    "features_list", aligned with the runs); `statefile.save_scene` carries
+    it into the `.mtj` additively.
+    """
+    trajs = result.get("trajs") or [result["traj"]]
+    feats = []
+    for traj in trajs:
+        acts = sae.encode(traj.hidden)                      # (L, T, F)
+        fit = sae_mod.fit_report(sae, traj)
+        feats.append({
+            "source": source, "hook": hook,
+            "best_layer": fit.best_layer,
+            "recon_error": fit.recon_error,
+            "top_id": acts.argmax(axis=-1).astype(np.int32),
+            "top_act": acts.max(axis=-1).astype(np.float32),
+        })
+    result["features_list"] = feats
+    return result
+
+
 def run_compare(cfg: MarbleConfig, prompt_a: str, prompt_b: str,
                 model=None, tokenizer=None) -> dict:
     """A/B pipeline: a two-prompt `run_scene` (kept as the pairwise API)."""
@@ -891,6 +918,11 @@ def main() -> None:
 
         import io as _io
 
+        if acts is not None and sae_source is not None:
+            # trained dictionary active: export its feature layer + measured
+            # fit with the scene (demo features are decorative — not exported)
+            attach_features(result, active_sae,
+                            source=sae_source[0], hook=sae_source[1])
         _buf = _io.BytesIO()
         statefile_mod.save_scene(result, _buf)
         st.download_button("Export scene (.mtj)", data=_buf.getvalue(),

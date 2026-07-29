@@ -175,3 +175,33 @@ def test_scene_from_single_run_pipeline(tmp_path):
     scene = F.load_scene(buf)
     assert len(scene["runs"]) == 1
     assert "comparisons" not in scene
+
+
+def test_scene_carries_sae_feature_layer(tmp_path):
+    """ui.attach_features -> save_scene -> load_scene round-trips the
+    dominant-feature layer and its measured fit; absent, nothing changes."""
+    import sae as S
+    from ui import attach_features, run_scene
+
+    cfg = MarbleConfig(model="synthetic", use_cache=False, density_bootstrap=0)
+    result = run_scene(cfg, [PROMPT, "the capital of germany is"])
+    sae = S.demo_sae(result["traj"].dim, 32, seed=4)
+    attach_features(result, sae, source="test/repo", hook="blocks.8.hook_resid_pre")
+
+    path = tmp_path / "scene.mtj"
+    F.save_scene(result, path)
+    scene = F.load_scene(path)
+    for run, traj in zip(scene["runs"], result["trajs"]):
+        feats = run["features"]
+        L, T = traj.n_layers, traj.n_tokens
+        assert feats["source"] == "test/repo"
+        assert feats["top_id"].shape == (L, T) and feats["top_id"].dtype == np.int32
+        assert feats["top_act"].shape == (L, T)
+        assert feats["recon_error"].shape == (L,)
+        assert 0 <= feats["best_layer"] < L
+        acts = sae.encode(traj.hidden)
+        assert np.array_equal(feats["top_id"], acts.argmax(axis=-1))
+
+    plain = run_scene(cfg, [PROMPT])
+    F.save_scene(plain, path)
+    assert "features" not in F.load_scene(path)["runs"][0]

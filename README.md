@@ -98,6 +98,7 @@ from sae import demo_sae, feature_trajectory  # SAE feature activations
 from sae import feature_field                 # SAE over the projection plane
 from sae import from_sae_lens, from_state_dict  # load a real trained SAE
 from sae import fetch_from_hub, fit_report      # fetch one + measure its fit
+from ui import attach_features                  # feature layer into scene exports
 from intervene import direction_from_token, faithfulness  # data-derived steering
 from attractor import analyze, explain        # why the basin forms, in prose
 from ui import run_pipeline, render        # everything at once → plotly Figure
