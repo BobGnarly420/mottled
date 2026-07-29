@@ -31,7 +31,8 @@ terrain and draped trajectory points; raw trajectories don't).
 | left-drag | orbit |
 | right-drag or shift-drag | pan |
 | wheel | zoom |
-| hover near a trajectory point | highlight + inspector (run, layer, token, entropy, neighborhood fidelity, top-k readout) |
+| hover anywhere along a trajectory | highlight + inspector (run, layer — fractional between layers, token, entropy, neighborhood fidelity, features, top-k readout) |
+| click a trajectory | pin the inspector to that reading (Escape or a click on empty space clears it) |
 | slider / play button | scrub or animate the marbles across layers |
 | runs panel checkboxes | show / hide individual runs |
 | attention flow toggle | draw top-3 attention edges (weight ≥ 0.1) at the current layer |

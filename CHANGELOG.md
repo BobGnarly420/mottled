@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Picking you can trust (roadmap M3)
+- `viewer/bvh.js` ports `bvh.py`'s BVH over trajectory segments to the web
+  viewer, and **`tests/test_bvh_conformance.py` pins the two together** —
+  identical segments and rays through both implementations, comparing the
+  picked index, ray parameter, distance and point. The same ray must choose
+  the same segment in both languages, which is what makes the explorer and
+  the viewer one tool. This retires `bvh.py`'s "not wired into a live
+  surface" caveat.
+- The viewer now picks by casting a real camera ray at that index instead of
+  scanning stored layer points in screen space: the cursor grabs **anywhere
+  along a trajectory**, reads the **fractional layer** it landed at
+  ("layer 8.4"), and costs a BVH descent per run rather than O(N·L) per
+  frame. Pick tolerance tightened 14px → 6px — a continuous line needs no
+  slack, and the tolerance is also the worst-case error when lines bundle.
+- **Click-to-pin**: a click freezes the inspector on that reading (Escape or
+  a click on empty space clears it); orbit and pan never pin.
+
 ### Closed-model producer (roadmap M4)
 - `models/logprobs.py`: per-step API top-k logprobs → `StateTrajectory`.
   A hosted API exposes no residual stream, so depth is unavailable: the
@@ -100,8 +117,7 @@
   `requirements.lock`, optional `tlens`/`sae` extras, and a **PyPI publish**
   workflow (Trusted Publishing).
 - A cross-language **`.mtj` conformance test** (Python writer ↔ `viewer/mtj.js`
-  reader + little-endian header). `bvh.py` is marked experimental (not yet
-  wired into a live surface).
+  reader + little-endian header).
 
 ### Uncertainty visualization
 - `projection.projection_quality`: measures how much a fitted projection

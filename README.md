@@ -183,7 +183,7 @@ density, terrain, metrics, comparison, every viewer) works unchanged.
 | `cache.py` | Disk cache keyed by prompt + config hash |
 | `config.py` | One dataclass for every pipeline knob |
 | `ui.py` | Pure pipeline + pure Plotly renderer + Streamlit shell |
-| `bvh.py` | ⚠️ *experimental* — spatial index (ray-pick / nearest / box / frustum) for the not-yet-built fly-through canvas; tested in isolation, not yet wired into a live surface |
+| `bvh.py` | Spatial index over trajectory segments (ray-pick / nearest / box / frustum) — the reference for the viewer's picking, ported to `viewer/bvh.js` and pinned to it by a conformance test |
 | `intervene.py` | Causal interventions: perturb / set / noise / freeze a state via a resumable forward pass → counterfactual trajectory |
 | `compare.py` | Trajectory comparison: Hausdorff, dynamic time warping, shared-prefix alignment, layerwise divergence profiles |
 | `sae.py` | Sparse-autoencoder features: apply (never train) an SAE to every captured state; demo dictionary + npz interchange |
@@ -425,18 +425,24 @@ form — type prompts, press Capture, and the scene is generated server-side
 and streamed back as `.mtj`. On plain static hosting (GitHub Pages) the
 form simply never appears.
 
-### Interaction layer (in progress)
+### Interaction layer
 
-The exploratory canvas renders trajectories as curves (not voxels — projected
-states occupy a vanishing fraction of any 3-D volume). `bvh.py` is the spatial
-acceleration structure the interaction grammar needs: `ray_pick` powers the
-"grab a state" gesture (camera ray → front-most segment within a pick radius),
-`nearest` powers hover, `query_box` powers region select, and `query_frustum`
-powers fly-through culling. It is backend-agnostic — it consumes projected 3-D
-points (a projection output), never transformer internals — so any substrate
-projected to ≤3-D is pickable. A volumetric (voxel-octree) renderer for
-*fields* (density / flow) will land once we render ensembles rather than single
-runs.
+Trajectories render as curves, not voxels — projected states occupy a
+vanishing fraction of any 3-D volume, so the right primitive is a spatial
+index over the *curve segments*. `bvh.py` is that index, and `viewer/bvh.js`
+is its port; `tests/test_bvh_conformance.py` pins them together, because a
+tool whose two surfaces pick different segments for the same ray is two
+tools. The viewer casts a camera ray at the BVH every frame: you grab
+anywhere along a trajectory, the inspector reads the fractional layer you
+landed at, and a click pins it.
+
+`ray_pick` powers that grab, `nearest` powers snapping; `query_box`
+(region select) and `query_frustum` (fly-through culling) are built and
+tested against the coming interaction work. All of it is backend-agnostic —
+it consumes projected 3-D points, never transformer internals — so any
+substrate projected to ≤3-D is pickable. A volumetric (voxel-octree)
+renderer for *fields* (density / flow) will land once we render ensembles
+rather than single runs.
 
 ### Uncertainty: where the picture is trustworthy
 

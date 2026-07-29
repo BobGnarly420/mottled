@@ -52,10 +52,12 @@ Today Mottled has one time axis: layers. Autoregressive decode is the second.
       first contact.
 
 ### M3 — A tangible viewer
-- [ ] Wire `bvh.py` (built, tested, currently unwired) into the WebGL viewer:
-      ray-picked click-to-inspect on any trajectory segment.
-- [ ] Inspector parity with the explorer (predictions, neighbors, features,
-      decomposition) so the shareable viewer is not the lesser surface.
+- [x] `bvh.py` ported to `viewer/bvh.js` and pinned by a cross-language
+      conformance test; the viewer picks by real camera ray against the
+      segment index — grab anywhere along a trajectory, fractional layer in
+      the inspector, click-to-pin.
+- [ ] Inspector parity with the explorer (neighbors, residual decomposition)
+      so the shareable viewer is not the lesser surface.
 
 ### M4 — Closed-model producers
 The architecture diagram has promised "OpenAI / Anthropic logprobs" from the
