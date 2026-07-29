@@ -142,3 +142,27 @@ def test_openai_adapter_rejects_a_response_without_logprobs():
         from_openai_logprobs({"choices": [{"logprobs": {"content": []}}]})
     with pytest.raises(ValueError, match="choices"):
         from_openai_logprobs({"choices": []})
+
+
+def test_explorer_banner_states_the_limits():
+    """The banner is not optional decoration: a capture that could not see
+    inside the model must name the backend, what it cannot observe, which
+    axis is animated, and that its entropy is a floor."""
+    from ui import degraded_note
+
+    note = degraded_note(from_logprobs(STEPS).meta)
+    assert note is not None
+    assert "Degraded capture" in note
+    assert "logprobs" in note                     # names the backend
+    assert "residual stream" in note              # names what is missing
+    assert "attention" in note
+    assert "decode" in note                       # names the real axis
+    assert "lower bound" in note                  # entropy is a floor
+
+
+def test_explorer_banner_is_absent_for_a_full_capture():
+    from models import synthetic
+    from ui import degraded_note
+
+    assert degraded_note(synthetic.capture("the capital of france is").meta) is None
+    assert degraded_note({}) is None

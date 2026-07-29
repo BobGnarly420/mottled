@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Closed-model producer (roadmap M4)
+- `models/logprobs.py`: per-step API top-k logprobs → `StateTrajectory`.
+  A hosted API exposes no residual stream, so depth is unavailable: the
+  animated axis becomes **decode time** and the moving point is the model's
+  own output distribution over the observed tokens. The mass the API did
+  *not* report gets its own visible `⟨unreported⟩` bucket rather than being
+  renormalised away, so each step's vector sums to 1 honestly.
+- The trajectory states its own ceiling — `meta.degraded`, `meta.absent`
+  (residual stream, per-layer readout, attention, decomposition), and
+  `entropy_is_lower_bound` (top-k truncation can only under-count entropy) —
+  and carries the same decode-record schema as `generate_and_capture`, so
+  surfaces built for one work for the other.
+- `from_openai_logprobs` adapts OpenAI-style chat-completion responses (SDK
+  objects or plain dicts); any provider can be mapped into the neutral shape.
+- `ui.degraded_note` (pure, tested) renders that ceiling as a banner above
+  the scene in the explorer.
+
 ### Real SAEs, measured (roadmap M2, first slice)
 - `sae.fetch_from_hub`: download a trained SAE from any SAELens-format HF
   repo (default: `jbloom/GPT2-Small-SAEs-Reformatted`, layer-8 resid_pre)

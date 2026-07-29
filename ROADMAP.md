@@ -60,10 +60,16 @@ Today Mottled has one time axis: layers. Autoregressive decode is the second.
 ### M4 — Closed-model producers
 The architecture diagram has promised "OpenAI / Anthropic logprobs" from the
 start.
-- [ ] Logprob-trajectory producer: what a closed API exposes, as a degraded
-      `StateTrajectory` (final-layer readout evolution across decode steps).
-- [ ] The fidelity machinery states exactly which layers of the picture are
-      absent — honest about the ceiling, not silent about it.
+- [x] `models/logprobs.py`: per-step top-k logprobs as a degraded
+      `StateTrajectory` — depth is unavailable, so the animated axis is decode
+      time and the geometry is the output distribution. Unreported top-k mass
+      gets its own visible bucket; `from_openai_logprobs` adapts OpenAI-style
+      responses.
+- [x] The trajectory declares its own ceiling (`meta.degraded`, `meta.absent`,
+      `entropy_is_lower_bound`) and the explorer prints it as a banner
+      (`ui.degraded_note`) above the scene.
+- [ ] A live end-to-end path (fetch logprobs from a configured provider) and a
+      bundled sample scene.
 
 ### M5 — A sustainable core
 - [ ] Split `ui.py` (53 KB and growing) into a `mottled/` package with

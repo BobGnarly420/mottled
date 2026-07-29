@@ -135,10 +135,11 @@ producers                      interchange                     viewers
 ─────────                      ───────────                     ───────
 transformers capture  ─┐                                 ┌─ Python / Streamlit (ui.py)
 Mamba (state-space)   ─┼─►  StateTrajectory  ─► .mtj  ───┼─ web viewer (viewer/, WebGL)
-synthetic generator   ─┘    (in memory)      (on disk)   ├─ Jupyter (render() is a
-future: diffusion,                                       │  plain Plotly figure)
-OpenAI / Anthropic                                       └─ future: desktop app
-logprobs, neuro recordings
+TransformerLens       ─┤    (in memory)      (on disk)   ├─ Jupyter (render() is a
+API logprobs          ─┤                                 │  plain Plotly figure)
+  (degraded)          ─┤                                 └─ future: desktop app
+synthetic generator   ─┘
+future: diffusion, neuro recordings
 ```
 
 Python owns capture and analysis; `statefile.py` freezes both into the
@@ -154,8 +155,18 @@ generator (`models/synthetic.py`) is another; **Mamba** — a state-space
 model with no attention at all — is the proof the abstraction is not
 transformer-shaped: its `backbone.layers` layout resolves structurally and
 block capture + logit lens work unchanged (captures that don't apply, like
-attention patterns, refuse loudly instead of lying). A new substrate —
-diffusion, API logprobs (limited: no hidden states), biological recordings —
+attention patterns, refuse loudly instead of lying).
+
+**Closed models** are a producer too, honestly bounded: `models/logprobs.py`
+turns a hosted API's per-step top-k logprobs into a *degraded*
+`StateTrajectory`. There is no residual stream to see, so depth is
+unavailable — the animated axis becomes decode time and the geometry is the
+model's own output distribution, with the mass the API didn't report kept in
+a visible `⟨unreported⟩` bucket instead of quietly renormalised away. The
+trajectory carries its own ceiling (`meta.degraded`, `meta.absent`,
+`entropy_is_lower_bound`) and the explorer prints it as a banner above the
+scene. A new substrate —
+diffusion, biological recordings —
 only needs to emit a `StateTrajectory` and the entire stack (projection,
 density, terrain, metrics, comparison, every viewer) works unchanged.
 
