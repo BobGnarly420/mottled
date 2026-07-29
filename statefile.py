@@ -219,6 +219,21 @@ def save_scene(result: dict, path_or_fh) -> None:
             # the decode record (prompt/continuation boundary + per-step
             # token, id, p, entropy) — additive, so old readers ignore it
             run["generation"] = _jsonable(traj.meta["generation"])
+        feats = (result.get("features_list") or [])
+        if i < len(feats) and isinstance(feats[i], dict):
+            # SAE feature layer (ui.attach_features): dominant feature per
+            # state plus the dictionary's measured fit — additive
+            f = feats[i]
+            run["features"] = {
+                "source": f.get("source"), "hook": f.get("hook"),
+                "best_layer": int(f["best_layer"]),
+                "recon_error": w.add(f"run{i}.features.recon_error",
+                                     np.asarray(f["recon_error"], np.float32)),
+                "top_id": w.add(f"run{i}.features.top_id",
+                                np.asarray(f["top_id"], np.int32)),
+                "top_act": w.add(f"run{i}.features.top_act",
+                                 np.asarray(f["top_act"], np.float32)),
+            }
         runs.append(run)
 
     manifest: dict[str, Any] = {
@@ -255,6 +270,14 @@ def load_scene(path_or_fh) -> dict:
                    if key in run}}
         for run in manifest["runs"]
     ]
+    for run in scene["runs"]:
+        if isinstance(run.get("features"), dict):
+            run["features"] = {
+                **run["features"],
+                **{k: arrays[run["features"][k]]
+                   for k in ("recon_error", "top_id", "top_act")
+                   if run["features"].get(k) in arrays},
+            }
     return scene
 
 

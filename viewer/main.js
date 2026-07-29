@@ -605,6 +605,17 @@ function setPickInfo(pick) {
     if (pick.layer < L && tok < Te)
       html += `<div>entropy ${run.entropy.data[pick.layer * Te + tok].toFixed(2)} nats</div>`;
   }
+  if (run.features) {
+    // dominant SAE feature at this (layer, token); layers where the
+    // dictionary doesn't fit (recon error > 50% of norm) are flagged
+    const feat = MTJ.featureAt(run.features, pick.layer, tok);
+    if (feat) {
+      const re = run.features.recon_error;
+      const extrap = re && pick.layer < re.data.length && re.data[pick.layer] > 0.5;
+      html += `<div><span class="mono">feature f${feat.id} · ${feat.act.toFixed(2)}</span>` +
+              (extrap ? `<span class="dim"> (extrapolation)</span>` : "") + `</div>`;
+    }
+  }
   if (run.quality) {
     const [Lq, Tq] = run.quality.shape;
     if (pick.layer < Lq && tok < Tq) {
@@ -685,6 +696,13 @@ function buildUI(scene) {
       label.insertAdjacentHTML("beforeend",
         `<span class="gen-summary" title="${esc(cont)}">${esc(MTJ.decodeSummary(run.generation))}` +
         (cont ? ` &#8594; <span class="mono">${esc(cont)}</span>` : "") + `</span>`);
+    }
+    if (run.features) {
+      // SAE feature-layer summary: dictionary, best-fitting layer, and how
+      // much of the norm its reconstruction still misses there
+      const fitLine = MTJ.featureFitSummary(run.features);
+      if (fitLine) label.insertAdjacentHTML("beforeend",
+        `<span class="feat-summary" title="${esc(run.features.hook || "")}">${esc(fitLine)}</span>`);
     }
     ui.runsList.appendChild(label);
   });

@@ -105,6 +105,28 @@
       return a;
     };
 
+    // Optional per-run SAE feature layer (writers >= scene-v5): dominant
+    // feature id/activation per (layer, token) plus the dictionary's median
+    // relative reconstruction error per layer. Strictly additive — a missing,
+    // malformed, or dangling-ref record reads as "no features" so it can
+    // never break a scene that renders without it (same contract as the
+    // `generation` record).
+    const resolveFeatures = (f) => {
+      if (!f || typeof f !== "object" || Array.isArray(f)) return null;
+      const reconError = typeof f.recon_error === "string" ? arrays[f.recon_error] : null;
+      const topId = typeof f.top_id === "string" ? arrays[f.top_id] : null;
+      const topAct = typeof f.top_act === "string" ? arrays[f.top_act] : null;
+      if (!reconError || !topId || !topAct) return null;
+      return {
+        source: f.source != null ? String(f.source) : null,
+        hook: f.hook != null ? String(f.hook) : null,
+        best_layer: typeof f.best_layer === "number" ? f.best_layer : null,
+        recon_error: reconError,  // (L,) float32
+        top_id: topId,            // (L, T) int32
+        top_act: topAct,          // (L, T) float32
+      };
+    };
+
     const t = manifest.terrain || {};
     const terrain = {
       x: resolve(t.x, "terrain.x"),
@@ -136,6 +158,8 @@
         // boundary plus per-step token, id, p, entropy
         generation: (r.generation && typeof r.generation === "object" &&
                      !Array.isArray(r.generation)) ? r.generation : null,
+        // optional SAE feature record (writers >= scene-v5)
+        features: resolveFeatures(r.features),
       };
     });
     if (!runs.length) throw new Error("corrupt scene: no runs");
@@ -199,7 +223,46 @@
     return g.prompt_tokens < n ? g.prompt_tokens : -1;
   }
 
+  // ------------------------------------------------ SAE feature helpers
+  // A run's optional `features` record carries the dominant SAE feature per
+  // (layer, token) and the dictionary's per-layer reconstruction error.
+  // Everything here is null-safe: an absent or malformed record reads as
+  // "no features" so pre-feature scenes behave exactly as before.
+
+  function featureAt(features, layer, tokenIdx) {
+    // dominant feature {id, act} at (layer, tokenIdx), or null when the
+    // record is absent or the indices fall outside the arrays' shapes
+    if (!features || typeof features !== "object") return null;
+    const ids = features.top_id, acts = features.top_act;
+    if (!ids || !acts || !Array.isArray(ids.shape) || ids.shape.length !== 2) return null;
+    if (!Number.isInteger(layer) || !Number.isInteger(tokenIdx)) return null;
+    const [L, T] = ids.shape;
+    if (layer < 0 || layer >= L || tokenIdx < 0 || tokenIdx >= T) return null;
+    const o = layer * T + tokenIdx;
+    if (!ids.data || !acts.data || o >= ids.data.length || o >= acts.data.length) return null;
+    return { id: ids.data[o], act: acts.data[o] };
+  }
+
+  function featureFitSummary(features) {
+    // "features: jbloom/GPT2-Small-SAEs-Reformatted · best fit layer 8 ·
+    // 22% err" — appends " · EXTRAPOLATION" when even the best layer's
+    // dictionary misses more than half the norm (features are guesswork)
+    if (!features || typeof features !== "object") return "";
+    const re = features.recon_error;
+    if (!re || !re.data || !re.data.length) return "";
+    let best = typeof features.best_layer === "number" ? features.best_layer : -1;
+    if (!Number.isInteger(best) || best < 0 || best >= re.data.length) {
+      best = 0; // record omitted/out of range: recompute the argmin
+      for (let l = 1; l < re.data.length; l++) if (re.data[l] < re.data[best]) best = l;
+    }
+    const err = re.data[best];
+    let s = `features: ${features.source != null ? features.source : "?"}` +
+            ` · best fit layer ${best} · ${(err * 100).toFixed(0)}% err`;
+    if (err > 0.5) s += " · EXTRAPOLATION";
+    return s;
+  }
+
   return { parse, loadScene, decodeFloat16, SUPPORTED_VERSION,
            isGeneratedToken, generationStep, continuationText, decodeSummary,
-           generationBoundary };
+           generationBoundary, featureAt, featureFitSummary };
 });

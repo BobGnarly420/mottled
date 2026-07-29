@@ -224,6 +224,33 @@ def run_scene(cfg: MarbleConfig, prompts: list[str], model=None, tokenizer=None)
     return result
 
 
+def attach_features(result: dict, sae, source: str | None = None,
+                    hook: str | None = None) -> dict:
+    """Attach an SAE feature layer to a pipeline/scene result, for export.
+
+    Per run: the dominant feature per state (top-1 id + activation) and the
+    dictionary's **measured fit** (`sae.fit_report`), so a viewer never shows
+    a feature without its calibration attached. `source`/`hook` say where the
+    dictionary came from. Mutates and returns `result` (adds
+    "features_list", aligned with the runs); `statefile.save_scene` carries
+    it into the `.mtj` additively.
+    """
+    trajs = result.get("trajs") or [result["traj"]]
+    feats = []
+    for traj in trajs:
+        acts = sae.encode(traj.hidden)                      # (L, T, F)
+        fit = sae_mod.fit_report(sae, traj)
+        feats.append({
+            "source": source, "hook": hook,
+            "best_layer": fit.best_layer,
+            "recon_error": fit.recon_error,
+            "top_id": acts.argmax(axis=-1).astype(np.int32),
+            "top_act": acts.max(axis=-1).astype(np.float32),
+        })
+    result["features_list"] = feats
+    return result
+
+
 def run_compare(cfg: MarbleConfig, prompt_a: str, prompt_b: str,
                 model=None, tokenizer=None) -> dict:
     """A/B pipeline: a two-prompt `run_scene` (kept as the pairwise API)."""
@@ -824,20 +851,66 @@ def main() -> None:
     def _demo_sae(dim: int, n_features: int):
         return sae_mod.demo_sae(dim, n_features)
 
+    @st.cache_resource(show_spinner="Fetching trained SAE (~150 MB, cached)…")
+    def _hub_sae(repo_id: str, subfolder: str):
+        return sae_mod.fetch_from_hub(repo_id, subfolder)
+
+    # GPT-2 gets a real trained dictionary by default (fetched on first use);
+    # everything else falls back to the demo dictionary, clearly labeled.
+    _REAL_SAE = {768: ("jbloom/GPT2-Small-SAEs-Reformatted", "blocks.8.hook_resid_pre")}
+
+    def _active_sae():
+        source = _REAL_SAE.get(traj.dim) if st.session_state.get("sae_real", True) else None
+        if source is not None:
+            try:
+                return _hub_sae(*source), source
+            except Exception as err:
+                st.caption(f"trained SAE unavailable ({err}); using the demo dictionary")
+        return _demo_sae(traj.dim, cfg.sae_features), None
+
+    def _sae_fit_caption(active_sae, source):
+        """Measured calibration, printed wherever features are shown: an SAE
+        only means something on the activation distribution it was trained
+        on, so measure the fit instead of trusting provenance."""
+        fit = sae_mod.fit_report(active_sae, traj)
+        name = f"`{source[0]}`" if source else "demo dictionary (untrained)"
+        line = (f"SAE fit — {name}: best reconstruction at layer "
+                f"{fit.best_layer} ({fit.best_error:.0%} of norm off, "
+                f"{fit.active_frac[fit.best_layer]:.1%} of features firing).")
+        if fit.best_error > 0.5:
+            line += (" **This dictionary does not fit these activations** — "
+                     "it was likely trained on differently-processed residuals "
+                     "(e.g. TransformerLens folding/centering) or a different "
+                     "model. Features shown are extrapolation, not measurement; "
+                     "capture via `models.hooked.from_hooked_transformer` for "
+                     "the calibrated pairing.")
+        st.markdown(line)
+
     acts = overlay = None
     overlay_label = "feature"
     with st.sidebar:
         layer = st.slider("Layer", 0, traj.n_layers - 1, traj.n_layers - 1, key="layer")
+        if (sae_on or field_on) and traj.dim in _REAL_SAE:
+            st.checkbox("Trained SAE (gpt2-small-res-jb, layer 8)", value=True,
+                        key="sae_real",
+                        help="Joseph Bloom's GPT-2-small residual-stream SAE, "
+                             "fetched once from the HF hub (~150 MB) and cached. "
+                             "It was trained at layer 8's resid_pre: activations "
+                             "at other layers are extrapolation, not calibration. "
+                             "Untick to use the untrained demo dictionary.")
         if sae_on:
-            acts = sae_mod.feature_trajectory(traj, _demo_sae(traj.dim, cfg.sae_features))
+            active_sae, sae_source = _active_sae()
+            _sae_fit_caption(active_sae, sae_source)
+            acts = sae_mod.feature_trajectory(traj, active_sae)
             choices = [int(f) for f in sae_mod.active_features(acts, k=25)]
             if choices and result.get("traj_b") is None:
                 feat = st.selectbox(
                     "SAE feature", choices,
-                    format_func=lambda f: f"f{f} · peak {acts[..., f].max():.2f}",
+                    format_func=lambda f: f"{active_sae.feature_label(f)} · "
+                                          f"peak {acts[..., f].max():.2f}",
                     key="feature",
                 )
-                overlay_label = f"f{feat}"
+                overlay_label = active_sae.feature_label(feat)
                 overlay = [
                     acts[:, t.token if isinstance(t.token, int) else traj.n_tokens - 1, feat]
                     for t in result["trajectories"]
@@ -845,6 +918,11 @@ def main() -> None:
 
         import io as _io
 
+        if acts is not None and sae_source is not None:
+            # trained dictionary active: export its feature layer + measured
+            # fit with the scene (demo features are decorative — not exported)
+            attach_features(result, active_sae,
+                            source=sae_source[0], hook=sae_source[1])
         _buf = _io.BytesIO()
         statefile_mod.save_scene(result, _buf)
         st.download_button("Export scene (.mtj)", data=_buf.getvalue(),
@@ -976,7 +1054,13 @@ def main() -> None:
                                "away from the actual captured states (the grid pads "
                                "20% past them) the field can look confident while "
                                "showing extrapolation artifacts, not measurement.")
-                field_sae = _demo_sae(traj.dim, cfg.sae_features)
+                field_sae, field_source = _active_sae()
+                _sae_fit_caption(field_sae, field_source)
+                if field_source is not None:
+                    st.caption(f"Dictionary `{field_source[0]}` was trained at "
+                               f"one hook point (`{field_source[1]}`); regions "
+                               "far from the captured states, and states at "
+                               "other layers, are extrapolation.")
                 landscape = result["landscape"]
                 try:
                     fld = sae_mod.feature_field(field_sae, projector,

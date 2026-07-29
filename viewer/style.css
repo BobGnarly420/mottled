@@ -69,6 +69,9 @@ button:active { transform: translateY(1px); }
   display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   max-width: 270px; }
 #runs-list .gen-summary .mono { color: var(--color-fg-1); }
+#runs-list .feat-summary { color: var(--color-fg-2); font-size: 11px; margin-left: 26px;
+  display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 270px; }
 #comparisons { margin-top: 8px; font-size: 11px; color: var(--color-fg-2); }
 #comparisons table { border-collapse: collapse; width: 100%;
   font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace; }
