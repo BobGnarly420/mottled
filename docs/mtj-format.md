@@ -89,6 +89,19 @@ Fields:
       intact). Tells a viewer where the flattened picture is trustworthy.
     - `attention` — `(L-1, T, T)` float32 *(optional)*,
   - `topk` *(optional)*: `[L][T][k]` list of `[token, probability]` pairs.
+  - `generation` *(optional)*: the decode record when the run covers
+    prompt + generated continuation: `{ "prompt_tokens", "new_tokens",
+    "mode" ("greedy"|"sample"), "temperature", "seed", "steps": [{ "token",
+    "id", "p", "entropy" }, …] }`. Token indices `>= prompt_tokens` were
+    generated.
+  - `features` *(optional)*: an SAE feature layer with its **measured fit**
+    attached: `{ "source", "hook", "best_layer", "recon_error" → `(L,)`
+    float32 array ref, "top_id" → `(L, T)` int32 array ref (dominant
+    feature per state), "top_act" → `(L, T)` float32 array ref }`.
+    `recon_error[l]` is the dictionary's median relative reconstruction
+    error at layer `l`; values ≫ `0.5` mean the dictionary does not fit
+    those activations and features there are extrapolation — viewers
+    should say so rather than display them as measurement.
 - `comparisons` *(optional)*: for runs beyond the first, JSON summaries:
   `{ "label", "hausdorff", "dtw_normalized", "shared_tokens", "onset_layer",
      "readout_changed" }`.
