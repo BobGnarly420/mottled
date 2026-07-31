@@ -135,10 +135,11 @@ producers                      interchange                     viewers
 ─────────                      ───────────                     ───────
 transformers capture  ─┐                                 ┌─ Python / Streamlit (ui.py)
 Mamba (state-space)   ─┼─►  StateTrajectory  ─► .mtj  ───┼─ web viewer (viewer/, WebGL)
-synthetic generator   ─┘    (in memory)      (on disk)   ├─ Jupyter (render() is a
-future: diffusion,                                       │  plain Plotly figure)
-OpenAI / Anthropic                                       └─ future: desktop app
-logprobs, neuro recordings
+TransformerLens       ─┤    (in memory)      (on disk)   ├─ Jupyter (render() is a
+API logprobs          ─┤                                 │  plain Plotly figure)
+  (degraded)          ─┤                                 └─ future: desktop app
+synthetic generator   ─┘
+future: diffusion, neuro recordings
 ```
 
 Python owns capture and analysis; `statefile.py` freezes both into the
@@ -154,8 +155,18 @@ generator (`models/synthetic.py`) is another; **Mamba** — a state-space
 model with no attention at all — is the proof the abstraction is not
 transformer-shaped: its `backbone.layers` layout resolves structurally and
 block capture + logit lens work unchanged (captures that don't apply, like
-attention patterns, refuse loudly instead of lying). A new substrate —
-diffusion, API logprobs (limited: no hidden states), biological recordings —
+attention patterns, refuse loudly instead of lying).
+
+**Closed models** are a producer too, honestly bounded: `models/logprobs.py`
+turns a hosted API's per-step top-k logprobs into a *degraded*
+`StateTrajectory`. There is no residual stream to see, so depth is
+unavailable — the animated axis becomes decode time and the geometry is the
+model's own output distribution, with the mass the API didn't report kept in
+a visible `⟨unreported⟩` bucket instead of quietly renormalised away. The
+trajectory carries its own ceiling (`meta.degraded`, `meta.absent`,
+`entropy_is_lower_bound`) and the explorer prints it as a banner above the
+scene. A new substrate —
+diffusion, biological recordings —
 only needs to emit a `StateTrajectory` and the entire stack (projection,
 density, terrain, metrics, comparison, every viewer) works unchanged.
 
@@ -172,7 +183,7 @@ density, terrain, metrics, comparison, every viewer) works unchanged.
 | `cache.py` | Disk cache keyed by prompt + config hash |
 | `config.py` | One dataclass for every pipeline knob |
 | `ui.py` | Pure pipeline + pure Plotly renderer + Streamlit shell |
-| `bvh.py` | ⚠️ *experimental* — spatial index (ray-pick / nearest / box / frustum) for the not-yet-built fly-through canvas; tested in isolation, not yet wired into a live surface |
+| `bvh.py` | Spatial index over trajectory segments (ray-pick / nearest / box / frustum) — the reference for the viewer's picking, ported to `viewer/bvh.js` and pinned to it by a conformance test |
 | `intervene.py` | Causal interventions: perturb / set / noise / freeze a state via a resumable forward pass → counterfactual trajectory |
 | `compare.py` | Trajectory comparison: Hausdorff, dynamic time warping, shared-prefix alignment, layerwise divergence profiles |
 | `sae.py` | Sparse-autoencoder features: apply (never train) an SAE to every captured state; demo dictionary + npz interchange |
@@ -414,18 +425,24 @@ form — type prompts, press Capture, and the scene is generated server-side
 and streamed back as `.mtj`. On plain static hosting (GitHub Pages) the
 form simply never appears.
 
-### Interaction layer (in progress)
+### Interaction layer
 
-The exploratory canvas renders trajectories as curves (not voxels — projected
-states occupy a vanishing fraction of any 3-D volume). `bvh.py` is the spatial
-acceleration structure the interaction grammar needs: `ray_pick` powers the
-"grab a state" gesture (camera ray → front-most segment within a pick radius),
-`nearest` powers hover, `query_box` powers region select, and `query_frustum`
-powers fly-through culling. It is backend-agnostic — it consumes projected 3-D
-points (a projection output), never transformer internals — so any substrate
-projected to ≤3-D is pickable. A volumetric (voxel-octree) renderer for
-*fields* (density / flow) will land once we render ensembles rather than single
-runs.
+Trajectories render as curves, not voxels — projected states occupy a
+vanishing fraction of any 3-D volume, so the right primitive is a spatial
+index over the *curve segments*. `bvh.py` is that index, and `viewer/bvh.js`
+is its port; `tests/test_bvh_conformance.py` pins them together, because a
+tool whose two surfaces pick different segments for the same ray is two
+tools. The viewer casts a camera ray at the BVH every frame: you grab
+anywhere along a trajectory, the inspector reads the fractional layer you
+landed at, and a click pins it.
+
+`ray_pick` powers that grab, `nearest` powers snapping; `query_box`
+(region select) and `query_frustum` (fly-through culling) are built and
+tested against the coming interaction work. All of it is backend-agnostic —
+it consumes projected 3-D points, never transformer internals — so any
+substrate projected to ≤3-D is pickable. A volumetric (voxel-octree)
+renderer for *fields* (density / flow) will land once we render ensembles
+rather than single runs.
 
 ### Uncertainty: where the picture is trustworthy
 

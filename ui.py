@@ -224,6 +224,28 @@ def run_scene(cfg: MarbleConfig, prompts: list[str], model=None, tokenizer=None)
     return result
 
 
+def degraded_note(meta: dict) -> str | None:
+    """The banner a producer that could not see inside the model must carry.
+
+    Returns None for a full capture. For a degraded one (e.g. the API-logprob
+    producer) it names the backend, lists what that backend cannot observe,
+    says which axis is actually animated, and flags a truncated — therefore
+    under-counted — entropy. Pure, so the wording is testable without
+    driving the app.
+    """
+    if not meta.get("degraded"):
+        return None
+    absent = ", ".join(meta.get("absent") or []) or "internal state"
+    note = (f"**Degraded capture** — this run came from `{meta.get('backend')}`, "
+            f"which cannot observe: {absent}. The animated axis is "
+            f"**{meta.get('axis', 'decode')}**, not depth, and the geometry is "
+            f"the model's *output distribution*, not its residual stream.")
+    if meta.get("entropy_is_lower_bound"):
+        note += (" Reported entropy is a **lower bound** — the API truncates "
+                 "its distribution, so the true spread is at least this wide.")
+    return note
+
+
 def attach_features(result: dict, sae, source: str | None = None,
                     hook: str | None = None) -> dict:
     """Attach an SAE feature layer to a pipeline/scene result, for export.
@@ -993,6 +1015,8 @@ def main() -> None:
     quality = result.get("quality")
     with col_viz:
         low_fidelity = 0.5  # one threshold drives both the prose and the ✕ markers
+        if (degraded := degraded_note(traj.meta)) is not None:
+            st.warning(degraded)
         if quality is not None:
             ev = (f"keeps **{quality.explained_variance:.0%}** of the variance · "
                   if quality.explained_variance is not None else "")

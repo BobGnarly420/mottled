@@ -12,7 +12,16 @@ const DASH_CYCLE = [null, [5, 3], [1, 2], [9, 3], [5, 2, 1, 2]];
 const SEG = 8;              // Catmull-Rom subdivisions per layer span
 const OVERLAY_ALPHA = 0.55; // runs after the first
 const GEN_ALPHA = 0.55;     // extra fade on decoded-token ("+") trajectory lines
-const PICK_RADIUS = 14;     // px
+// Pick tolerance in px, converted to a world-space ray radius. Much tighter
+// than the 14px the old marker-picking used: a trajectory is a continuous
+// line, so it needs no slack to be grabbable, and because the ray returns the
+// *front-most* segment within the radius, the radius is also the worst case
+// by which a pick can land on a neighbouring line instead of the one under
+// the cursor. Measured over the sample scenes, 6px keeps that under ~8px in
+// the densest bundle and near zero in a single-run scene.
+const PICK_RADIUS = 6;
+const FOVY = 0.9;           // vertical field of view (rad), shared by the
+                            // projection and the pixels->world pick radius
 // Terrain potential ramp: void -> surfaces -> precision blue -> light blue.
 // Mirrors ui.py's _TERRAIN_COLORSCALE.
 const TERRAIN_RAMP = [[0.016, 0.024, 0.055], [0.031, 0.047, 0.102], [0.047, 0.063, 0.125],
@@ -58,6 +67,53 @@ function projectPoint(m, p, w, h) { // -> [px, py, clipW] in CSS pixels
   const x = (m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12]) / cw;
   const y = (m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13]) / cw;
   return [(x * 0.5 + 0.5) * w, (0.5 - y * 0.5) * h, cw];
+}
+// Inverse of a column-major 4x4, in float64 — the MVP is a Float32Array and
+// its near/far planes differ by 2000x, so the solve is done at double width.
+function invertMat4(m) {
+  const a00 = m[0], a01 = m[1], a02 = m[2], a03 = m[3],
+        a10 = m[4], a11 = m[5], a12 = m[6], a13 = m[7],
+        a20 = m[8], a21 = m[9], a22 = m[10], a23 = m[11],
+        a30 = m[12], a31 = m[13], a32 = m[14], a33 = m[15];
+  const b00 = a00 * a11 - a01 * a10, b01 = a00 * a12 - a02 * a10,
+        b02 = a00 * a13 - a03 * a10, b03 = a01 * a12 - a02 * a11,
+        b04 = a01 * a13 - a03 * a11, b05 = a02 * a13 - a03 * a12,
+        b06 = a20 * a31 - a21 * a30, b07 = a20 * a32 - a22 * a30,
+        b08 = a20 * a33 - a23 * a30, b09 = a21 * a32 - a22 * a31,
+        b10 = a21 * a33 - a23 * a31, b11 = a22 * a33 - a23 * a32;
+  let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
+  if (!det) return null;
+  det = 1 / det;
+  return new Float64Array([
+    (a11 * b11 - a12 * b10 + a13 * b09) * det, (a02 * b10 - a01 * b11 - a03 * b09) * det,
+    (a31 * b05 - a32 * b04 + a33 * b03) * det, (a22 * b04 - a21 * b05 - a23 * b03) * det,
+    (a12 * b08 - a10 * b11 - a13 * b07) * det, (a00 * b11 - a02 * b08 + a03 * b07) * det,
+    (a32 * b02 - a30 * b05 - a33 * b01) * det, (a20 * b05 - a22 * b02 + a23 * b01) * det,
+    (a10 * b10 - a11 * b08 + a13 * b06) * det, (a01 * b08 - a00 * b10 - a03 * b06) * det,
+    (a30 * b04 - a31 * b02 + a33 * b00) * det, (a21 * b02 - a20 * b04 - a23 * b00) * det,
+    (a11 * b07 - a10 * b09 - a12 * b06) * det, (a00 * b09 - a01 * b07 + a02 * b06) * det,
+    (a31 * b01 - a30 * b03 - a32 * b00) * det, (a20 * b03 - a21 * b01 + a22 * b00) * det]);
+}
+function unprojectPoint(inv, px, py, ndcZ, w, h) { // exact inverse of projectPoint
+  const x = (px / w) * 2 - 1, y = 1 - (py / h) * 2;
+  const cw = inv[3] * x + inv[7] * y + inv[11] * ndcZ + inv[15];
+  return [(inv[0] * x + inv[4] * y + inv[8] * ndcZ + inv[12]) / cw,
+          (inv[1] * x + inv[5] * y + inv[9] * ndcZ + inv[13]) / cw,
+          (inv[2] * x + inv[6] * y + inv[10] * ndcZ + inv[14]) / cw];
+}
+// World-space ray through a CSS-pixel cursor position: from the near plane to
+// the far plane of the current view. Origin is the near-plane point, so ray
+// parameters compare consistently across every run in the scene.
+function cameraRay(mvp, px, py, w, h) {
+  const inv = invertMat4(mvp);
+  if (!inv) return null;
+  const near = unprojectPoint(inv, px, py, -1, w, h);
+  const far = unprojectPoint(inv, px, py, 1, w, h);
+  const dir = [far[0] - near[0], far[1] - near[1], far[2] - near[2]];
+  const len = Math.hypot(dir[0], dir[1], dir[2]);
+  if (!Number.isFinite(len) || len < 1e-12 || !Number.isFinite(near[0] + near[1] + near[2]))
+    return null;
+  return { origin: near, dir };
 }
 
 // ---------------------------------------------------------------- GL helpers
@@ -142,7 +198,10 @@ const state = {
   showAttention: false,
   showUncertainty: false,
   visible: [],
-  pick: null, hover: null,
+  // `hover` is what the cursor is over right now; `pinned` is the pick a click
+  // froze (it survives the cursor moving away, until Escape or a click on
+  // empty space). `pick` is whichever of the two the panel currently shows.
+  pick: null, hover: null, pinned: null, pickPinned: false,
   cam: { theta: -2.2, phi: 0.65, dist: 10, target: [0, 0, 0] },
   mouse: null,
 };
@@ -250,6 +309,10 @@ function buildRun(run, runIdx, colorBase, dashUnit) {
   // decode boundary: trajectories j >= genFrom trace generated ("+") tokens
   // (-1 when the run has no decode record, or trajectories aren't 1:1 tokens)
   const genFrom = MTJ.generationBoundary(run);
+  // spatial index for picking: one BVH over this run's layer-to-layer chords
+  // (segment j*(L-1)+l joins layer l to l+1 of trajectory j, meta [j, l]).
+  // Built once per scene load; the camera ray is cast against it every frame.
+  const bvh = BVH.fromPoints(pts, N, L);
   const trajs = [], lineVerts = [], lineCols = [];
   for (let j = 0; j < N; j++) {
     const rgb = hexRGB(PALETTE[(colorBase + j) % PALETTE.length]);
@@ -308,7 +371,7 @@ function buildRun(run, runIdx, colorBase, dashUnit) {
     { name: "pos", size: 3, data: new Float32Array(d.pos) },
     { name: "col", size: 4, data: new Float32Array(d.col) },
     { name: "size", size: 1, data: new Float32Array(d.size) }]).vao : null;
-  return { run, N, L, trajs, alpha,
+  return { run, N, L, trajs, alpha, bvh,
            lineVao: lineVao.vao, lineCount: linePos.length / 3,
            dotVao: mkDots(dotSets.base), dotCount: dotSets.base.size.length,
            genDotVao: mkDots(dotSets.gen), genDotCount: dotSets.gen.size.length };
@@ -335,7 +398,10 @@ function setScene(scene) {
   state.L = scene.runs[0].points.shape[1];
   state.layerF = 0;
   state.playing = false;
-  state.pick = null;
+  state.pick = state.hover = state.pinned = null;
+  state.pickPinned = false;
+  ui.infoPanel.hidden = true;
+  ui.infoPanel.classList.remove("pinned");
   state.visible = scene.runs.map(() => true);
 
   // Real-model scenes span hundreds of units in x/y while terrain height is
@@ -441,7 +507,7 @@ function currentMVP() {
   const eye = [c.target[0] + c.dist * Math.cos(c.phi) * Math.cos(c.theta),
                c.target[1] + c.dist * Math.cos(c.phi) * Math.sin(c.theta),
                c.target[2] + c.dist * Math.sin(c.phi)];
-  const proj = perspective(0.9, canvas.clientWidth / Math.max(canvas.clientHeight, 1), c.dist * 0.01, c.dist * 20);
+  const proj = perspective(FOVY, canvas.clientWidth / Math.max(canvas.clientHeight, 1), c.dist * 0.01, c.dist * 20);
   return matMul(proj, lookAt(eye, c.target, [0, 0, 1]));
 }
 
@@ -556,42 +622,96 @@ function frame(now) {
 }
 
 // ---------------------------------------------------------------- picking
-function updatePick(mvp) {
-  if (!state.mouse) { setPickInfo(null); return null; }
-  const w = canvas.clientWidth, h = canvas.clientHeight;
-  let best = null, bestD = PICK_RADIUS;
-  const multi = state.scene.runs.length > 1;
-  state.runs.forEach((rd, i) => {
-    if (!state.visible[i]) return;
-    const pts = rd.run.points.data, L = rd.L;
-    for (let j = 0; j < rd.N; j++) for (let l = 0; l < L; l++) {
-      const p = [pts[(j * L + l) * 3], pts[(j * L + l) * 3 + 1], pts[(j * L + l) * 3 + 2]];
-      const s = projectPoint(mvp, p, w, h);
-      if (s[2] <= 0) continue;
-      const d = Math.hypot(s[0] - state.mouse[0], s[1] - state.mouse[1]);
-      if (d < bestD) {
-        bestD = d;
-        best = { runIdx: i, traj: j, layer: l, p, rgb: rd.trajs[j].rgb,
-                 label: (multi ? rd.run.label + " · " : "") + rd.trajs[j].label };
-      }
-    }
-  });
-  setPickInfo(best);
-  return best;
+// True 3-D picking: the cursor is unprojected to a world-space camera ray and
+// cast at each visible run's segment BVH, keeping the front-most hit across
+// runs. This replaces the old O(N·L)-per-frame screen-space scan over stored
+// layer points — the cursor now grabs anywhere *along* a trajectory, and the
+// reading it returns carries the fractional layer it landed at.
+
+// PICK_RADIUS screen pixels as a world-space tolerance at the orbit target's
+// depth, so the grab feels the same at every zoom level and scene scale.
+function pickRadiusWorld(h) {
+  return PICK_RADIUS * 2 * Math.tan(FOVY / 2) * state.cam.dist / Math.max(h, 1);
 }
 
-function setPickInfo(pick) {
-  const same = (a, b) => a && b && a.runIdx === b.runIdx && a.traj === b.traj && a.layer === b.layer;
-  if (same(pick, state.pick) || (!pick && !state.pick)) { state.pick = pick; return; }
-  state.pick = pick;
-  if (!pick) { ui.infoPanel.hidden = true; return; }
+// Position on the drawn curve at a fractional layer. The BVH indexes the
+// straight layer-to-layer chords, but the line the user sees is the
+// Catmull-Rom densification of the same points — read the highlight off that
+// so it never floats off the ribbon it is meant to be riding.
+function finePoint(fine, layerFrac) {
+  const n = fine.length / 3, f = layerFrac * SEG;
+  const i0 = Math.min(n - 1, Math.max(0, Math.floor(f))), i1 = Math.min(i0 + 1, n - 1);
+  const fr = f - i0;
+  return [fine[i0 * 3] + (fine[i1 * 3] - fine[i0 * 3]) * fr,
+          fine[i0 * 3 + 1] + (fine[i1 * 3 + 1] - fine[i0 * 3 + 1]) * fr,
+          fine[i0 * 3 + 2] + (fine[i1 * 3 + 2] - fine[i0 * 3 + 2]) * fr];
+}
+
+// BVH hit -> the pick shape the inspector and the highlight already speak.
+// The segment's meta is [traj, layer-of-its-start], and how far along the
+// segment the ray landed gives the fractional layer; `layer` rounds that to
+// the nearer endpoint, which is the layer every per-(layer, token) readout
+// (entropy, features, quality, top-k) is indexed by.
+function hitToPick(hit, rd, runIdx, multi) {
+  const m = BVH.metaOf(rd.bvh, hit.index);
+  if (!m) return null;
+  const traj = m[0];
+  const layerFrac = m[1] + BVH.segmentParam(rd.bvh, hit.index, hit.point);
+  const layer = Math.min(rd.L - 1, Math.max(0, Math.round(layerFrac)));
+  const t = rd.trajs[traj];
+  if (!t) return null;
+  return { runIdx, traj, layer, layerFrac, p: finePoint(t.fine, layerFrac),
+           rgb: t.rgb, label: (multi ? rd.run.label + " · " : "") + t.label };
+}
+
+// The reading under the cursor right now, or null.
+function hoverPick(mvp) {
+  if (!state.mouse || !state.scene) return null;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const ray = cameraRay(mvp, state.mouse[0], state.mouse[1], w, h);
+  if (!ray) return null;
+  const radius = pickRadiusWorld(h), multi = state.scene.runs.length > 1;
+  let best = null, bestRd = null, bestIdx = -1, bestT = Infinity;
+  state.runs.forEach((rd, i) => {
+    if (!state.visible[i] || !rd.bvh || !rd.bvh.length) return;
+    // maxDist is the best t so far, so a farther run can never take the pick
+    const hit = BVH.rayPick(rd.bvh, ray.origin, ray.dir, { radius, maxDist: bestT });
+    if (hit) { bestT = hit.t; best = hit; bestRd = rd; bestIdx = i; }
+  });
+  return best ? hitToPick(best, bestRd, bestIdx, multi) : null;
+}
+
+function updatePick(mvp) {
+  state.hover = hoverPick(mvp);
+  // a pinned reading holds the panel; hovering only previews when nothing is
+  const shown = state.pinned || state.hover;
+  setPickInfo(shown, !!state.pinned);
+  return shown;
+}
+
+function setPickInfo(pick, pinned) {
+  // Re-render only when the displayed reading would actually change —
+  // layerFrac is compared at the one decimal the panel prints.
+  const same = (a, b) => a && b && a.runIdx === b.runIdx && a.traj === b.traj &&
+                         a.layer === b.layer &&
+                         Math.round(a.layerFrac * 10) === Math.round(b.layerFrac * 10);
+  pinned = !!pinned;
+  if (pinned === state.pickPinned && (same(pick, state.pick) || (!pick && !state.pick))) {
+    state.pick = pick; return;
+  }
+  state.pick = pick; state.pickPinned = pinned;
+  if (!pick) { ui.infoPanel.hidden = true; ui.infoPanel.classList.remove("pinned"); return; }
   const run = state.scene.runs[pick.runIdx];
   const T = run.tokens.length;
   const tok = pick.traj < T ? pick.traj : T - 1; // trajectory j reads out token j (last token if fewer)
   // decoded tokens read "+"-prefixed, matching the explorer's convention
   const genTok = MTJ.isGeneratedToken(run.generation, tok);
+  // between two layers the ray hit reads fractionally ("layer 8.4"); the
+  // readouts below still key off the nearer integer layer
+  const lf = pick.layerFrac;
+  const between = typeof lf === "number" && Math.abs(lf - pick.layer) >= 0.05;
   let html = `<div class="ip-title">${esc(pick.label)}</div>` +
-             `<div>layer <b>${pick.layer}</b> · token <span class="mono">'${esc((genTok ? "+" : "") + (run.tokens[tok] ?? "?"))}'</span></div>`;
+             `<div>layer <b>${between ? lf.toFixed(1) : pick.layer}</b> · token <span class="mono">'${esc((genTok ? "+" : "") + (run.tokens[tok] ?? "?"))}'</span></div>`;
   const step = genTok ? MTJ.generationStep(run.generation, tok) : null;
   if (step) {
     const bits = [];
@@ -630,7 +750,9 @@ function setPickInfo(pick) {
       `<span class="mono">'${esc(t)}'</span> <span class="dim">${(p * 100).toFixed(1)}%</span></div>`).join("");
     html += `<div class="topk"><span class="dim">top-k readout</span>${rows}</div>`;
   }
+  if (pinned) html += `<div class="ip-pin">pinned · Esc to clear</div>`;
   ui.infoPanel.innerHTML = html;
+  ui.infoPanel.classList.toggle("pinned", pinned);
   ui.infoPanel.hidden = false;
 }
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
@@ -684,7 +806,13 @@ function buildUI(scene) {
     const label = document.createElement("label");
     const cb = document.createElement("input");
     cb.type = "checkbox"; cb.checked = true;
-    cb.addEventListener("change", () => { state.visible[i] = cb.checked; rebuildAttention(); });
+    cb.addEventListener("change", () => {
+      state.visible[i] = cb.checked;
+      // a pin on a run that just went invisible would leave the highlight
+      // floating over nothing
+      if (!cb.checked && state.pinned && state.pinned.runIdx === i) state.pinned = null;
+      rebuildAttention();
+    });
     label.appendChild(cb);
     label.insertAdjacentHTML("beforeend",
       `<span class="swatch" style="background:${sw}"></span><b>${esc(run.label)}</b>` +
@@ -754,12 +882,15 @@ ui.fileInput.addEventListener("change", () => {
 // camera controls
 let drag = null;
 canvas.addEventListener("pointerdown", (e) => {
-  drag = { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.shiftKey };
+  drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, moved: false,
+           pan: e.button === 2 || e.shiftKey };
   canvas.setPointerCapture(e.pointerId);
 });
 canvas.addEventListener("pointermove", (e) => {
   state.mouse = [e.clientX, e.clientY];
   if (!drag) return;
+  // past a few pixels this is an orbit/pan, not a click — so it can't pin
+  if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) > 3) drag.moved = true;
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
   drag.x = e.clientX; drag.y = e.clientY;
   const c = state.cam;
@@ -773,8 +904,19 @@ canvas.addEventListener("pointermove", (e) => {
     c.phi = Math.min(1.55, Math.max(-1.55, c.phi + dy * 0.006));
   }
 });
-canvas.addEventListener("pointerup", () => { drag = null; });
+// A click that didn't orbit or pan pins whatever is under the cursor, and
+// clears the pin when that is empty space. The ray is re-cast here rather
+// than reusing the last frame's hover so a move-then-click lands where the
+// cursor actually is.
+canvas.addEventListener("pointerup", (e) => {
+  const click = drag && !drag.moved && !drag.pan && e.button === 0;
+  drag = null;
+  if (click && state.scene) state.pinned = hoverPick(currentMVP());
+});
 canvas.addEventListener("pointerleave", () => { state.mouse = null; });
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && state.pinned) { state.pinned = null; e.preventDefault(); }
+});
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 canvas.addEventListener("wheel", (e) => {
   e.preventDefault();

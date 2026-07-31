@@ -52,18 +52,26 @@ Today Mottled has one time axis: layers. Autoregressive decode is the second.
       first contact.
 
 ### M3 — A tangible viewer
-- [ ] Wire `bvh.py` (built, tested, currently unwired) into the WebGL viewer:
-      ray-picked click-to-inspect on any trajectory segment.
-- [ ] Inspector parity with the explorer (predictions, neighbors, features,
-      decomposition) so the shareable viewer is not the lesser surface.
+- [x] `bvh.py` ported to `viewer/bvh.js` and pinned by a cross-language
+      conformance test; the viewer picks by real camera ray against the
+      segment index — grab anywhere along a trajectory, fractional layer in
+      the inspector, click-to-pin.
+- [ ] Inspector parity with the explorer (neighbors, residual decomposition)
+      so the shareable viewer is not the lesser surface.
 
 ### M4 — Closed-model producers
 The architecture diagram has promised "OpenAI / Anthropic logprobs" from the
 start.
-- [ ] Logprob-trajectory producer: what a closed API exposes, as a degraded
-      `StateTrajectory` (final-layer readout evolution across decode steps).
-- [ ] The fidelity machinery states exactly which layers of the picture are
-      absent — honest about the ceiling, not silent about it.
+- [x] `models/logprobs.py`: per-step top-k logprobs as a degraded
+      `StateTrajectory` — depth is unavailable, so the animated axis is decode
+      time and the geometry is the output distribution. Unreported top-k mass
+      gets its own visible bucket; `from_openai_logprobs` adapts OpenAI-style
+      responses.
+- [x] The trajectory declares its own ceiling (`meta.degraded`, `meta.absent`,
+      `entropy_is_lower_bound`) and the explorer prints it as a banner
+      (`ui.degraded_note`) above the scene.
+- [ ] A live end-to-end path (fetch logprobs from a configured provider) and a
+      bundled sample scene.
 
 ### M5 — A sustainable core
 - [ ] Split `ui.py` (53 KB and growing) into a `mottled/` package with
