@@ -36,8 +36,10 @@ def test_viewer_css_root_mirrors_tokens():
     assert var("color-fg-1") == T.FG_1.lower()
 
 
-def test_ui_consumes_the_token_source():
-    import ui
+def test_renderer_consumes_the_token_source():
+    """The Plotly renderer draws from design_tokens, not its own constants
+    (it lives in render.py since the ui.py split)."""
+    import render
 
-    assert ui._MARBLE_COLORS is T.MARBLE_COLORS
-    assert ui._TERRAIN_COLORSCALE is T.TERRAIN_COLORSCALE
+    assert render._MARBLE_COLORS is T.MARBLE_COLORS
+    assert render._TERRAIN_COLORSCALE is T.TERRAIN_COLORSCALE

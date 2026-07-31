@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-07-29
+
+Two new axes (generation, closed models), real SAEs with their calibration
+measured rather than assumed, honest picking shared between both viewers, and
+a smaller `ui.py`.
+
+### A smaller core (roadmap M5)
+- `ui.py` (1262 lines, carrying the pipeline, two renderers and the app at
+  once) is split into **`pipeline.py`** (capture → project → density →
+  terrain → paths) and **`render.py`** (the Plotly scene and the SAE feature
+  field), leaving `ui.py` the Streamlit shell. Both new modules are pure —
+  no Streamlit, no browser — so a scene builds and draws identically from a
+  notebook, a script, the CLI or the server.
+- **The flat public API is unchanged**: `ui` re-exports everything, so
+  `from ui import run_pipeline, render, run_scene, …` keeps working exactly
+  as the README documents. New code should import from `pipeline` / `render`.
 
 ### Picking you can trust (roadmap M3)
 - `viewer/bvh.js` ports `bvh.py`'s BVH over trajectory segments to the web

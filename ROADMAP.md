@@ -74,10 +74,20 @@ start.
       bundled sample scene.
 
 ### M5 — A sustainable core
-- [ ] Split `ui.py` (53 KB and growing) into a `mottled/` package with
-      focused modules; keep the flat public API via re-exports.
-- [ ] Cut `0.2.0` and publish to PyPI through the existing Trusted Publishing
-      workflow.
+- [x] Split `ui.py` into `pipeline.py` + `render.py` + the Streamlit shell,
+      with `ui` re-exporting both so the documented flat API is unchanged.
+- [x] Cut `0.2.0` (tag `v0.2.0` drives the existing Trusted Publishing
+      workflow).
+- [ ] **Deferred deliberately — the `mottled/` package move.** The original
+      plan was to land the split *inside* a `mottled/` package. But the
+      README documents flat imports (`from capture import capture`) as the
+      public API, so that move is a breaking change, and bundling it with a
+      refactor would hide the break inside a diff that otherwise changes no
+      behavior. It deserves its own release with a deprecation path: ship
+      `mottled/` re-exporting the flat modules, warn on the flat imports for
+      one version, then remove them. Until then the flat layout's real cost
+      stands — installing top-level `config` / `cache` / `metrics` into
+      site-packages is poor citizenship for a package meant to be adopted.
 
 ### M6 — The cross-model atlas
 The comparison machinery (Hausdorff, DTW, divergence profiles) currently
