@@ -245,7 +245,13 @@ def render(
     # Marbles: one animated marker per trajectory, positioned along the
     # densified path; fine index f corresponds to layer f / frames_per_layer.
     fine_paths = [p for _, _, fp in all_runs for p in fp]
-    n_frames = min(len(p) for p in fine_paths) if fine_paths else 0
+    # Span the DEEPEST run, not the shallowest. Runs of unequal depth are
+    # normal now (two models on one terrain), and taking the minimum silently
+    # made the deeper model's late layers unreachable — the scrubber simply
+    # stopped early with no sign anything had been cut. A shorter run's
+    # marble rests at its final state instead (marble_trace already clamps).
+    n_frames = max(len(p) for p in fine_paths) if fine_paths else 0
+    max_layers = max(src.n_layers for src, _, _ in all_runs)
     start = min(current_layer * frames_per_layer, max(n_frames - 1, 0))
 
     def marble_trace(f: int) -> go.Scatter3d:
@@ -273,7 +279,7 @@ def render(
                 "label": str(layer),
                 "method": "animate",
             }
-            for layer in range(traj.n_layers)
+            for layer in range(max_layers)
             if layer * frames_per_layer < n_frames
         ]
         fig.update_layout(

@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Audit: within-model assumptions applied across models
+Until three changes ago, "two runs" always meant "two prompts through one
+model". Cross-model scenes made that false, and two bugs of the same shape
+had already surfaced (`_assemble_scene`, the explorer's A/B panel), so the
+rest of the codebase was swept for the same assumption. Three more found:
+
+- **The layer scrubber silently truncated to the shallowest run.** `render`
+  sized the animation with `min` over the runs' path lengths, so on a
+  13-layer vs 7-layer scene the slider stopped at layer 6 and the deeper
+  model's entire second half was unreachable — with nothing saying so. It now
+  spans the deepest run; a shorter run's marble rests at its final state.
+- **Scene files identified the model only globally.** `meta` describes run 0,
+  which is simply wrong for a scene whose runs are different models. Each run
+  now carries its own `model` (additive).
+- **The trained SAE was offered by hidden width alone.** Width identifies a
+  model's residual stream only when the states *are* a residual stream; a
+  readout-space trajectory's axes are vocabulary entries, so a width
+  collision would have offered a residual SAE for probability vectors. The
+  guard now keys on the space, not the number.
+
 ### The atlas, reachable
 The cross-model work was API- and CLI-only; the explorer can now drive it.
 - A **"Compare models"** field in the sidebar: name other models and they are
