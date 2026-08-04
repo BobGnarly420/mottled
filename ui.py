@@ -42,6 +42,7 @@ from pipeline import (  # noqa: F401
     degraded_note,
     run_compare,
     run_intervention,
+    run_model_scene,
     run_pipeline,
     run_scene,
 )
@@ -56,10 +57,74 @@ from render import (  # noqa: F401
 
 __all__ = [
     "run_pipeline", "run_scene", "run_compare", "run_intervention",
-    "attach_features", "degraded_note",
+    "run_model_scene", "attach_features", "degraded_note",
     "render", "render_feature_field", "field_rgb",
     "main",
 ]
+
+
+def render_model_comparison(st, result: dict) -> None:
+    """The cross-model panel: what the models do, how they represent, and
+    where each measurement stops being valid.
+
+    Takes the Streamlit module as an argument so the logic stays importable
+    and testable without a browser (the rest of the app-only code lives in
+    `main`).
+    """
+    import crossmodel
+
+    names = result["model_names"]
+    sources = result.get("source_trajs") or result["trajs"]
+    base = sources[0]
+
+    st.caption(
+        f"Built in **readout space** over the **{result['shared_vocab']}** "
+        f"vocabulary entries these models share — they have no common hidden "
+        f"space, so the shared thing is what they predict, not how they "
+        f"represent it. The `{crossmodel.UNSHARED_TOKEN}` component holds the "
+        f"mass each model spends on tokens the others do not have.")
+
+    for name, cmp in zip(names[1:], result.get("model_comparisons") or []):
+        st.markdown(f"**{names[0]} vs {name}**")
+        st.write(f"final-layer readout divergence: **{cmp.final_divergence:.4f}** "
+                 f"(Jensen-Shannon, nats) · top-1 {cmp.top_a!r} vs {cmp.top_b!r}")
+        if cmp.agree_from is not None:
+            st.write(f"top-1 predictions agree from normalized layer "
+                     f"**{cmp.agree_from}** onward")
+        else:
+            st.write("top-1 predictions never settle on the same token")
+        st.line_chart({"readout divergence": cmp.divergence})
+        st.caption("Depth is normalized before comparing: layer 6 of a "
+                   "12-layer model is not layer 6 of a 32-layer one.")
+
+    for name, other in zip(names[1:], sources[1:]):
+        try:
+            align = crossmodel.layer_similarity(base, other)
+        except ValueError as err:
+            st.caption(f"Layer alignment for **{name}** unavailable — {err}")
+            continue
+        st.markdown(f"**Layer alignment · {names[0]} → {name}**")
+        st.write(align.summary())
+        rows = {f"layer {l}": int(b) for l, b in enumerate(align.best)}
+        st.bar_chart({"best-matching layer": list(rows.values())})
+        weak = [l for l, ok in enumerate(align.identified()) if not ok]
+        if weak:
+            st.caption(f"Layers {weak} sit on flat rows: their best match "
+                       f"barely beats the field, so read them as *unresolved*, "
+                       f"not as a correspondence.")
+
+    gens = [t for t in sources if isinstance(t.meta.get("generation"), dict)]
+    if len(gens) >= 2:
+        st.markdown("**Generation**")
+        gcmp = crossmodel.compare_generations(gens[0], gens[1])
+        st.write(gcmp.summary())
+        st.dataframe(
+            [{"step": i,
+              names[0]: gcmp.tokens_a[i], "p(a)": round(float(gcmp.p_a[i]), 4),
+              names[1]: gcmp.tokens_b[i], "p(b)": round(float(gcmp.p_b[i]), 4),
+              "same": bool(gcmp.agree[i])}
+             for i in range(len(gcmp.agree))],
+            use_container_width=True, hide_index=True)
 
 
 def main() -> None:
@@ -106,6 +171,13 @@ def main() -> None:
                                 help="Each line becomes another run drawn on the "
                                      "same terrain and compared against the prompt above.")
         model_name = st.selectbox("Model", MODEL_CHOICES, index=0, key="model")
+        extra_models = st.text_input(
+            "Compare models (comma-separated, optional)", "", key="extra_models",
+            help="Draw other models on the SAME terrain for this prompt. They "
+                 "share no hidden space, so the scene is built in readout space "
+                 "— the vocabulary the models have in common — with the mass "
+                 "each spends outside it kept visible. Overrides the overlay "
+                 "prompts above.")
         proj_name = st.selectbox("Projection", PROJECTION_CHOICES, key="projection")
         dens_name = st.selectbox("Density estimator", DENSITY_CHOICES, key="density")
         top_k = st.slider("Top-k", 1, 10, 5, key="top_k")
@@ -152,8 +224,17 @@ def main() -> None:
         if model_name != "synthetic":
             model, tokenizer = load_model_cached(model_name)
         overlays = [p.strip() for p in prompt_b.splitlines() if p.strip()]
+        others = [m.strip() for m in extra_models.split(",") if m.strip()]
         with st.spinner("Capturing forward pass…"):
-            if overlays:
+            if others:
+                names = [model_name] + others
+                loaded = {model_name: (model, tokenizer)} if model is not None else {}
+                for name in others:
+                    if name != "synthetic":
+                        loaded[name] = load_model_cached(name)
+                st.session_state["result"] = run_model_scene(cfg, prompt, names,
+                                                             loaded=loaded)
+            elif overlays:
                 st.session_state["result"] = run_scene(cfg, [prompt] + overlays,
                                                        model=model, tokenizer=tokenizer)
             else:
@@ -513,7 +594,12 @@ def main() -> None:
                        "not measured. The web viewer's uncertainty toggle shows "
                        "the SE field on the terrain itself.")
 
-        if result.get("traj_b") is not None:
+        # A/B is a layer-for-layer measurement, so it is only defined when the
+        # two runs have the same depth — true for prompts through one model,
+        # generally false across models (which get their own panel below).
+        if (result.get("traj_b") is not None
+                and result["traj_b"].n_layers == traj.n_layers
+                and result["traj_b"].dim == traj.dim):
             with st.expander("A/B comparison", expanded=True):
                 st.caption(f"B = {result.get('prompt_b', '')}")
                 cmp = compare_mod.compare(traj, result["traj_b"],
@@ -529,6 +615,10 @@ def main() -> None:
                     st.write(f"top-1 prediction differs from layer **{cmp.readout_changed}**")
                 st.markdown("**A–B distance per layer**")
                 st.line_chart(cmp.profile)
+
+        if result.get("model_names"):
+            with st.expander("Model comparison", expanded=True):
+                render_model_comparison(st, result)
 
         if (div := result.get("divergence")) is not None:
             with st.expander("Intervention divergence", expanded=True):
