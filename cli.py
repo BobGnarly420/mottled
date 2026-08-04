@@ -38,6 +38,11 @@ def main(argv: list[str] | None = None) -> int:
                                "(the decode axis; default 0 = prompt only)")
     p_export.add_argument("--temperature", type=float, default=0.0,
                           help="decode temperature (0 = greedy, seeded above 0)")
+    p_export.add_argument("--models", default=None, metavar="A,B",
+                          help="compare several models on ONE prompt instead of "
+                               "several prompts on one model. The scene is built "
+                               "in readout space (the vocabulary the models share), "
+                               "since they share no hidden space.")
 
     args = parser.parse_args(argv)
 
@@ -55,6 +60,18 @@ def main(argv: list[str] | None = None) -> int:
         cfg = MarbleConfig(model=args.model, use_cache=False,
                            generate_tokens=args.generate,
                            generate_temperature=args.temperature)
+        if args.models:
+            from pipeline import run_model_scene
+
+            names = [m.strip() for m in args.models.split(",") if m.strip()]
+            result = run_model_scene(cfg, args.prompts[0], names)
+            statefile.save_scene(result, args.output)
+            print(f"wrote {args.output}: {len(names)} models on "
+                  f"{result['shared_vocab']} shared vocabulary entries")
+            for name, cmp in zip(names[1:], result["model_comparisons"]):
+                print(f"  {names[0]} vs {name}: final JS "
+                      f"{cmp.final_divergence:.4f}, top-1 {cmp.top_a!r} vs {cmp.top_b!r}")
+            return 0
         statefile.save_scene(run_scene(cfg, args.prompts), args.output)
         print(f"wrote {args.output}")
         return 0

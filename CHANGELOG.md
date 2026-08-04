@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased
+
+### The cross-model atlas (roadmap M6)
+`compare.py` could only compare runs inside one model — same depth, same
+width. `crossmodel.py` compares *models*, which share neither, and often not
+a tokenizer either. It builds on the one thing they do share: the text they
+read out into.
+
+- **Readout space** (`crossmodel.readout_space`): every state becomes the
+  next-token distribution it predicts over the vocabulary all the models
+  share, with the mass spent on tokens only one model knows kept in a visible
+  `⟨unshared⟩` bucket rather than renormalised away. It is a real shared
+  coordinate system, so `project_joint`, the terrain and both viewers accept
+  it unchanged — different architectures on one manifold.
+- `crossmodel.compare_models` measures where two models' readouts diverge,
+  layer by layer (Jensen-Shannon on the shared vocabulary), resampling onto a
+  common depth first, because layer 6 of a 12-layer model is not layer 6 of a
+  32-layer one.
+- `crossmodel.layer_similarity` answers the other question — which layer of B
+  matches layer *l* of A — with CKA, which needs no alignment because it is
+  invariant to width, rotation and scale. It requires *paired* states and
+  decides that on the token **strings**, not their count: two tokenizers can
+  produce the same number of pieces while cutting the text in different
+  places, and pairing those would compare non-counterparts.
+- **The measurement reports whether it is identified.** CKA on a raw residual
+  stream saturates: a few very-high-variance dimensions shared by every layer
+  dominate, so every layer looks ~1.0 similar to every other. On GPT-2 vs
+  DistilGPT-2 over 45 tokens, raw CKA leaves the middle rows flat to within
+  0.001 — an argmax that is pure noise — while z-scoring each dimension
+  recovers a **monotone, proportional** correspondence (13 layers onto 7).
+  Standardizing is therefore the default, `LayerAlignment.contrast` reports
+  how far each row's winner beats its field, and the docstring states the
+  cost of the trade: exact isotropic-scale invariance is kept, exact rotation
+  invariance is not (~0.96 for a rotated copy).
+- `pipeline.run_model_scene` builds a scene from several models on one
+  prompt; `mottled export PROMPT --models a,b` writes it. New sample
+  `viewer/samples/models-gpt2-distilgpt2.mtj`.
+- Fixed along the way: `_assemble_scene` crashed when runs had different
+  depths (it always ran the layer-for-layer `compare`). The pairwise table is
+  now simply absent where it is undefined, instead of fabricated or fatal.
+
 ## 0.2.0 — 2026-07-29
 
 Two new axes (generation, closed models), real SAEs with their calibration
