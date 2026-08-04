@@ -12,6 +12,8 @@ the comparison on that, and nothing else.
                                       # system (distribution over shared vocab)
     compare_models(traj_a, traj_b)    # where their dynamics diverge, per layer
     layer_similarity(traj_a, traj_b)  # which layer of B matches layer l of A
+    compare_generations(a, b)         # where their *generations* part company
+    forced_divergence(a, b)           # both scored on one fixed text
 
 Two independent views, deliberately:
 
@@ -364,4 +366,135 @@ def layer_similarity(traj_a: StateTrajectory, traj_b: StateTrajectory,
         contrast=(matrix.max(axis=1) - np.median(matrix, axis=1)).astype(np.float32),
         monotone=bool(np.all(np.diff(best) >= 0)),
         n_states=int(traj_a.n_tokens),
+    )
+
+
+# ------------------------------------------------------- the decode axis
+@dataclass
+class GenerationComparison:
+    """Where two models' generations part company, step by step.
+
+    `comparable_steps` is the honest boundary: once the models choose
+    different tokens their contexts differ, so every later step is each model
+    answering a *different question*. Steps past that point are reported
+    (they are what the models actually did) but must not be read as a
+    measurement of the same quantity.
+    """
+
+    tokens_a: list[str]
+    tokens_b: list[str]
+    agree: np.ndarray            # (S,) did both choose the same token at step s
+    p_a: np.ndarray              # (S,) probability each model gave its choice
+    p_b: np.ndarray
+    entropy_a: np.ndarray        # (S,) spread of each model's step distribution
+    entropy_b: np.ndarray
+    first_divergence: int | None  # first step where the choices differ
+    comparable_steps: int        # steps before the contexts diverge
+
+    def summary(self) -> str:
+        n = len(self.agree)
+        if self.first_divergence is None:
+            return (f"identical generations for all {n} steps "
+                    f"(contexts never diverge)")
+        return (f"diverge at step {self.first_divergence} "
+                f"({self.tokens_a[self.first_divergence]!r} vs "
+                f"{self.tokens_b[self.first_divergence]!r}); "
+                f"steps 0–{self.comparable_steps - 1} are like-for-like, the "
+                f"rest are different continuations, not a comparison")
+
+
+def _generation_steps(traj: StateTrajectory) -> list[dict]:
+    gen = traj.meta.get("generation")
+    if not isinstance(gen, dict) or not gen.get("steps"):
+        raise ValueError("this trajectory carries no decode record; capture it "
+                         "with capture.generate_and_capture (or a producer that "
+                         "fills meta['generation'])")
+    return gen["steps"]
+
+
+def compare_generations(traj_a: StateTrajectory,
+                        traj_b: StateTrajectory) -> GenerationComparison:
+    """Compare two models' free-running generations of the same prompt.
+
+    Both arguments come from `capture.generate_and_capture` on the same
+    prompt. Free-running generation is only a like-for-like comparison up to
+    the first disagreement: after that the models are continuing *different*
+    texts, and a step-by-step divergence number would be comparing answers to
+    different questions. That boundary is measured and reported rather than
+    glossed over — for a comparison that stays valid all the way down, score
+    both models on one fixed continuation with `forced_divergence`.
+    """
+    sa, sb = _generation_steps(traj_a), _generation_steps(traj_b)
+    n = min(len(sa), len(sb))
+    if not n:
+        raise ValueError("both trajectories need at least one decode step")
+
+    tokens_a = [str(s["token"]) for s in sa[:n]]
+    tokens_b = [str(s["token"]) for s in sb[:n]]
+    agree = np.array([a == b for a, b in zip(tokens_a, tokens_b)], dtype=bool)
+    first = int(np.argmin(agree)) if not agree.all() else None
+
+    return GenerationComparison(
+        tokens_a=tokens_a,
+        tokens_b=tokens_b,
+        agree=agree,
+        p_a=np.array([float(s["p"]) for s in sa[:n]], dtype=np.float32),
+        p_b=np.array([float(s["p"]) for s in sb[:n]], dtype=np.float32),
+        entropy_a=np.array([float(s["entropy"]) for s in sa[:n]], dtype=np.float32),
+        entropy_b=np.array([float(s["entropy"]) for s in sb[:n]], dtype=np.float32),
+        first_divergence=first,
+        comparable_steps=n if first is None else first + 1,
+    )
+
+
+@dataclass
+class ForcedDivergence:
+    """Two models scored on one fixed text, position by position."""
+
+    divergence: np.ndarray       # (T-1,) JS between next-token distributions
+    top_agree: np.ndarray        # (T-1,) same top-1 prediction?
+    tokens: list[str]            # the text both models were scored on
+    shared_vocab: int
+    unshared_a: np.ndarray       # (T-1,) mass each spends outside shared vocab
+    unshared_b: np.ndarray
+
+    @property
+    def worst_position(self) -> int:
+        return int(np.argmax(self.divergence))
+
+
+def forced_divergence(traj_a: StateTrajectory,
+                      traj_b: StateTrajectory) -> ForcedDivergence:
+    """Score two models on the *same* text and compare every next-token step.
+
+    Teacher forcing: because both trajectories are captures of one fixed
+    token sequence, each model's final-layer readout at position t is its
+    prediction for t+1 given identical context. Unlike free-running
+    generation, that stays a like-for-like comparison for the whole sequence —
+    it answers "would B have said what A said, here?" at every position.
+
+    Needs the two runs to have tokenized the text identically (the same
+    condition `layer_similarity` requires, and for the same reason: position t
+    must mean the same thing to both).
+    """
+    if list(traj_a.tokens) != list(traj_b.tokens):
+        raise ValueError(
+            "forced scoring needs both models to have tokenized the same text "
+            "identically, so position t is the same context for both; these "
+            f"runs differ ({traj_a.n_tokens} vs {traj_b.n_tokens} tokens). "
+            "Compare their free-running generations instead "
+            "(compare_generations), or use readout space (compare_models).")
+
+    (ra, rb), vocab = readout_space([traj_a, traj_b])
+    # final layer = the model's actual output distribution; positions 0..T-2
+    # predict the next token (the last position has no successor in the text)
+    pa, pb = ra.hidden[-1, :-1, :], rb.hidden[-1, :-1, :]
+    div = _js_divergence(_renorm(pa[:, :-1]), _renorm(pb[:, :-1]))
+    return ForcedDivergence(
+        divergence=div.astype(np.float32),
+        top_agree=(pa[:, :-1].argmax(axis=-1) == pb[:, :-1].argmax(axis=-1)),
+        tokens=list(traj_a.tokens),
+        shared_vocab=len(vocab),
+        unshared_a=pa[:, -1].astype(np.float32),
+        unshared_b=pb[:, -1].astype(np.float32),
     )

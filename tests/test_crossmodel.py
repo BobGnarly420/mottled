@@ -293,3 +293,84 @@ def test_cli_export_models(tmp_path, capsys):
     assert "shared vocabulary" in capsys.readouterr().out
     scene = statefile.load_scene(out)
     assert len(scene["runs"]) == 2
+
+
+# ------------------------------------------------------------ decode axis
+def _gen(prompt=PROMPT, n=4, **kw):
+    return synthetic.generate_and_capture(prompt, max_new_tokens=n, **kw)
+
+
+def test_identical_generations_never_diverge():
+    a, b = _gen(), _gen()
+    g = X.compare_generations(a, b)
+    assert g.tokens_a == g.tokens_b
+    assert g.agree.all()
+    assert g.first_divergence is None
+    assert g.comparable_steps == len(g.agree)
+    assert "identical" in g.summary()
+
+
+def test_generation_comparison_marks_where_comparability_ends():
+    """The honest boundary: after the models choose differently they are
+    continuing different texts, so later steps are not a comparison."""
+    a = _gen()
+    b = _gen()
+    # force a disagreement at step 1
+    b.meta["generation"]["steps"][1]["token"] = "divergent"
+    g = X.compare_generations(a, b)
+    assert g.first_divergence == 1
+    # step 1 is still like-for-like (same context, different choice); step 2 on
+    # is each model continuing its own text
+    assert g.comparable_steps == 2
+    assert "not a comparison" in g.summary()
+    assert g.p_a.shape == g.p_b.shape == g.agree.shape
+    assert (g.entropy_a >= 0).all()
+
+
+def test_generation_comparison_needs_a_decode_record():
+    with pytest.raises(ValueError, match="no decode record"):
+        X.compare_generations(_traj(), _gen())
+
+
+def test_forced_divergence_scores_both_models_on_one_text():
+    a, b = _traj(), _traj()
+    f = X.forced_divergence(a, b)
+    assert f.divergence.shape == (a.n_tokens - 1,)     # each position predicts
+    assert f.top_agree.shape == f.divergence.shape     # the next one
+    assert f.tokens == list(a.tokens)
+    # identical models agree everywhere
+    np.testing.assert_allclose(f.divergence, 0.0, atol=1e-6)
+    assert f.top_agree.all()
+    assert 0 <= f.worst_position < len(f.divergence)
+
+
+def test_forced_divergence_refuses_mismatched_text():
+    a = _traj()
+    b = _traj("a longer prompt with more tokens than the other one has")
+    with pytest.raises(ValueError, match="tokenized the same text"):
+        X.forced_divergence(a, b)
+
+
+@pytest.mark.network
+def test_gpt2_and_distilgpt2_part_company_mid_sentence():
+    """The capstone question, on real models: both complete the prompt the
+    same way for a step, then continue differently — and teacher forcing
+    stays a like-for-like comparison where free generation cannot."""
+    from capture import capture, generate_and_capture
+
+    prompt = "The residual stream moves, turns, and settles"
+    a = generate_and_capture("gpt2", prompt, max_new_tokens=8)
+    b = generate_and_capture("distilgpt2", prompt, max_new_tokens=8)
+
+    g = X.compare_generations(a, b)
+    assert g.tokens_a[0] == g.tokens_b[0], "both should complete the thesis alike"
+    assert g.first_divergence is not None, "different models should part company"
+    assert g.comparable_steps == g.first_divergence + 1
+    assert "diverge at step" in g.summary()
+
+    # scored on one fixed text instead, every position stays comparable
+    text = prompt + "".join(g.tokens_a)
+    f = X.forced_divergence(capture("gpt2", text), capture("distilgpt2", text))
+    assert f.divergence.shape[0] == len(f.tokens) - 1
+    assert (f.divergence >= 0).all()
+    assert not f.top_agree.all(), "two different models should disagree somewhere"

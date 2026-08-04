@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### The decode axis crossed with the model axis
+The two axes Mottled added this cycle — generation (M1) and models (M6) —
+now meet: *where do two models' generations part company?*
+- `crossmodel.compare_generations`: two free-running generations of the same
+  prompt, step by step — who chose what, with what probability and what
+  spread. It reports `comparable_steps` and stops there, because **after the
+  models choose differently they are continuing different texts**, and a
+  step-by-step divergence past that point compares answers to different
+  questions. The boundary is measured, not glossed.
+- `crossmodel.forced_divergence`: both models scored on one fixed text
+  (teacher forcing), so every position stays like-for-like all the way down —
+  "would B have said what A said, here?" Needs identical tokenization, for
+  the same reason `layer_similarity` does, and refuses otherwise.
+- On GPT-2 vs DistilGPT-2 given *"The residual stream moves, turns, and
+  settles"*, both complete it with `" into"` and part company on the very
+  next token: GPT-2 continues `" the ground."`, DistilGPT-2 `" a new state
+  of equilibrium."`
+
 ### The cross-model atlas (roadmap M6)
 `compare.py` could only compare runs inside one model — same depth, same
 width. `crossmodel.py` compares *models*, which share neither, and often not

@@ -100,8 +100,10 @@ start.
 - [x] "Same prompt, two models" scenes: `pipeline.run_model_scene`,
       `mottled export --models a,b`, sample
       `viewer/samples/models-gpt2-distilgpt2.mtj`.
-- [ ] The decode axis crossed with the model axis — where two models' *
-      generations* diverge, step by step (M1 × M6).
+- [x] The decode axis crossed with the model axis (M1 × M6):
+      `compare_generations` (free-running, with the comparability boundary
+      marked where the contexts split) and `forced_divergence` (teacher-forced
+      on one fixed text, comparable throughout).
 - [ ] Explorer surface: a model picker and a divergence panel, so the atlas
       is reachable without the API.
 

@@ -95,6 +95,7 @@ from trajectory import extract, densify    # Trajectory list, animation path
 from metrics import summarize              # research metrics
 from compare import compare                # A/B trajectory comparison
 from crossmodel import compare_models, layer_similarity  # A/B *model* comparison
+from crossmodel import compare_generations, forced_divergence  # ...as they generate
 from sae import demo_sae, feature_trajectory  # SAE feature activations
 from sae import feature_field                 # SAE over the projection plane
 from sae import from_sae_lens, from_state_dict  # load a real trained SAE
@@ -560,6 +561,28 @@ Every state becomes the next-token distribution it predicts over the shared
 vocabulary, plus a visible `⟨unshared⟩` bucket for the mass spent outside it —
 a real shared coordinate system, so both viewers draw different architectures
 on one manifold ([sample](viewer/samples/models-gpt2-distilgpt2.mtj)).
+
+Crossed with the generation axis, that answers the question the two axes were
+built for — *where do two models' generations part company?* Given "The
+residual stream moves, turns, and settles", GPT-2 and DistilGPT-2 both
+complete it with `" into"`, then split on the very next token (`" the
+ground."` vs `" a new state of equilibrium."`):
+
+```python
+from crossmodel import compare_generations, forced_divergence
+
+compare_generations(gpt2_gen, distil_gen).summary()
+# "diverge at step 1 (' the' vs ' a'); steps 0–1 are like-for-like,
+#  the rest are different continuations, not a comparison"
+forced_divergence(gpt2_scored, distil_scored)  # both on one fixed text
+```
+
+Free-running generation stops being a like-for-like comparison the moment the
+models choose differently — from there they are continuing *different texts*,
+so a step-by-step number would compare answers to different questions.
+`compare_generations` measures that boundary and stops claiming past it;
+`forced_divergence` scores both models on one fixed text instead, which stays
+comparable the whole way down.
 
 `layer_similarity` uses CKA, and **reports whether its own answer is
 identified**. On a raw residual stream CKA saturates — a few very-high-variance
