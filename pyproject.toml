@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mottled"
-version = "0.1.0"
+version = "0.2.0"
 description = "Interactive latent trajectory explorer for transformer forward passes"
 readme = "README.md"
 license = "Apache-2.0"
@@ -48,6 +48,6 @@ mottled-convert-sae = "convert_sae:main"
 [tool.setuptools]
 py-modules = ["bvh", "cache", "capture", "cli", "compare", "config", "convert_sae",
               "density", "design_tokens", "intervene", "metrics", "neighbors",
-              "projection", "sae", "serve", "statefile", "terrain", "trajectory",
-              "ui"]
+              "pipeline", "projection", "render", "sae", "serve", "statefile",
+              "terrain", "trajectory", "ui"]
 packages = ["models"]

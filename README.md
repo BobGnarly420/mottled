@@ -103,6 +103,7 @@ from intervene import direction_from_token, faithfulness  # data-derived steerin
 from attractor import analyze, explain        # why the basin forms, in prose
 from ui import run_pipeline, render        # everything at once → plotly Figure
 from ui import run_scene, run_intervention  # multi-prompt scenes, patching
+# (these live in pipeline.py / render.py; `ui` re-exports them unchanged)
 
 traj = capture("gpt2", "The capital of France is")
 coords, projector = project(traj.hidden, method="pca")
@@ -182,7 +183,9 @@ density, terrain, metrics, comparison, every viewer) works unchanged.
 | `attractor.py` | Why the basin forms and what it is made of: deceleration, membership, readout stability → measured prose (`explain`) |
 | `cache.py` | Disk cache keyed by prompt + config hash |
 | `config.py` | One dataclass for every pipeline knob |
-| `ui.py` | Pure pipeline + pure Plotly renderer + Streamlit shell |
+| `pipeline.py` | The pipeline: capture → project → density → terrain → paths (pure; no Streamlit, no Plotly) |
+| `render.py` | Pure Plotly renderers: the 3-D scene and the SAE feature field |
+| `ui.py` | Streamlit shell over both, and the flat public API (re-exports `run_pipeline`, `render`, …) |
 | `bvh.py` | Spatial index over trajectory segments (ray-pick / nearest / box / frustum) — the reference for the viewer's picking, ported to `viewer/bvh.js` and pinned to it by a conformance test |
 | `intervene.py` | Causal interventions: perturb / set / noise / freeze a state via a resumable forward pass → counterfactual trajectory |
 | `compare.py` | Trajectory comparison: Hausdorff, dynamic time warping, shared-prefix alignment, layerwise divergence profiles |

@@ -99,3 +99,34 @@ def test_streamlit_app_surfaces_projection_fidelity_inline():
     assert not at.exception
     texts = [m.value for m in at.markdown]
     assert any("Projection fidelity" in t for t in texts)
+
+
+def test_flat_api_survives_the_module_split():
+    """`ui.py` was split into pipeline.py + render.py; every name the README
+    documents must still import from `ui`, and be the same object."""
+    import pipeline
+    import render
+    import ui
+
+    for name in ("run_pipeline", "run_scene", "run_compare", "run_intervention",
+                 "attach_features", "degraded_note"):
+        assert getattr(ui, name) is getattr(pipeline, name), name
+    for name in ("render", "render_feature_field", "field_rgb"):
+        assert getattr(ui, name) is getattr(render, name), name
+    assert callable(ui.main)
+
+
+def test_pipeline_and_render_are_importable_without_streamlit(monkeypatch):
+    """The split exists so a scene can be built and drawn headlessly: neither
+    module may pull Streamlit in at import time."""
+    import subprocess
+    import sys
+
+    code = ("import sys;"
+            "sys.modules['streamlit'] = None;"   # any import would raise
+            "import pipeline, render;"
+            "print('ok')")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                         text=True, cwd=str(__import__('pathlib').Path(__file__).parent.parent))
+    assert out.returncode == 0, out.stderr
+    assert "ok" in out.stdout
