@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Fixed: Streamlit app tests broke on Streamlit 1.61
+`AppTest.from_file` resolves a *relative* path against the file that calls
+it as of 1.61 (older releases resolved against the working directory), so
+`"ui.py"` became `tests/ui.py` and six app tests failed — on `main` as much
+as anywhere, the moment CI installed the new release. The path is now
+absolute, in one place (`tests/apptest.py`), so the tests no longer depend on
+which behaviour the installed Streamlit has. Verified against 1.61 itself.
+
 ### Audit: within-model assumptions applied across models
 Until three changes ago, "two runs" always meant "two prompts through one
 model". Cross-model scenes made that false, and two bugs of the same shape
