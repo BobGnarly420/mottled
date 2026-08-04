@@ -148,10 +148,16 @@ def _assemble_scene(cfg: MarbleConfig, trajs: list[StateTrajectory]) -> dict:
         fine_paths_list.append(
             [trajectory_mod.densify(t.points, cfg.frames_per_layer) for t in trajectories])
 
-    comparisons = [
-        compare_mod.compare(trajs[0], t, coords_list[0], c)
-        for t, c in zip(trajs[1:], coords_list[1:])
-    ]
+    # `compare` is a layer-for-layer measurement, so it is only defined when
+    # the runs have the same depth. Prompts through one model always do;
+    # different *models* generally do not (GPT-2's 13 layers vs
+    # DistilGPT-2's 7), and there the depth-normalised
+    # `crossmodel.compare_models` is the right instrument instead — so the
+    # pairwise table is simply absent rather than fabricated.
+    comparisons = []
+    for t, c in zip(trajs[1:], coords_list[1:]):
+        if t.n_layers == trajs[0].n_layers and t.dim == trajs[0].dim:
+            comparisons.append(compare_mod.compare(trajs[0], t, coords_list[0], c))
 
     result = {
         "trajs": trajs,
@@ -176,8 +182,9 @@ def _assemble_scene(cfg: MarbleConfig, trajs: list[StateTrajectory]) -> dict:
             "coords_b": coords_list[1],
             "trajectories_b": trajectories_list[1],
             "fine_paths_b": fine_paths_list[1],
-            "comparison": comparisons[0],
         })
+        if comparisons:  # absent when the two runs' depths differ (see above)
+            result["comparison"] = comparisons[0]
     return result
 
 
@@ -259,6 +266,50 @@ def attach_features(result: dict, sae, source: str | None = None,
             "top_act": acts.max(axis=-1).astype(np.float32),
         })
     result["features_list"] = feats
+    return result
+
+
+def run_model_scene(cfg: MarbleConfig, prompt: str, models: list,
+                    loaded: dict | None = None) -> dict:
+    """One prompt, several **models**, on one terrain.
+
+    Different models share no hidden space — different widths, different
+    depths, different tokenizers — so the scene is assembled in *readout
+    space* (`crossmodel.readout_space`): every state becomes the next-token
+    distribution it predicts over the vocabulary all the models share, plus a
+    visible bucket for the mass spent outside it. That is a real shared
+    coordinate system, so joint projection, the terrain, and every viewer
+    work unchanged.
+
+    `models` are names (or "synthetic"); `loaded` optionally maps a name to a
+    preloaded (model, tokenizer) pair. The result carries the usual scene
+    keys plus `model_names`, `shared_vocab`, and `model_comparisons` (each
+    model measured against the first).
+
+    Readout space says what the models *do*. For how they *represent* —
+    which layer of B matches layer l of A — use `crossmodel.layer_similarity`,
+    which needs no shared space but does need matching tokenization.
+    """
+    import crossmodel
+
+    if not models:
+        raise ValueError("run_model_scene needs at least one model")
+    loaded = loaded or {}
+    raw = []
+    for name in models:
+        model, tokenizer = loaded.get(name, (None, None))
+        raw.append(_capture_with(replace(cfg, model=name), prompt,
+                                 model=model, tokenizer=tokenizer))
+
+    trajs, vocab = crossmodel.readout_space(raw)
+    for traj, name in zip(trajs, models):
+        traj.meta["model"] = name
+    result = {"prompts": [f"{m}: {prompt}" for m in models], "prompt": prompt,
+              "model_names": list(models), "shared_vocab": len(vocab),
+              "source_trajs": raw, "space": "readout",
+              **_assemble_scene(cfg, trajs)}
+    result["model_comparisons"] = [crossmodel.compare_models(raw[0], other)
+                                   for other in raw[1:]]
     return result
 
 

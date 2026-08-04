@@ -90,12 +90,20 @@ start.
       site-packages is poor citizenship for a package meant to be adopted.
 
 ### M6 — The cross-model atlas
-The comparison machinery (Hausdorff, DTW, divergence profiles) currently
-compares prompts. Generalize it to compare **models**.
-- [ ] Shared projection space for different-dimension models (vocab-anchored
-      readout alignment; CKA/Procrustes on shared prompts).
-- [ ] "Same prompt, two models" scenes: where do their dynamics diverge, and
-      at which decode step.
+- [x] Shared space for different-dimension models: `crossmodel.readout_space`
+      anchors on the vocabulary the models share (the one thing they do), with
+      the unshared mass kept visible. `project_joint` and both viewers accept
+      it unchanged.
+- [x] `compare_models` (depth-normalised readout divergence) and
+      `layer_similarity` (CKA, which reports whether its own answer is
+      identified rather than always returning an argmax).
+- [x] "Same prompt, two models" scenes: `pipeline.run_model_scene`,
+      `mottled export --models a,b`, sample
+      `viewer/samples/models-gpt2-distilgpt2.mtj`.
+- [ ] The decode axis crossed with the model axis — where two models' *
+      generations* diverge, step by step (M1 × M6).
+- [ ] Explorer surface: a model picker and a divergence panel, so the atlas
+      is reachable without the API.
 
 ## Sequencing
 

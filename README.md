@@ -94,6 +94,7 @@ from terrain import mesh, drape            # TerrainMesh
 from trajectory import extract, densify    # Trajectory list, animation path
 from metrics import summarize              # research metrics
 from compare import compare                # A/B trajectory comparison
+from crossmodel import compare_models, layer_similarity  # A/B *model* comparison
 from sae import demo_sae, feature_trajectory  # SAE feature activations
 from sae import feature_field                 # SAE over the projection plane
 from sae import from_sae_lens, from_state_dict  # load a real trained SAE
@@ -188,7 +189,8 @@ density, terrain, metrics, comparison, every viewer) works unchanged.
 | `ui.py` | Streamlit shell over both, and the flat public API (re-exports `run_pipeline`, `render`, …) |
 | `bvh.py` | Spatial index over trajectory segments (ray-pick / nearest / box / frustum) — the reference for the viewer's picking, ported to `viewer/bvh.js` and pinned to it by a conformance test |
 | `intervene.py` | Causal interventions: perturb / set / noise / freeze a state via a resumable forward pass → counterfactual trajectory |
-| `compare.py` | Trajectory comparison: Hausdorff, dynamic time warping, shared-prefix alignment, layerwise divergence profiles |
+| `compare.py` | Trajectory comparison within one model: Hausdorff, dynamic time warping, shared-prefix alignment, layerwise divergence profiles |
+| `crossmodel.py` | Comparison *across* models: readout space (the shared vocabulary as a shared coordinate system), depth-normalised divergence, and CKA layer alignment that reports whether it is identified |
 | `sae.py` | Sparse-autoencoder features: apply (never train) an SAE to every captured state; demo dictionary + npz interchange |
 | `statefile.py` | `.mtj` interchange: save/load full StateTrajectories and viewer-ready scene bundles ([format spec](docs/mtj-format.md)) |
 | `viewer/` | Self-contained WebGL viewer for `.mtj` scenes — no build step, no dependencies |
@@ -536,6 +538,38 @@ attention-pattern capture on locally-built Llama/GPT-2 models, multi-prompt
 scene assembly, the intervention pipeline, and headless runs of the actual
 Streamlit app — single-prompt, A/B, N-prompt scene, and SAE overlay —
 (`streamlit.testing.v1.AppTest`).
+
+### Comparing models, not just prompts
+
+Two models share no hidden space — different widths, depths, and usually
+tokenizers — so `crossmodel.py` builds the comparison on the one thing they
+do share, the text they read out into:
+
+```bash
+mottled export "The capital of France is" --models gpt2,distilgpt2 -o models.mtj
+```
+
+```python
+from crossmodel import compare_models, layer_similarity
+
+compare_models(gpt2_traj, pythia_traj)   # where their readouts diverge, per layer
+layer_similarity(gpt2_traj, distil_traj) # which layer of B matches layer l of A
+```
+
+Every state becomes the next-token distribution it predicts over the shared
+vocabulary, plus a visible `⟨unshared⟩` bucket for the mass spent outside it —
+a real shared coordinate system, so both viewers draw different architectures
+on one manifold ([sample](viewer/samples/models-gpt2-distilgpt2.mtj)).
+
+`layer_similarity` uses CKA, and **reports whether its own answer is
+identified**. On a raw residual stream CKA saturates — a few very-high-variance
+dimensions shared by every layer dominate, and every layer looks ~1.0 similar
+to every other (on GPT-2 vs DistilGPT-2, the middle rows are flat to within
+0.001, so the argmax is noise). Z-scoring each dimension recovers a monotone,
+proportional correspondence — GPT-2's 13 layers onto DistilGPT-2's 7 — so it
+is the default, `contrast` says how far each row's winner beats its field, and
+the trade is documented rather than buried: exact scale invariance is kept,
+exact rotation invariance is not.
 
 ## What this is — and is not
 
