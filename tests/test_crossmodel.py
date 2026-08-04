@@ -374,3 +374,80 @@ def test_gpt2_and_distilgpt2_part_company_mid_sentence():
     assert f.divergence.shape[0] == len(f.tokens) - 1
     assert (f.divergence >= 0).all()
     assert not f.top_agree.all(), "two different models should disagree somewhere"
+
+
+# ------------------------------------------------------- the explorer panel
+class _FakeSt:
+    """Records what the panel would render, so its wording is testable
+    without a browser."""
+
+    def __init__(self):
+        self.text: list[str] = []
+        self.charts = 0
+        self.tables = 0
+
+    def caption(self, s, *a, **kw):
+        self.text.append(str(s))
+
+    write = markdown = caption
+
+    def line_chart(self, *a, **kw):
+        self.charts += 1
+
+    bar_chart = line_chart
+
+    def dataframe(self, *a, **kw):
+        self.tables += 1
+
+    def all_text(self) -> str:
+        return "\n".join(self.text)
+
+
+def test_model_panel_states_the_shared_space_and_its_limits():
+    from config import MarbleConfig
+    from pipeline import run_model_scene
+    from ui import render_model_comparison
+
+    cfg = MarbleConfig(use_cache=False, density_bootstrap=0)
+    result = run_model_scene(cfg, PROMPT, ["synthetic", "synthetic"])
+    st = _FakeSt()
+    render_model_comparison(st, result)
+    body = st.all_text()
+
+    # names the shared coordinate system and why it is the shared one
+    assert "readout space" in body
+    assert X.UNSHARED_TOKEN in body
+    # reports the divergence and the depth-normalisation caveat
+    assert "divergence" in body and "Depth is normalized" in body
+    # reports the alignment together with whether it is identified
+    assert "identified" in body
+    assert st.charts >= 2
+
+
+def test_model_panel_explains_an_unavailable_alignment():
+    """When the models tokenize differently the alignment is undefined, and
+    the panel says why instead of omitting it silently."""
+    from ui import render_model_comparison
+
+    a = _traj()
+    b = _traj("a much longer prompt with rather more tokens in it than that")
+    result = {"model_names": ["a", "b"], "shared_vocab": 10,
+              "source_trajs": [a, b], "trajs": [a, b], "model_comparisons": []}
+    st = _FakeSt()
+    render_model_comparison(st, result)
+    assert "unavailable" in st.all_text()
+    assert "paired states" in st.all_text()
+
+
+def test_model_panel_shows_the_generation_split():
+    from ui import render_model_comparison
+
+    a = _gen()
+    b = _gen()
+    b.meta["generation"]["steps"][1]["token"] = "divergent"
+    result = {"model_names": ["a", "b"], "shared_vocab": 10,
+              "source_trajs": [a, b], "trajs": [a, b], "model_comparisons": []}
+    st = _FakeSt()
+    render_model_comparison(st, result)
+    assert "diverge at step 1" in st.all_text()
+    assert st.tables == 1

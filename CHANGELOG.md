@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### The atlas, reachable
+The cross-model work was API- and CLI-only; the explorer can now drive it.
+- A **"Compare models"** field in the sidebar: name other models and they are
+  drawn on the same terrain for the current prompt (via
+  `pipeline.run_model_scene`, in readout space).
+- A **Model comparison** panel (`ui.render_model_comparison`, pure — it takes
+  the Streamlit module as an argument, so its wording is tested without a
+  browser) reporting readout divergence per normalized layer, the CKA layer
+  alignment *with which rows are too flat to be believed*, and the
+  step-by-step generation split when both runs carry a decode record.
+- Fixed: the A/B comparison panel called the layer-for-layer `compare` on
+  whatever two runs were present, which raises on runs of differing depth.
+  It is now shown only where it is defined — the same class of bug the
+  cross-model scene hit in `_assemble_scene`.
+
 ### The decode axis crossed with the model axis
 The two axes Mottled added this cycle — generation (M1) and models (M6) —
 now meet: *where do two models' generations part company?*

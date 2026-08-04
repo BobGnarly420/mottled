@@ -104,8 +104,9 @@ start.
       `compare_generations` (free-running, with the comparability boundary
       marked where the contexts split) and `forced_divergence` (teacher-forced
       on one fixed text, comparable throughout).
-- [ ] Explorer surface: a model picker and a divergence panel, so the atlas
-      is reachable without the API.
+- [x] Explorer surface: a "Compare models" field and a Model comparison panel
+      (readout divergence, layer alignment with its identified/flat rows, the
+      generation split), so the atlas is reachable without the API.
 
 ## Sequencing
 
