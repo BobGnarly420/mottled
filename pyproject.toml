@@ -30,6 +30,8 @@ dependencies = [
 [project.optional-dependencies]
 # Real transformer captures (the synthetic producer needs none of these).
 models = ["torch>=2.1", "transformers>=4.44"]
+# Stream a checkpoint that never lands on local disk (remote.py).
+remote = ["requests>=2.28", "safetensors>=0.4"]
 umap = ["umap-learn>=0.5"]
 faiss = ["faiss-cpu>=1.7"]
 # Ecosystem interop (optional): TransformerLens producer, SAELens conversion.
@@ -48,6 +50,6 @@ mottled-convert-sae = "convert_sae:main"
 [tool.setuptools]
 py-modules = ["bvh", "cache", "capture", "cli", "compare", "config", "convert_sae",
               "crossmodel", "density", "design_tokens", "intervene", "metrics",
-              "neighbors", "pipeline", "projection", "render", "sae", "serve",
-              "statefile", "terrain", "trajectory", "ui"]
+              "neighbors", "pipeline", "projection", "remote", "render", "sae",
+              "serve", "statefile", "stream", "terrain", "trajectory", "ui"]
 packages = ["models"]

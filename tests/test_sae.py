@@ -650,3 +650,50 @@ def test_real_labels_name_the_capital_feature():
     text = " ".join(l.description.lower() for l in labels.values())
     assert "capital" in text, f"no capital-related feature among {top}: {text}"
     assert all(l.explained_by for l in labels.values())   # provenance present
+
+
+def test_field_domains_rank_by_area_with_plane_centroids():
+    from projection import project
+
+    traj = synthetic.capture(PROMPT)
+    coords, proj = project(traj.hidden, method="pca")
+    d = S.demo_sae(traj.dim, 64, seed=1)
+    gx = np.linspace(coords[..., 0].min(), coords[..., 0].max(), 24)
+    gy = np.linspace(coords[..., 1].min(), coords[..., 1].max(), 24)
+    field = S.feature_field(d, proj, gx, gy)
+
+    doms = field.domains(k=4)
+    assert 0 < len(doms) <= 4
+    assert [x.area for x in doms] == sorted((x.area for x in doms), reverse=True)
+    assert sum(x.area for x in field.domains(k=10**6)) == pytest.approx(1.0, abs=1e-6)
+    for x in doms:                       # centroids land inside the plane
+        assert gx.min() <= x.x <= gx.max() and gy.min() <= x.y <= gy.max()
+        assert int(x.feature) in set(field.features.tolist())
+
+
+def test_feature_field_names_domains_but_colours_by_identity():
+    """The deliberate non-choice: hue stays keyed to the feature id. Recolouring
+    by label meaning would imply a semantic metric the palette cannot carry and
+    destroy the golden-angle separation that makes neighbouring ids legible."""
+    from projection import project
+    from render import _feature_hue, render_feature_field
+
+    traj = synthetic.capture(PROMPT)
+    coords, proj = project(traj.hidden, method="pca")
+    d = S.demo_sae(traj.dim, 64, seed=1)
+    gx = np.linspace(coords[..., 0].min(), coords[..., 0].max(), 20)
+    gy = np.linspace(coords[..., 1].min(), coords[..., 1].max(), 20)
+    field = S.feature_field(d, proj, gx, gy)
+    top = field.domains(k=1)[0].feature
+
+    bare = render_feature_field(field, sae=d)
+    assert not bare.layout.annotations, "unlabelled dictionary names nothing"
+
+    S.apply_labels(d, {top: S.FeatureLabel(top, "capital cities")})
+    named = render_feature_field(field, sae=d, labels_k=3)
+    texts = [a.text for a in named.layout.annotations]
+    assert texts and any("capital cities" in t for t in texts)
+    # hue is unchanged by naming: colour encodes which feature, not what it means
+    assert _feature_hue(top) == _feature_hue(top)
+    assert float(_feature_hue(np.array([top]))[0]) == pytest.approx(
+        (top * 0.6180339887498949) % 1.0)

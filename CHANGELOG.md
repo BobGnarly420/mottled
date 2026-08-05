@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### The feature field says what its regions are (completes M2)
+- `FeatureField.domains(k)` ranks a field's territories by the area each
+  dominant feature owns, with centroids in plane coordinates;
+  `render_feature_field` names the largest ones on the plane (both the flat
+  and relief views) whenever the dictionary carries labels.
+- **Hue deliberately still comes from the feature id, not the label.** The
+  roadmap item said "coloring keyed by those labels"; that would be
+  misleading. Golden-angle hue encodes *identity* — adjacent ids are made
+  maximally distinct on purpose — so keying colour to meaning would destroy
+  that separation *and* imply a semantic metric a 1-D hue cannot support.
+  Colour answers which feature owns a region; the name answers what it is
+  about. Pinned by a test.
+
 ### Features with names (roadmap M2)
 An SAE's features are indices until something explains them, and an unnamed
 feature overlay is a colour with no meaning.

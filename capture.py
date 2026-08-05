@@ -215,6 +215,7 @@ def capture(
     keep_logits: bool = True,
     capture_components: bool = False,
     capture_attention: bool = False,
+    capture_routing: bool = False,
 ) -> StateTrajectory:
     """Run a forward pass and capture the residual stream at every layer.
 
@@ -226,10 +227,17 @@ def capture(
     outputs — the residual decomposition — in `StateTrajectory.components`.
     `capture_attention=True` records each block's head-averaged attention
     pattern (L-1, T, T) in `StateTrajectory.attention`.
+
+    `capture_routing=True` records, for a sparse-MoE model, which experts each
+    token was routed to per layer (`StateTrajectory.routing`). It refuses on a
+    dense model rather than inventing a routing.
     """
     if isinstance(model, str) and model == "synthetic":
         from models import synthetic
 
+        if capture_routing:
+            raise ValueError("the synthetic backend is dense; it has no experts "
+                             "to route between")
         return synthetic.capture(prompt, top_k=top_k, keep_logits=keep_logits,
                                  capture_components=capture_components,
                                  capture_attention=capture_attention)
@@ -238,7 +246,8 @@ def capture(
     return _run(model, prompt, tokenizer=tokenizer, top_k=top_k, device=device,
                 dtype=dtype, keep_logits=keep_logits,
                 capture_components=capture_components,
-                capture_attention=capture_attention)
+                capture_attention=capture_attention,
+                capture_routing=capture_routing)
 
 
 def generate_and_capture(
@@ -343,6 +352,7 @@ def _run(model, prompt, tokenizer=None, top_k=5, device="auto", dtype="float32",
          frozen_blocks: set | None = None, extra_meta: dict | None = None,
          capture_components: bool = False,
          capture_attention: bool = False,
+         capture_routing: bool = False,
          input_ids: "torch.Tensor | None" = None) -> StateTrajectory:
     """Forward pass (optionally intervened) -> StateTrajectory. Shared by
     capture(), intervene() and generate_and_capture().
@@ -373,7 +383,8 @@ def _run(model, prompt, tokenizer=None, top_k=5, device="auto", dtype="float32",
     try:
         with HookCapture(model, state_edits=state_edits, frozen_blocks=frozen_blocks,
                          capture_components=capture_components) as cap, torch.no_grad():
-            out = model(input_ids, output_attentions=capture_attention or None)
+            out = model(input_ids, output_attentions=capture_attention or None,
+                        **({"output_router_logits": True} if capture_routing else {}))
     finally:
         if capture_attention and prev_impl and prev_impl != "eager":
             config._attn_implementation = prev_impl
@@ -388,6 +399,8 @@ def _run(model, prompt, tokenizer=None, top_k=5, device="auto", dtype="float32",
                              "this architecture does not support capture_attention")
         # (blocks, B, H, T, T) -> head-average, squeeze batch -> (L-1, T, T)
         attention = torch.stack([a.float().mean(dim=1)[0] for a in out.attentions]).cpu().numpy()
+
+    routing = _routing_from(out, model, capture_routing)
 
     logits_t = logit_lens(hidden, cap.adapter)
     vocab = [_clean_token(t) for t in tokenizer.convert_ids_to_tokens(range(logits_t.shape[-1]))]
@@ -412,6 +425,7 @@ def _run(model, prompt, tokenizer=None, top_k=5, device="auto", dtype="float32",
         embedding_matrix=cap.adapter.embedding_weight().numpy(),
         components=components,
         attention=attention,
+        routing=routing,
         meta=meta,
     )
 
@@ -421,3 +435,73 @@ def _clean_token(tok) -> str:
     if tok is None:
         return "<unk>"
     return str(tok).replace("▁", " ").replace("Ġ", " ").replace("Ċ", "\\n")
+
+
+def _routing_from(out, model, wanted: bool, spans=None):
+    """Expert routing from a forward pass, or None.
+
+    HF's sparse-MoE models return `router_logits` as one (T, n_experts)
+    tensor per MoE layer when asked. Top-k over those is the routing decision
+    itself, which is what makes it worth capturing: unlike an activation it
+    needs no dictionary to read, and unlike attention it is a *discrete*
+    choice the model made about this token.
+
+    Dense models have no router. Rather than return an empty routing that
+    later reads as "this token used no experts", this refuses — the same
+    contract attention capture has on Mamba.
+
+    `spans` un-batches the result. Router logits come back flattened over
+    `(batch * tokens)`, so a batched pass needs to be told the padding: pass
+    one `(row, start)` per sequence and get one `Routing` per sequence back,
+    padding already dropped.
+    """
+    if not wanted:
+        return None
+    from trajectory import Routing
+
+    logits = getattr(out, "router_logits", None)
+    if not logits:
+        raise ValueError(
+            "this model returned no router logits — it is dense, or its "
+            "implementation does not support output_router_logits. Routing "
+            "capture only means something for a sparse-MoE model.")
+
+    cfg = getattr(model, "config", None)
+    cfg = getattr(cfg, "text_config", cfg)
+    k = int(getattr(cfg, "num_experts_per_tok", 0) or 0)
+    n_experts = int(getattr(cfg, "num_experts", 0)
+                    or getattr(cfg, "n_routed_experts", 0) or 0)
+
+    layers = [l for l in logits if l is not None]
+    if not layers:
+        raise ValueError("router logits present but empty")
+    n_experts = n_experts or int(layers[0].shape[-1])
+    k = k or min(2, n_experts)
+
+    experts, weights, idx = [], [], []
+    n_blocks = len(list(getattr(model, "model", model).layers)) \
+        if hasattr(getattr(model, "model", model), "layers") else len(layers)
+    # MoE layers are usually the tail of the stack (dense ones come first),
+    # so align the returned rows to the *last* n blocks rather than assuming
+    # they start at 0.
+    first = max(0, n_blocks - len(layers))
+    batch = len(spans) if spans else 1
+    for m, lg in enumerate(layers):
+        probs = torch.softmax(lg.float(), dim=-1)
+        w, e = torch.topk(probs, k=min(k, probs.shape[-1]), dim=-1)
+        if batch > 1:
+            e = e.reshape(batch, -1, e.shape[-1])
+            w = w.reshape(batch, -1, w.shape[-1])
+        experts.append(e.cpu().numpy().astype(np.int32))
+        weights.append((w / w.sum(-1, keepdim=True)).cpu().numpy().astype(np.float32))
+        idx.append(first + m)
+
+    experts, weights = np.stack(experts), np.stack(weights)
+    layer_idx = np.asarray(idx, dtype=np.int32)
+    if spans is None:
+        return Routing(experts=experts, weights=weights,
+                       layers=layer_idx, n_experts=n_experts)
+    return [Routing(experts=experts[:, row, start:] if batch > 1 else experts[:, start:],
+                    weights=weights[:, row, start:] if batch > 1 else weights[:, start:],
+                    layers=layer_idx, n_experts=n_experts)
+            for row, start in spans]

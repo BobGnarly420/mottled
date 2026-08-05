@@ -3,712 +3,274 @@
 [![CI](https://github.com/BobGnarly420/mottled/actions/workflows/ci.yml/badge.svg)](https://github.com/BobGnarly420/mottled/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-**Interactive latent trajectory explorer for transformer forward passes.**
+**A viewer for latent dynamics: where a model's hidden states travel, turn and
+pile up as a prompt moves through the layers.**
 
-Mottled (formerly MARBLE) visualizes hidden-state evolution as
-trajectories over a semantic manifold. It is *not* a neuron inspector,
-feature-attribution tool, or explainability dashboard — it instruments
-**latent dynamics**: how the
-residual stream moves, turns, and settles as a prompt flows through the
-layers of a transformer.
+Every 2-D picture of a residual stream is a lie of some size. Mottled's whole
+pitch is that it *measures the size of the lie* and prints it on the picture —
+per-state neighborhood preservation, a bootstrap confidence field on the
+terrain, and an amber ✕ on every state whose local structure didn't survive the
+flattening.
 
-```
-Prompt → forward pass → capture residual stream after every block
-       → project hidden vectors → estimate local manifold
-       → animate trajectory → expose semantic neighborhoods
-```
+![The Mottled explorer](docs/images/explorer.png)
 
-![The Mottled explorer: an A/B prompt scene on the density terrain, with the
-layer scrubber and the token inspector](docs/images/explorer.png)
-*The Streamlit explorer with an A/B overlay — "The capital of France is" vs
-"The capital of Germany is" — marbles at layer 12, inspector showing the
-final token's predictions and semantic neighbors.*
+*"The capital of France is" vs "…of Germany is" on a shared density terrain.
+Both runs launch from the embedding region and dive into the same late-layer
+basin; the logit-lens readouts split at layer 2.*
 
-**Live demo:** [bobgnarly420.github.io/mottled](https://bobgnarly420.github.io/mottled/) —
-landing page plus the web viewer with bundled sample scenes (synthetic and
-real GPT-2), no install required.
+## Try it without installing anything
 
-## Quickstart
+**[bobgnarly420.github.io/mottled](https://bobgnarly420.github.io/mottled/)** —
+WebGL viewer, real captures, no build step, no dependencies. Some scenes worth
+opening:
+
+| scene | what it shows |
+|---|---|
+| [`qwen-capitals`](https://bobgnarly420.github.io/mottled/viewer/?file=samples/qwen-capitals.mtj) | Qwen2.5-1.5B, 29 layers × 1536 |
+| [`gpt2-decode`](https://bobgnarly420.github.io/mottled/viewer/?file=samples/gpt2-decode.mtj) | GPT-2 *generating* — the decode axis |
+| [`models-qwen-gpt2`](https://bobgnarly420.github.io/mottled/viewer/?file=samples/models-qwen-gpt2.mtj) | two different models on one terrain |
+| [`gpt2-features`](https://bobgnarly420.github.io/mottled/viewer/?file=samples/gpt2-features.mtj) | real SAE features, with their measured fit |
+| [`self-portrait`](https://bobgnarly420.github.io/mottled/viewer/?file=samples/self-portrait.mtj) | Mottled pointed at itself (see below) |
+
+Hover anywhere along a trajectory for the inspector; click to pin it.
+
+## Install
 
 ```bash
 pip install "mottled[models] @ git+https://github.com/BobGnarly420/mottled"
-mottled                      # the Streamlit explorer
-mottled serve --model gpt2   # web viewer + in-browser capture API
+
+mottled                                    # Streamlit explorer
+mottled serve --model gpt2                 # web viewer + in-browser capture
 mottled export "The capital of France is" -o scene.mtj
-mottled export "The residual stream" --generate 8 -o decode.mtj   # + continuation
+mottled export "The residual stream" --generate 8 -o decode.mtj
+mottled export "…" --models gpt2,distilgpt2 -o compare.mtj
 ```
 
-(Or from a clone: `pip install -r requirements.txt && streamlit run ui.py`.)
+The default `synthetic` backend needs no model download and no torch — it
+generates deterministic, structurally realistic trajectories, so the whole
+pipeline (and the test suite) runs offline in seconds.
 
-Enter a prompt (e.g. `The capital of France is`), pick a model, press
-**Run capture**. You get an animated hidden-state trajectory over a density
-terrain, semantic neighbors, entropy evolution, and a layer scrubber.
+## What it is — and what it isn't
 
-The default `synthetic` backend needs no model download (or even torch) —
-it generates deterministic, realistic trajectories so you can explore the
-tool instantly. Select a HuggingFace model (Qwen / Llama / Mistral / Gemma /
-GPT-2) for real captures.
+This matters more than the feature list, so it goes near the top.
 
-### Self-portrait
+Mottled shows the **geometry of latent dynamics**. It is not a proof of
+mechanism, and it tries hard not to let you mistake it for one:
 
-`viewer/samples/self-portrait.mtj` is Mottled pointed at itself: GPT-2 —
-the same class of machinery the tool was built to instrument — processing
-Mottled's own self-descriptions ("Mottled visualizes hidden-state evolution
-as trajectories over a semantic manifold"; "the residual stream moves,
-turns, and settles"; "StateTrajectory is the center of the project"),
-captured by Mottled and rendered by Mottled.
-[View it live](https://bobgnarly420.github.io/mottled/viewer/?file=samples/self-portrait.mtj).
-Given "the residual stream moves, turns, and settles", the model's top
-continuation is " into" — it completes the thesis.
+- **A basin is states accumulating, not a circuit computing.** Attention flow
+  and intervention divergence are measurements of what happened, not
+  identified causes.
+- **Projection fidelity is stated inline**, never buried in a collapsed panel.
+  Low-preservation states are flagged on the scene itself.
+- **An SAE is only interpretable on the distribution it was trained on.**
+  Mottled measures the fit rather than trusting the filename — see below.
+- **Feature names are leads, not labels.** They come from Neuronpedia's
+  auto-interp explanations, written by a language model reading top
+  activations. The UI names the model that wrote them and says they describe
+  correlates, not computation.
 
-### A modern model, not just GPT-2
+For verified causal claims — circuit discovery, path patching, activation
+patching at scale — use a dedicated tool
+([TransformerLens](https://github.com/TransformerLensOrg/TransformerLens),
+[circuit-tracer](https://pypi.org/project/circuit-tracer/), ACDC, EAP).
+Mottled is the map you read *before* and *alongside* those, and it
+interoperates: any `HookedTransformer` is a producer via
+`models.hooked.from_hooked_transformer`.
 
-Mottled is model-agnostic by construction, and that is verified rather than
-asserted. **Qwen2.5-1.5B-Instruct** — 29 layers x 1536, grouped-query
-attention, RoPE, SwiGLU, RMSNorm, nothing like GPT-2's 2019 design — captures
-end to end, and its residual decomposition still reconciles **exactly**
-(`max |h[l+1] - (h[l] + attn + mlp)| = 0.0000`).
-[`qwen-capitals.mtj`](viewer/samples/qwen-capitals.mtj) is that capture.
+## One finding worth stealing even if you never run this
 
-The capability gap is visible in the tool. Asked for the capital of France,
-Qwen answers `" Paris"` (28.6%) where GPT-2 says `" the"` —
-[`models-qwen-gpt2.mtj`](viewer/samples/models-qwen-gpt2.mtj) puts both on one
-terrain across a 29x1536 vs 13x768 divide and 42,257 shared vocabulary
-entries. Given *"The residual stream moves, turns, and settles"*, Qwen
-continues `" in the reservoir, and the water level"`; GPT-2 continues
-`" into the ground."` and starts repeating itself.
+Public GPT-2 SAEs are trained on **TransformerLens-processed** residuals. TL
+folds LayerNorm and centres weights, which changes residual *values* while
+preserving the model's function. So the same trained SAE reads:
 
-**On bigger models.** `meta-llama/Llama-3.2-1B` and `google/gemma-2-2b` work
-the same way but are license-gated on the Hub — they need an accepted licence
-and an `HF_TOKEN`, so they cannot back bundled samples or offline CI.
-Frontier-scale MoE models are a hardware question, not a support question:
-Kimi K2's weights are ~1 TB. GPT-2 remains in the *SAE-dependent* samples
-because its dictionaries come with published Neuronpedia explanations — but
-that is a convenience, not the state of the art. Public trained SAEs now
-exist for Gemma-2 2B/9B (Gemma Scope), Llama-3 8B, and Qwen3 1.7B/8B — the
-last published by Qwen for their own ungated models, which is the obvious
-path to a fully-ungated modern feature demo.
+- **~24%** reconstruction error on a TransformerLens capture
+- **~342%** on raw HuggingFace hidden states
 
-### A real model, not a sketch
+Same model, same SAE, same prompt. Provenance is not calibration. `fit_report`
+measures reconstruction error and firing density per layer, and the UI labels
+a bad fit as extrapolation instead of drawing confident features on top of it.
+Pleasingly, the fit measurement rediscovers the SAE's training hook on its own
+— best layer 8, exactly where it was trained.
 
-![The web viewer rendering a real GPT-2 A/B capture](docs/images/viewer-gpt2.png)
-*Real GPT-2: "The capital of France is" vs "The capital of Germany is"
-(`viewer/samples/gpt2-capitals.mtj`). Both runs launch from the embedding
-region and dive into the shared late-layer attractor basin; the logit-lens
-readouts differ from layer 2, and attention patterns and the attn/MLP
-residual decomposition are captured exactly (verified against HF's own
-outputs in the test suite).*
+```python
+from sae import fetch_from_hub, fit_report
+fit = fit_report(fetch_from_hub(), traj)   # → best_layer, recon_error, active_frac
+```
 
-### The decode axis, live
+## What you get
 
-`viewer/samples/gpt2-decode.mtj` is real GPT-2 *generating*: given the
-thesis sentence "The residual stream moves, turns, and settles", eight greedy
-decode steps produce " into the ground.\n\nThe residual" — the model
-completes the sentence and then begins repeating it, an attractor you can
-watch form.
-[View it live](https://bobgnarly420.github.io/mottled/viewer/?file=samples/gpt2-decode.mtj):
-generated tokens render faded with open (rimmed) dots and `+`-prefixed
-labels, the run header shows the decode summary, and hovering a generated
-state shows that step's probability and entropy.
+**Two time axes.** Layers within a forward pass, and *decode steps* within a
+generation. `generate_and_capture` decodes then captures the finished sequence
+in one pass — causal attention makes that exact, so it stays an ordinary
+`StateTrajectory`.
+
+**Cross-model comparison.** Models share no hidden space, so `crossmodel`
+builds one from the only thing they do share — the vocabulary they read out
+into — keeping the mass each spends outside it in a visible `⟨unshared⟩`
+bucket. `layer_similarity` answers "which layer of B matches layer *l* of A"
+with CKA, and reports whether its own answer is *identified* rather than
+always returning an argmax. (On a raw residual stream CKA saturates: every
+layer scores ~1.0 against every other. Z-scoring first recovers a monotone,
+proportional alignment — GPT-2's 13 layers onto DistilGPT-2's 7.)
+
+**Causal interventions.** Perturb / set / noise / freeze a state, replay the
+forward pass from there, and score the result against a norm-matched random
+control so a flipped prediction can be attributed to the direction rather than
+the perturbation's size.
+
+**SAE features**, applied and never trained — with the measured fit above, and
+domain-colored feature fields that name their largest territories.
+
+**Uncertainty everywhere.** Neighborhood preservation per state, explained
+variance, and a bootstrap standard-error field over the density terrain.
 
 ## Programmatic API
 
 ```python
-from capture import capture                # StateTrajectory
-from capture import generate_and_capture   # decode, then capture prompt+continuation
-from projection import project             # (L, T, 2) coordinates
-from density import compute_density        # Landscape
-from terrain import mesh, drape            # TerrainMesh
-from trajectory import extract, densify    # Trajectory list, animation path
-from metrics import summarize              # research metrics
-from compare import compare                # A/B trajectory comparison
-from crossmodel import compare_models, layer_similarity  # A/B *model* comparison
-from crossmodel import compare_generations, forced_divergence  # ...as they generate
-from sae import demo_sae, feature_trajectory  # SAE feature activations
-from sae import feature_field                 # SAE over the projection plane
-from sae import from_sae_lens, from_state_dict  # load a real trained SAE
-from sae import fetch_from_hub, fit_report      # fetch one + measure its fit
-from sae import fetch_labels, apply_labels      # name the features that fire
-from ui import attach_features                  # feature layer into scene exports
-from intervene import direction_from_token, faithfulness  # data-derived steering
-from attractor import analyze, explain        # why the basin forms, in prose
-from ui import run_pipeline, render        # everything at once → plotly Figure
-from ui import run_scene, run_intervention  # multi-prompt scenes, patching
-# (these live in pipeline.py / render.py; `ui` re-exports them unchanged)
+from capture import capture, generate_and_capture
+from projection import project
+from density import compute_density
+from terrain import mesh
+from ui import run_pipeline, render          # everything at once → plotly Figure
 
 traj = capture("gpt2", "The capital of France is")
 coords, projector = project(traj.hidden, method="pca")
-landscape = compute_density(coords, method="kde")
-surface = mesh(landscape)
-paths = extract(coords, traj.tokens, mode="all_tokens")
-print(summarize(traj, coords, token=-1))
+fig = render(**run_pipeline(cfg, prompt))    # or drive the pieces yourself
 ```
 
-`capture(model, prompt)` returns `hidden[layer][token][dimension]` wrapped in
-a `StateTrajectory`, with logit-lens logits, entropy, and top-k predictions
-attached per state.
-
-`generate_and_capture(model, prompt, max_new_tokens=8)` adds the second time
-axis: it decodes (greedy, or seeded sampling with `temperature=`) and then
-captures prompt + continuation in one pass. Because attention is causal that
-single pass reproduces the states that existed at every decode step exactly,
-so the result is an ordinary `StateTrajectory`; the per-step decode record
-(token, probability, entropy) travels in `meta["generation"]` and follows the
-trajectory into scene files, both viewers, and `mottled export --generate N`.
+`capture()` returns `hidden[layer][token][dim]` in a `StateTrajectory`, with
+logit-lens logits, entropy and top-k attached per state. Everything downstream
+is a pure function over that object — no torch, no transformer internals.
 
 ## Architecture
 
-**`StateTrajectory` (`trajectory.py`) is the center of the project — the
-interchange format everything else plugs into.** Producers emit one, viewers
-and analyses consume one, and neither side knows about the other:
+`StateTrajectory` is the only interchange. Producers emit one; analyses and
+viewers consume one; neither knows about the other.
 
 ```
-producers                      interchange                     viewers
-─────────                      ───────────                     ───────
-transformers capture  ─┐                                 ┌─ Python / Streamlit (ui.py)
-Mamba (state-space)   ─┼─►  StateTrajectory  ─► .mtj  ───┼─ web viewer (viewer/, WebGL)
-TransformerLens       ─┤    (in memory)      (on disk)   ├─ Jupyter (render() is a
-API logprobs          ─┤                                 │  plain Plotly figure)
-  (degraded)          ─┤                                 └─ future: desktop app
-synthetic generator   ─┘
-future: diffusion, neuro recordings
+producers                    interchange                viewers
+─────────                    ───────────                ───────
+transformers (HF hooks) ─┐                        ┌─ Streamlit explorer
+TransformerLens         ─┤                        ├─ WebGL viewer (no deps)
+Mamba (state-space)     ─┼─► StateTrajectory ─► .mtj ─┤
+API logprobs (degraded) ─┤                        └─ Jupyter (plain Plotly)
+synthetic               ─┘
 ```
 
-Python owns capture and analysis; `statefile.py` freezes both into the
-versioned **`.mtj`** binary format ([spec](docs/mtj-format.md)) — a JSON
-manifest plus raw little-endian buffers, parseable from any language with no
-dependencies. Full-fidelity trajectory files round-trip a capture; compact
-**scene** files carry finished analysis artifacts (projected + draped
-trajectories, terrain, inspector stats) so a viewer only has to draw.
+`.mtj` ([spec](docs/mtj-format.md)) is a JSON manifest plus little-endian
+typed-array buffers — glTF-style. A JS reader needs `DataView`; a Python
+reader needs `struct` and `numpy.frombuffer`. A cross-language conformance
+test pins the Python writer against the JavaScript reader, and a second one
+pins the spatial index the viewer picks with against its Python reference.
 
-Transformers are one producer (`models/families.py` resolves
-Qwen/Llama/Mistral/Gemma/GPT-2/NeoX layouts structurally); the synthetic
-generator (`models/synthetic.py`) is another; **Mamba** — a state-space
-model with no attention at all — is the proof the abstraction is not
-transformer-shaped: its `backbone.layers` layout resolves structurally and
-block capture + logit lens work unchanged (captures that don't apply, like
-attention patterns, refuse loudly instead of lying).
+**Closed models are a producer too**, honestly bounded. `models/logprobs.py`
+turns API top-k logprobs into a *degraded* trajectory: no residual stream
+exists, so depth is unavailable, the animated axis becomes decode time, and
+the geometry is the model's output distribution. It declares what it cannot
+see (`meta.absent`) and that its entropy is a lower bound, and the explorer
+prints that as a banner.
 
-**Closed models** are a producer too, honestly bounded: `models/logprobs.py`
-turns a hosted API's per-step top-k logprobs into a *degraded*
-`StateTrajectory`. There is no residual stream to see, so depth is
-unavailable — the animated axis becomes decode time and the geometry is the
-model's own output distribution, with the mass the API didn't report kept in
-a visible `⟨unreported⟩` bucket instead of quietly renormalised away. The
-trajectory carries its own ceiling (`meta.degraded`, `meta.absent`,
-`entropy_is_lower_bound`) and the explorer prints it as a banner above the
-scene. A new substrate —
-diffusion, biological recordings —
-only needs to emit a `StateTrajectory` and the entire stack (projection,
-density, terrain, metrics, comparison, every viewer) works unchanged.
+## Models
 
-| Module | Role |
-|---|---|
-| `capture.py` | Forward hooks on every block + logit lens → `StateTrajectory` |
-| `projection.py` | PCA / UMAP plugin registry, incremental `transform`, per-state distortion (`projection_quality`) |
-| `neighbors.py` | FAISS or NumPy cosine k-NN over hidden states & token embeddings |
-| `density.py` | KDE / kNN-inverse-distance density → scalar potential field, with bootstrap standard-error field |
-| `terrain.py` | Density → smoothed height map → mesh; drapes trajectories on it |
-| `trajectory.py` | `StateTrajectory`, extraction modes (token / all / mean / CLS), spline densify |
-| `metrics.py` | Entropy, KL, path length, curvature, velocity, drift, NN-stability |
-| `attractor.py` | Why the basin forms and what it is made of: deceleration, membership, readout stability → measured prose (`explain`) |
-| `cache.py` | Disk cache keyed by prompt + config hash |
-| `config.py` | One dataclass for every pipeline knob |
-| `pipeline.py` | The pipeline: capture → project → density → terrain → paths (pure; no Streamlit, no Plotly) |
-| `render.py` | Pure Plotly renderers: the 3-D scene and the SAE feature field |
-| `ui.py` | Streamlit shell over both, and the flat public API (re-exports `run_pipeline`, `render`, …) |
-| `bvh.py` | Spatial index over trajectory segments (ray-pick / nearest / box / frustum) — the reference for the viewer's picking, ported to `viewer/bvh.js` and pinned to it by a conformance test |
-| `intervene.py` | Causal interventions: perturb / set / noise / freeze a state via a resumable forward pass → counterfactual trajectory |
-| `compare.py` | Trajectory comparison within one model: Hausdorff, dynamic time warping, shared-prefix alignment, layerwise divergence profiles |
-| `crossmodel.py` | Comparison *across* models: readout space (the shared vocabulary as a shared coordinate system), depth-normalised divergence, and CKA layer alignment that reports whether it is identified |
-| `sae.py` | Sparse-autoencoder features: apply (never train) an SAE to every captured state; demo dictionary + npz interchange |
-| `statefile.py` | `.mtj` interchange: save/load full StateTrajectories and viewer-ready scene bundles ([format spec](docs/mtj-format.md)) |
-| `viewer/` | Self-contained WebGL viewer for `.mtj` scenes — no build step, no dependencies |
-| `serve.py` | Optional stdlib capture backend: serves the viewer + a JSON API so the browser can generate scenes |
-| `cli.py` | `mottled` console commands: explorer (default), `serve`, `export` |
-| `site/` | Static landing page (deployed with the viewer to GitHub Pages) |
+Verified end to end, with the attn/MLP residual decomposition reconciling
+**exactly** (`max |h[l+1] − (h[l] + attn + mlp)| = 0.0000`):
+Qwen2.5-1.5B-Instruct (GQA/RoPE/SwiGLU/RMSNorm), GPT-2, DistilGPT-2,
+Pythia-70m, synthetic. Llama-3.2 and Gemma-2 work identically but are
+licence-gated on the Hub, so they can't back bundled samples or offline CI.
 
-### Causal intervention (perturb-and-replay)
+### Models too big to hold
 
-Observation shows what a system *did*; intervention shows what it *would have
-done*. `intervene.py` runs a **resumable forward pass**: write-hooks rewrite
-the residual stream at a chosen layer and the model continues from the edited
-state, producing a **counterfactual `StateTrajectory`** — real data that flows
-through the same projection / measurement / renderer stack as the baseline.
+A forward pass with no gradients only needs block *i*'s weights while block
+*i* is running. So `stream.stream_capture` builds the model skeleton with no
+weights at all, materialises each block immediately before it runs, and
+releases it immediately after. Peak RAM is one block plus activations.
 
 ```python
-from capture import capture
-from intervene import Perturb, intervene, divergence
+from stream import stream_capture, stream_capture_batch
 
-base = capture(model, "The capital of France is", tokenizer=tok)
-# push the final state toward the " Berlin" embedding direction
-d = base.embedding_matrix[berlin_id]
-branch = intervene(model, "The capital of France is",
-                   [Perturb(layer=base.n_layers - 1, delta=60 * d, token=-1)],
-                   tokenizer=tok)
-# baseline predicts " the"; the branch now predicts " Berlin" (p≈1.0)
-print(divergence(base, branch).readout_changed)   # layer where the prediction flips
+traj  = stream_capture("hf://moonshotai/Kimi-K2-Instruct", "The capital of")
+many  = stream_capture_batch(ckpt, prompts)      # one pass, N trajectories
 ```
 
-Edits: `Perturb` (push a state — the grab gesture), `SetState`, `InjectNoise`
-(seeded), `FreezeLayer` (skip a block's update). Multiple interventions compose
-in one pass. `divergence(baseline, branch)` measures where a branch separates
-(state-space profile + the layer the top-1 prediction flips) — a measurement,
-not a claimed cause. Interventions require a torch model; the synthetic backend
-is analytic and not resumable.
+Point it at a repo id or URL instead of a directory and the weights don't
+land on local disk either: `remote.py` reads one layer's byte ranges out of
+the published shards, writes them to a cache file, and deletes it once the
+block has been read. Range granularity matters — shard boundaries are *not*
+layer boundaries, and Qwen3-30B-A3B packs five layers into one shard while
+splitting another layer across two.
 
-Steering directions come from **data, not magic numbers**:
-`direction_from_token(traj, id)` is a token's own (un)embedding axis and
-`direction_from_contrast(pos, neg, layer)` is a diff-of-means between two sets
-of runs. And a steer's effect is only trustworthy if it beats the perturbation
-*size*: `faithfulness(model, prompt, layer, direction, target)` scores the
-steer against a **norm-matched random control** (`effect = steer − control`
-logit shift toward the target), so the UI can say how much of the flip was the
-direction rather than the push. This is an effect-size, still not a circuit.
+Egress is then the binding cost, one full read of the checkpoint per pass,
+so `stream_capture_batch` runs every prompt through each block while it's
+resident. Twenty prompts, one download. The bill is on the trajectory
+(`meta.remote`: bytes fetched, requests made, peak cache bytes).
 
-### Trajectory comparison (prompt A/B)
+A single-prompt streamed pass is bit-exact against an in-memory capture —
+`max |Δh| = 0.0`, asserted, along with the residency bound. Batching is not
+and can't be: a batched pass gives every matmul a different shape, so the
+answer moves in the last bits by an amount that depends on the machine's
+BLAS. It was zero on one CPU and ~6e-9 on another, which is exactly why
+that's a tolerance and not a promise. Two things it refuses instead of
+absorbing: a checkpoint whose layout leaves parameters unloaded (MoE stores
+experts per-expert, the runtime wants them fused; a silent skip means empty
+experts and a capture that's wrong while still looking like numbers), and a
+host that answers `200` to a range request, which at this scale is a terabyte
+arriving where 17 GB was asked for.
 
-Two forward passes become comparable once their states live in **one shared
-projection** (`projection.project_joint` fits on the union of both runs).
-`compare.py` then measures how the trajectories relate: symmetric **Hausdorff**
-distance (how far apart the paths get), **dynamic time warping** (aligns paths
-that trace the same route at different speeds), **shared-prefix** alignment,
-and layerwise divergence profiles in full hidden space — including the first
-token position where the runs separate and the first layer where the
-logit-lens top-1 prediction differs.
+`capture(..., capture_routing=True)` records which experts each token was
+sent to, per layer. In a sparse model that's the most legible signal there
+is — a discrete choice, readable with no dictionary learning — and
+`Routing.agreement` compares two runs by the paths they took rather than the
+activations they produced. It refuses on a dense model.
 
-```python
-from capture import capture
-from projection import project_joint
-from compare import compare
+None of this has been verified at K3 scale. The mechanism is proven small.
 
-a = capture("gpt2", "The capital of France is", tokenizer=tok)
-b = capture("gpt2", "The capital of Germany is", tokenizer=tok)
-(ca, cb), _ = project_joint([a.hidden, b.hidden])
-cmp = compare(a, b, ca, cb)                  # geometry in the shared space
-print(cmp.shared_tokens, cmp.hausdorff, cmp.dtw.normalized, cmp.readout_changed)
-```
+**Mamba** is the proof the abstraction isn't transformer-shaped: its layout
+resolves structurally, block capture and the logit lens work unchanged, and
+the captures that don't apply to a state-space model — attention patterns, the
+attn/MLP split — *refuse loudly rather than returning something plausible.*
 
-In the UI, fill in **Prompt B** and run: both trajectories are drawn on a
-single terrain built from the union of states (B dashed), with the comparison
-metrics and the per-layer A–B distance in the inspector.
-`ui.run_compare(cfg, prompt_a, prompt_b)` is the programmatic entry point.
-Everything is backend-agnostic — a synthetic run and the comparison stack work
-without torch; the runs only need the same layer count and hidden dimension.
+Asked for the capital of France, Qwen answers `" Paris"`; GPT-2 says `" the"`.
+[`models-qwen-gpt2.mtj`](viewer/samples/models-qwen-gpt2.mtj) puts both on one
+terrain across a 29×1536 vs 13×768 divide.
 
-### SAE features & residual decomposition
+### Self-portrait
 
-`capture(model, prompt, capture_components=True)` additionally hooks every
-block's attention and MLP submodules and records their outputs — the two
-additive writes to the residual stream.  For pre-norm architectures
-(Llama-style, GPT-2, NeoX) the decomposition is exact:
-`hidden[l+1] = hidden[l] + attn[l] + mlp[l]` (pinned by tests).
-`metrics.component_shares` turns it into a per-layer attention-vs-MLP
-balance, and the UI plots it in the inspector.  The synthetic backend emits
-an analogous exact decomposition, so the whole path works without torch.
+[`self-portrait.mtj`](https://bobgnarly420.github.io/mottled/viewer/?file=samples/self-portrait.mtj)
+is Mottled pointed at itself: GPT-2 processing three of Mottled's own
+self-descriptions — *"Mottled visualizes hidden-state evolution as
+trajectories over a semantic manifold"*, *"the residual stream moves, turns,
+and settles"*, *"StateTrajectory is the center of the project"* — captured and
+rendered by Mottled. Given the second one, GPT-2's top continuation is
+`" into"`. It finishes the thesis.
 
-`sae.py` applies sparse autoencoders to trajectories — it never trains them.
-An SAE is four plain numpy arrays (`w_enc`, `b_enc`, `w_dec`, `b_dec`).
-SAELens' *standard* SAE runs the exact ReLU forward Mottled uses, so bringing
-a **real, trained** dictionary in is a direct copy: `sae.from_sae_lens(sae)`
-on a loaded SAELens object, `sae.from_state_dict(sd)` on any
-`W_enc`/`b_enc`/`W_dec`/`b_dec` checkpoint, or the CLI —
+## Docs
 
-```bash
-mottled-convert-sae from-saelens gpt2-small-res-jb \
-    blocks.8.hook_resid_pre -o gpt2-res-l8.npz     # needs `pip install "mottled[sae]"`
-```
-
-— then `load_npz` it. Gated / JumpReLU / top-k SAEs use a different
-nonlinearity and are rejected loudly rather than mis-encoded. `demo_sae`
-builds an untrained random dictionary so the feature pipeline — activations,
-top-features, UI overlay — runs offline (demo activations are sparse
-projections, *not* interpretable features).
-
-```python
-from sae import load_npz, demo_sae, feature_trajectory, top_features
-
-sae = demo_sae(traj.dim)          # or load_npz("gpt2-res-l8.npz")
-acts = feature_trajectory(traj, sae)         # (L, T, F) activations
-print(top_features(acts, layer=8, token=-1)) # strongest features at a state
-```
-
-In the UI, tick **SAE feature overlay**: trajectory markers are colored by
-the selected feature's activation per layer, the inspector lists the top
-features at the selected state, and a **Residual decomposition** panel shows
-each block's attention/MLP share.
-
-### Why the attractor: the explanatory layer
-
-The terrain is a density field over the run's own projected states, so a
-basin is a *pile-up*, not scenery — and `attractor.py` measures the
-mechanism instead of leaving it implicit. `analyze(traj, coords, landscape)`
-returns a `BasinReport`: the tracked token's own per-layer step (when it
-decelerates and settles, versus when that token is simply passing through
-someone else's basin), the membership roster across *every* token in the
-run (which (layer, token) states sit above a density threshold — this is
-a whole-run fact, not caused by the one tracked token), the layer from
-which the logit-lens top-1 stops changing, entropy collapse, and the
-attention/MLP share of the settled writes. `explain(report, traj)` turns
-one report into prose in which every sentence is generated from a
-measurement — nothing is canned lore, and it says so plainly when a token
-*doesn't* settle rather than asserting deceleration that isn't there.
-
-In the explorer this runs by default: the scene pins a callout to the
-density peak (member count, layer range, settle layer, stabilized top-1),
-and the **Why this attractor** inspector panel carries the full explanation
-with the step and entropy profiles. "Attractor" stays descriptive geometry
-— where this run's states accumulate — not a dynamical-systems claim.
-
-```python
-from attractor import analyze, explain
-
-report = analyze(traj, coords, landscape)       # BasinReport
-print(report.settle_layer, report.n_members, report.top_token)
-print(explain(report, traj))                    # measured prose
-```
-
-### The SAE feature field: domain coloring for the latent manifold
-
-The complex-plane plots that make f(z) visible — hue for arg(f), brightness
-for |f|, rings at magnitude octaves — have a direct analogue here: the
-projection plane is the domain, and the SAE dictionary is the function.
-`sae.feature_field(sae, projector, grid_x, grid_y)` inverse-projects every
-grid point back to hidden space (exact for PCA — the grid lands on the
-fitted 2-plane, so the field shows what the SAE sees *along the plane you
-are looking at*) and encodes it, recording the dominant feature and its
-activation per point.
-
-`ui.render_feature_field` renders it two ways: **plane** — flat domain
-coloring (hue = dominant feature, the "phase"; brightness = activation, the
-"modulus"; sawtooth rings at magnitude octaves) with the run's trajectory
-drawn crossing feature domains — and **relief**, which lifts activation
-into z and leaves holes where no feature fires. In the explorer, tick
-**SAE feature field (domain coloring)**. As everywhere in `sae.py`, the
-demo dictionary makes the machinery run offline; load real weights with
-`sae.load_npz` for interpretable domains.
-
-```python
-from sae import demo_sae, feature_field
-from ui import render_feature_field
-
-sae = demo_sae(traj.dim)
-land = result["landscape"]
-field = feature_field(sae, result["projector"], land.grid_x, land.grid_y)
-render_feature_field(field, sae, path=result["coords"][:, -1, :2]).show()
-```
-
-### Multi-prompt scenes, attention flow, interactive patching
-
-`ui.run_scene(cfg, prompts)` generalizes the A/B overlay to N prompts: every
-run is captured, joint-projected into one shared space, drawn on a single
-terrain built from the union of all states, and compared against the first
-run (in the UI, enter one overlay prompt per line — runs get A/B/C… labels
-and distinct dash styles).
-
-`capture(..., capture_attention=True)` records each block's head-averaged
-attention pattern (`StateTrajectory.attention`, `(L-1, T, T)`; the eager
-attention path is forced so the matrix actually materialises).  The renderer
-can draw **attention flow** — edges from each token's state to the states it
-reads from at the selected layer — and the inspector lists the top attended
-tokens.  The synthetic backend generates a causal, deterministic analog.
-
-`ui.run_intervention(cfg, prompt, edits, model, tokenizer)` is interactive
-patching: the baseline and a perturb-and-replay branch (`intervene.py`)
-are assembled as a two-run scene, with the full comparison plus an
-`intervene.divergence` readout (separation onset, prediction-flip layer).
-The UI exposes it as a sidebar panel — push a state toward a token
-embedding, inject noise, or freeze a block, then watch the counterfactual
-trajectory diverge on the same terrain.
-
-### The `.mtj` interchange format & web viewer
-
-```python
-import statefile
-from ui import run_scene
-
-statefile.save(traj, "run.mtj")            # full-fidelity StateTrajectory
-traj = statefile.load("run.mtj")           # round-trips every array
-
-result = run_scene(cfg, [prompt_a, prompt_b])
-statefile.save_scene(result, "scene.mtj")  # small, viewer-ready bundle
-```
-
-Scene files carry no hidden states — just draped trajectories, terrain and
-inspector data — so they are small enough to hand to the browser. Open the
-web viewer with any static file server:
-
-```bash
-python -m http.server            # from the repo root
-# → http://localhost:8000/viewer/   (drag a .mtj in, or ?file=samples/scene-abc.mtj)
-```
-
-![The WebGL web viewer rendering the committed three-run sample scene](docs/images/viewer.png)
-*The dependency-free WebGL viewer on `samples/scene-abc.mtj`: three runs on
-one terrain, per-run visibility toggles, the comparison table, and the layer
-scrubber.*
-
-The Streamlit app has an **Export scene (.mtj)** button for whatever is
-currently on screen. The viewer is plain WebGL2 with zero dependencies and
-zero build step; producers in other languages only need to follow
-[docs/mtj-format.md](docs/mtj-format.md).
-
-**Capture from the browser**: `mottled serve --model gpt2` (or
-`python serve.py`) runs a standard-library web server that hosts the viewer
-*and* a capture API. The viewer discovers it at runtime and shows a prompt
-form — type prompts, press Capture, and the scene is generated server-side
-and streamed back as `.mtj`. On plain static hosting (GitHub Pages) the
-form simply never appears.
-
-### Interaction layer
-
-Trajectories render as curves, not voxels — projected states occupy a
-vanishing fraction of any 3-D volume, so the right primitive is a spatial
-index over the *curve segments*. `bvh.py` is that index, and `viewer/bvh.js`
-is its port; `tests/test_bvh_conformance.py` pins them together, because a
-tool whose two surfaces pick different segments for the same ray is two
-tools. The viewer casts a camera ray at the BVH every frame: you grab
-anywhere along a trajectory, the inspector reads the fractional layer you
-landed at, and a click pins it.
-
-`ray_pick` powers that grab, `nearest` powers snapping; `query_box`
-(region select) and `query_frustum` (fly-through culling) are built and
-tested against the coming interaction work. All of it is backend-agnostic —
-it consumes projected 3-D points, never transformer internals — so any
-substrate projected to ≤3-D is pickable. A volumetric (voxel-octree)
-renderer for *fields* (density / flow) will land once we render ensembles
-rather than single runs.
-
-### Uncertainty: where the picture is trustworthy
-
-Every step from hidden space to a 3-D scene loses information, and the tool
-now measures the loss instead of hiding it. Two sources:
-
-- **Projection distortion.** Flattening a `D`-dimensional residual stream to
-  two coordinates cannot preserve every neighborhood.
-  `projection.projection_quality(hidden, coords, projector)` reports, per
-  state, the fraction of its hidden-space nearest neighbors that survive in
-  the projection (`preservation`), and — for PCA — how far the state sits off
-  the fitted plane (`residual`) and the global explained variance. A state
-  with low preservation is drawn where the projection *could* put it, not
-  where it truly is.
-- **Density confidence.** The terrain is a KDE over one run's worth of
-  points, so it is an estimate. `density.compute_density(..., bootstrap=B)`
-  resamples the points `B` times and records the per-cell standard error
-  (`Landscape.density_se`) in the same normalized units as the height — high
-  SE marks relief that is bandwidth artifact rather than a real pile-up.
-
-```python
-from projection import project, projection_quality
-from density import compute_density
-
-coords, projector = project(traj.hidden, method="pca")
-q = projection_quality(traj.hidden, coords, projector)
-print(q.explained_variance, q.preservation.mean())   # global + per-state
-
-land = compute_density(coords, bootstrap=32)
-print(land.density_se.max())                          # confidence field
-```
-
-Fidelity is stated **inline, not opt-in**: the explorer prints a projection
-fidelity header above every scene and flags low-preservation states with an
-amber ✕ right on the terrain (the full numbers stay in the **Uncertainty**
-panel); `attractor.explain` folds the basin's own preservation into its prose
-("read the shape as suggestive, not established" when it is low); and the web
-viewer's **uncertainty** terrain overlay (amber = high SE) is **on by default**
-whenever a scene carries a standard-error field. Both quantities ride along in
-the `.mtj` scene format (`terrain.se`, per-run `quality`), so any consumer can
-render them.
-
-### Design language
-
-Every surface — the Plotly renderer, the Streamlit shell, the web viewer —
-shares one design language (dark navy void `#080B18`, a single
-precision-blue accent `#4B7CF3`, semantic data colors, 1px borders,
-near-sharp corners, monospace for data values, no emoji in product UI).
-The tokens have **one source of truth** — `design_tokens.py`. `ui.py` imports
-them; `.streamlit/config.toml` and `viewer/style.css` mirror the same values,
-and `tests/test_tokens.py` fails if any mirror drifts — so retheming is a
-one-line edit guarded by CI, not a three-file hunt.
-
-The design language is also expected to *explain*, not just style: the
-scene carries a measured callout at the density peak, captions state what
-the terrain is made of, and the inspector's "Why this attractor" panel is
-prose generated from this run's numbers (`attractor.explain`). The rule:
-if the visualization invites a question ("why is that basin there?"), a
-surface owes the measured answer.
-
-### Plugin points
-
-Projections (`projection.PROJECTIONS`), density estimators
-(`density.DENSITY_ESTIMATORS`), neighbor backends (faiss/numpy), and metrics
-(`metrics.METRICS`) are registries — register a class and it is available by
-name, including in the UI dropdowns via `config.py`.
-
-## Research metrics
-
-Per-token trajectory summaries: path length, integrated curvature, average
-semantic drift (cosine), layerwise displacement, entropy collapse, and
-nearest-neighbor stability (Jaccard overlap of the token-embedding
-neighborhood across layers).
+- [`docs/mtj-format.md`](docs/mtj-format.md) — the `.mtj` interchange spec
+- [`docs/field-notes.md`](docs/field-notes.md) — dated orientation to the
+  interpretability landscape: the tool stack, which public SAE suites exist,
+  what's contested, and the traps this project has already paid for
+- [`ROADMAP.md`](ROADMAP.md) · [`CHANGELOG.md`](CHANGELOG.md)
 
 ## Tests
 
 ```bash
-python -m pytest tests/ -q
+pytest -m "not network"     # 291 offline
+node --test viewer/tests/   # 51, no npm install
 ```
 
-Covers: hook captures match `output_hidden_states` exactly, logit lens
-reproduces the model's final logits, shape consistency, projection
-determinism, valid neighbor lookups, finite density (incl. degenerate
-inputs), terrain mesh consistency and smoothing, animation continuity,
-comparison geometry on analytic cases (Hausdorff, DTW alignment validity),
-SAE encode/decode math and npz roundtrip, exact residual decomposition and
-attention-pattern capture on locally-built Llama/GPT-2 models, multi-prompt
-scene assembly, the intervention pipeline, and headless runs of the actual
-Streamlit app — single-prompt, A/B, N-prompt scene, and SAE overlay —
-(`streamlit.testing.v1.AppTest`).
+The offline suite includes torch mechanism tests on locally-built models —
+hook captures pinned against HF's own `hidden_states`, the residual
+decomposition against the real attention and MLP outputs. `-m network`
+adds tests that hit the Hub and Neuronpedia.
 
-### Comparing models, not just prompts
+## Non-goals
 
-Two models share no hidden space — different widths, depths, and usually
-tokenizers — so `crossmodel.py` builds the comparison on the one thing they
-do share, the text they read out into:
-
-```bash
-mottled export "The capital of France is" --models gpt2,distilgpt2 -o models.mtj
-```
-
-```python
-from crossmodel import compare_models, layer_similarity
-
-compare_models(gpt2_traj, pythia_traj)   # where their readouts diverge, per layer
-layer_similarity(gpt2_traj, distil_traj) # which layer of B matches layer l of A
-```
-
-Every state becomes the next-token distribution it predicts over the shared
-vocabulary, plus a visible `⟨unshared⟩` bucket for the mass spent outside it —
-a real shared coordinate system, so both viewers draw different architectures
-on one manifold ([sample](viewer/samples/models-gpt2-distilgpt2.mtj)).
-
-Crossed with the generation axis, that answers the question the two axes were
-built for — *where do two models' generations part company?* Given "The
-residual stream moves, turns, and settles", GPT-2 and DistilGPT-2 both
-complete it with `" into"`, then split on the very next token (`" the
-ground."` vs `" a new state of equilibrium."`):
-
-```python
-from crossmodel import compare_generations, forced_divergence
-
-compare_generations(gpt2_gen, distil_gen).summary()
-# "diverge at step 1 (' the' vs ' a'); steps 0–1 are like-for-like,
-#  the rest are different continuations, not a comparison"
-forced_divergence(gpt2_scored, distil_scored)  # both on one fixed text
-```
-
-Free-running generation stops being a like-for-like comparison the moment the
-models choose differently — from there they are continuing *different texts*,
-so a step-by-step number would compare answers to different questions.
-`compare_generations` measures that boundary and stops claiming past it;
-`forced_divergence` scores both models on one fixed text instead, which stays
-comparable the whole way down.
-
-`layer_similarity` uses CKA, and **reports whether its own answer is
-identified**. On a raw residual stream CKA saturates — a few very-high-variance
-dimensions shared by every layer dominate, and every layer looks ~1.0 similar
-to every other (on GPT-2 vs DistilGPT-2, the middle rows are flat to within
-0.001, so the argmax is noise). Z-scoring each dimension recovers a monotone,
-proportional correspondence — GPT-2's 13 layers onto DistilGPT-2's 7 — so it
-is the default, `contrast` says how far each row's winner beats its field, and
-the trade is documented rather than buried: exact scale invariance is kept,
-exact rotation invariance is not.
-
-## Field notes
-
-[`docs/field-notes.md`](docs/field-notes.md) is a dated, re-verifiable
-orientation to the interpretability landscape — the tool stack, which public
-SAE suites actually exist, what is genuinely contested, and the traps this
-project has already paid for (preprocessing vs provenance, CKA saturation,
-auto-interp labels as leads). Written agent-first, because sessions here start
-cold and the alternative is asserting from memory. Every claim in it is either
-dated with a command to re-check or marked secondary and cited.
-
-## What this is — and is not
-
-Mottled visualizes the **geometry of latent dynamics** — where a run's hidden
-states travel and pile up — and measures how much of that geometry survives
-the projection. It is deliberately *not* a proof of mechanism:
-
-- A basin shows states **accumulating**, not a circuit **computing**. Attention
-  flow and the intervention divergence/faithfulness readouts are *measurements*
-  of what happened, not identified causes.
-- Feature **names** come from Neuronpedia's auto-interp explanations, written
-  by a language model reading each feature's top activations. They are
-  descriptions of what a feature *correlates with*, not of what it computes,
-  and the explorer says so and names the model that wrote them. Treat them as
-  leads. (They can also be strikingly apt: the feature firing hardest on "The
-  capital of France is" is published as *"locations or cities specifically
-  denoted as 'capital' in the text"*.)
-- An SAE overlay is only as interpretable as the SAE you load — *on the
-  activation distribution it was trained on*. The explorer fetches a real
-  trained dictionary for GPT-2 (`sae.fetch_from_hub`, no sae-lens needed) and
-  prints its **measured fit** (`sae.fit_report`: reconstruction error and
-  firing density per layer) wherever features are shown, because provenance
-  is not calibration: public GPT-2 SAEs are trained on TransformerLens-
-  processed residuals, which differ from raw HF states even though the model
-  computes the same function. When the fit is bad the UI says the features
-  are extrapolation and points at the calibrated pairing
-  (`models.hooked.from_hooked_transformer`). The bundled `demo_sae` remains
-  a random dictionary (decorative), and now measures as such.
-- Every scene states its **projection fidelity** inline and flags the states
-  whose neighborhoods did not survive the flattening, so a low-fidelity picture
-  can't be mistaken for solid structure.
-
-For **verified causal claims** — circuit discovery, path patching, activation
-patching at scale — reach for a dedicated tool
-([TransformerLens](https://github.com/TransformerLensOrg/TransformerLens),
-ACDC, EAP). Mottled is the honest map you read *before* and *alongside* them,
-and it interoperates: any `HookedTransformer` is a producer via
-`models.hooked.from_hooked_transformer`.
-
-## Non-goals (MVP)
-
-No training or finetuning (SAEs are *applied*, never trained), no circuit
-discovery, distributed inference, or production auth. Single-machine
+No training or finetuning (SAEs are applied, never trained). No circuit
+discovery, no distributed inference, no production auth. Single-machine
 research tool.
-
-## Roadmap
-
-- **Phase 2** — ✅ trajectory comparison: prompt A/B overlay, Hausdorff
-  distance, dynamic time warping, shared-prefix divergence (`compare.py`,
-  grown from the `metrics.branch_divergence` seed).
-- **Phase 3** — ✅ SAE features (`sae.py`), residual decomposition
-  (`capture_components`), feature overlays in the UI.
-- **Phase 4** — ✅ multi-prompt scenes (`ui.run_scene`), attention flow
-  (`capture_attention` + renderer edges), interactive patching
-  (`ui.run_intervention` over `intervene.py`).
-- **Interchange & viewers** — ✅ `StateTrajectory` as the interchange format:
-  stable `.mtj` serialization (`statefile.py`, [spec](docs/mtj-format.md))
-  and a dependency-free WebGL web viewer (`viewer/`).
-- **Distribution** — ✅ pip-installable package with a `mottled` CLI, browser
-  capture backend (`serve.py`), Mamba producer, real GPT-2 sample scene,
-  GitHub Pages site (landing + viewer).
-- **Explanatory layer** — ✅ attractor analysis (`attractor.py`): why the
-  basin forms and what it is made of, as measured prose, pinned callouts,
-  and inspector panels; SAE feature field (`sae.feature_field`) — domain
-  coloring of the projection plane, plane and relief views.
-- **Uncertainty** — ✅ projection distortion (`projection.projection_quality`:
-  neighborhood preservation, reconstruction residual, explained variance) and
-  a density confidence field (`density.compute_density(bootstrap=…)` →
-  `Landscape.density_se`), surfaced in the explorer's Uncertainty panel and a
-  web-viewer terrain overlay; both carried in the `.mtj` scene format.
-- **Next** — desktop shell, volumetric field rendering for ensembles, SAE
-  feature flows across layers, feature field in the web viewer, richer
-  scene management (pin/hide runs, saved scenes), diffusion / recording
-  producers.
 
 ## License
 
-[Apache License 2.0](LICENSE) — permissive, with an explicit patent grant, to
-match the mechanistic-interpretability ecosystem Mottled interoperates with
-(TransformerLens, SAELens, nnsight). See [`NOTICE`](NOTICE).
+[Apache 2.0](LICENSE) — permissive with an explicit patent grant, matching the
+ecosystem it interoperates with (TransformerLens, SAELens, nnsight). See
+[`NOTICE`](NOTICE).
