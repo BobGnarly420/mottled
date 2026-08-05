@@ -391,6 +391,7 @@ def render_feature_field(
     sae: sae_mod.SAE | None = None,
     path: np.ndarray | None = None,
     relief: bool = False,
+    labels_k: int = 6,
 ) -> go.Figure:
     """The SAE feature field as a domain-colored figure.
 
@@ -398,6 +399,14 @@ def render_feature_field(
     feature territory is visible.  `relief=False` is the flat complex-plane
     view; `relief=True` lifts activation magnitude into z, leaving holes
     where no feature fires — the manifold sheets of the dictionary.
+
+    When `sae` carries labels (see `sae.apply_labels`), the largest domains
+    are **named on the plane**. Note what is deliberately *not* done: hue
+    still comes from the feature id, not from the label's meaning. Golden-
+    angle hue encodes *identity* — adjacent ids look maximally different on
+    purpose — and recolouring by semantics would turn colour proximity into
+    an implied semantic metric it cannot support, while destroying the
+    separation the palette exists for. Names are text; colour is identity.
     """
     fig = go.Figure()
     if relief:
@@ -448,6 +457,28 @@ def render_feature_field(
                          zeroline=False, constrain="domain")
         fig.update_yaxes(title="manifold y", gridcolor="#1E2540", color="#818FB8",
                          zeroline=False, autorange=True, scaleanchor="x")
+    # Name the territories that own real area. Hue tells you *which* feature
+    # owns a region; only a label tells you what that feature is about.
+    if sae is not None and getattr(sae, "labels", None):
+        annotations = []
+        for dom in field.domains(k=labels_k):
+            text = sae.feature_label(dom.feature)
+            if len(text) > 46:
+                text = text[:45].rstrip() + "…"
+            annotations.append({
+                "x": dom.x, "y": dom.y, "text": f"{text}<br>{dom.area:.0%}",
+                "showarrow": False, "align": "center",
+                "font": {"family": _FONT_MONO, "size": 9, "color": "#EDF0FA"},
+                "bgcolor": "rgba(8,11,24,0.72)", "bordercolor": "#1E2540",
+                "borderwidth": 1, "borderpad": 3,
+            })
+        if annotations and not relief:
+            fig.update_layout(annotations=annotations)
+        elif annotations:
+            fig.update_scenes(annotations=[
+                {**a, "z": float(np.nanmax(z)) if np.isfinite(z).any() else 1.0}
+                for a in annotations])
+
     n_domains = len(field.features)
     fig.update_layout(
         margin={"l": 0, "r": 0, "t": 28, "b": 0},

@@ -52,8 +52,18 @@ Today Mottled has one time axis: layers. Autoregressive decode is the second.
       offline-safe), `sae.apply_labels` writes them onto the dictionary, and
       the explorer names them — with `ui._label_provenance` stating who wrote
       them and that they describe correlates, not computation.
-- [ ] Feature-field domain coloring keyed by those labels rather than by
-      feature index.
+- [x] Feature field **names its domains**: `FeatureField.domains()` ranks
+      territories by area with plane centroids, and `render_feature_field`
+      writes the label of each onto the plane.
+
+      *Deviation, deliberate:* the item originally said "coloring keyed by
+      those labels rather than by feature index". Implemented as naming
+      instead, because recolouring by label meaning would be actively
+      misleading — golden-angle hue encodes **identity** (adjacent ids are
+      made maximally distinct on purpose), so keying it to semantics would
+      both destroy that separation and turn colour proximity into an implied
+      semantic metric no 1-D hue can carry. Colour answers *which feature*;
+      the label answers *what it is about*. **M2 is complete.**
 
 ### M3 — A tangible viewer
 - [x] `bvh.py` ported to `viewer/bvh.js` and pinned by a cross-language

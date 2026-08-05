@@ -372,6 +372,16 @@ def active_features(acts: np.ndarray, k: int = 20) -> np.ndarray:
 
 # ------------------------------------------------------------ feature field
 @dataclass
+class DomainSummary:
+    """One feature's territory on the projection plane."""
+
+    feature: int
+    area: float        # fraction of the firing plane this feature dominates
+    x: float           # centroid, in plane coordinates
+    y: float
+
+
+@dataclass
 class FeatureField:
     """The SAE evaluated over the projection plane itself.
 
@@ -393,6 +403,31 @@ class FeatureField:
         """Sorted ids of every feature that dominates somewhere."""
         ids = np.unique(self.dominant)
         return ids[ids >= 0]
+
+    def domains(self, k: int = 6) -> list["DomainSummary"]:
+        """The k largest territories, biggest first.
+
+        Where the field is worth labelling: a domain-colored plane has one
+        dominant feature per point, and only the few that own real area are
+        readable. Centroids are the mean of a feature's cells, so a
+        disconnected territory reports the middle of its scatter — fine for
+        placing a name, not a claim about shape.
+        """
+        out = []
+        rows, cols = np.indices(self.dominant.shape)
+        total = float((self.dominant >= 0).sum())
+        if total <= 0:
+            return out
+        for fid in self.features:
+            mask = self.dominant == fid
+            n = int(mask.sum())
+            yi, xi = float(rows[mask].mean()), float(cols[mask].mean())
+            out.append(DomainSummary(
+                feature=int(fid), area=n / total,
+                x=float(np.interp(xi, np.arange(len(self.grid_x)), self.grid_x)),
+                y=float(np.interp(yi, np.arange(len(self.grid_y)), self.grid_y))))
+        out.sort(key=lambda d: -d.area)
+        return out[:k]
 
 
 def feature_field(sae: SAE, projector, grid_x: np.ndarray, grid_y: np.ndarray) -> FeatureField:
