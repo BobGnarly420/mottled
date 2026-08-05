@@ -129,8 +129,14 @@ start.
 
 ## Status
 
-M1, M3 and M6 are complete; M2, M4 and M5 each have exactly one item left,
-listed above. Every milestone landed green (offline test suite + viewer Node
+M1, M2, M3 and M6 are complete. Two items remain, both blocked on something
+other than effort:
+
+- **M4's live provider path** needs API credentials, which a session should
+  not hold or ask for. The producer and its honesty machinery are done and
+  tested against fixtures; someone with a key can wire the last mile.
+- **M5's `mottled/` package move** is a public API break, so it wants a
+  release boundary and an explicit decision, not a drive-by commit. Every milestone landed green (offline test suite + viewer Node
 tests) before the next started, and that stays the rule.
 
 ## Model coverage
