@@ -19,7 +19,7 @@ The invariants that get us there are already in place and are not negotiable:
 
 ## Milestones
 
-### M1 — The generation axis *(in progress)*
+### M1 — The generation axis *(complete)*
 Today Mottled has one time axis: layers. Autoregressive decode is the second.
 - [x] `capture.generate_and_capture`: decode then capture the completed
       sequence in one pass — exact for causal models, no approximation —
@@ -56,8 +56,13 @@ Today Mottled has one time axis: layers. Autoregressive decode is the second.
       conformance test; the viewer picks by real camera ray against the
       segment index — grab anywhere along a trajectory, fractional layer in
       the inspector, click-to-pin.
-- [ ] Inspector parity with the explorer (neighbors, residual decomposition)
-      so the shareable viewer is not the lesser surface.
+- [x] Inspector parity with the explorer: `pipeline.attach_inspector`
+      resolves the two readouts a scene cannot recompute (semantic neighbors
+      need the `(V, D)` embedding matrix; the attn/MLP split needs the
+      residual components) *before* export, where they collapse to a compact
+      table and two numbers per state. The viewer renders both.
+
+**M3 is complete.**
 
 ### M4 — Closed-model producers
 The architecture diagram has promised "OpenAI / Anthropic logprobs" from the
@@ -108,11 +113,33 @@ start.
       (readout divergence, layer alignment with its identified/flat rows, the
       generation split), so the atlas is reachable without the API.
 
-## Sequencing
+## Status
 
-M1 → M2 → M3 ship independently and in order; M4 and M5 can interleave after
-M1; M6 builds on M1 (decode axis) + M5 (package split). Each milestone lands
-green (offline test suite + viewer Node tests) before the next starts.
+M1, M3 and M6 are complete; M2, M4 and M5 each have exactly one item left,
+listed above. Every milestone landed green (offline test suite + viewer Node
+tests) before the next started, and that stays the rule.
+
+## Model coverage
+
+Verified end to end: **Qwen2.5-1.5B-Instruct** (29 x 1536, GQA / RoPE /
+SwiGLU / RMSNorm) and GPT-2 / DistilGPT-2 / Pythia-70m, plus the synthetic
+backend. The residual decomposition reconciles exactly on all of them, so
+"model-agnostic" is measured rather than claimed.
+
+Three separate reasons the samples are not all frontier models, worth keeping
+distinct:
+
+- **Licence-gated** — `meta-llama/Llama-3.2-1B`, `google/gemma-2-2b`. They
+  work; they need an accepted licence and an `HF_TOKEN`, so they cannot back
+  bundled samples or offline CI.
+- **Hardware** — frontier MoE is not a support question. Kimi K2's weights
+  are ~1 TB.
+- **Ecosystem** — GPT-2 stays in the *SAE-dependent* samples because the
+  public trained-dictionary ecosystem (SAELens, Neuronpedia) is
+  overwhelmingly GPT-2-small, and M2's real-feature work depends on one
+  existing. Gemma Scope and Llama Scope exist but sit behind the licence gate
+  above. **This is the one that actually constrains the project**, and it is
+  the argument for the remaining M2 item.
 
 ## Standing hazard: within-model assumptions
 
