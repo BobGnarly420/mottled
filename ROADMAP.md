@@ -155,6 +155,14 @@ distinct:
   GPT-3.5); and **closed weights** are not a gap but a wall, which is what
   M4's degraded producer exists for.
 
+## Orientation
+
+New here — human or agent — start with [`docs/field-notes.md`](docs/field-notes.md):
+what the field currently believes, what it disputes, and the specific traps
+this codebase has already hit. It exists because a session confidently wrote
+a 2023-true claim about the SAE ecosystem into the README in 2026; dated
+facts with a re-verification command beat remembered ones.
+
 ## Standing hazard: within-model assumptions
 
 For most of this project's life, "two runs" meant "two prompts through one

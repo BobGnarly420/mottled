@@ -623,6 +623,16 @@ is the default, `contrast` says how far each row's winner beats its field, and
 the trade is documented rather than buried: exact scale invariance is kept,
 exact rotation invariance is not.
 
+## Field notes
+
+[`docs/field-notes.md`](docs/field-notes.md) is a dated, re-verifiable
+orientation to the interpretability landscape — the tool stack, which public
+SAE suites actually exist, what is genuinely contested, and the traps this
+project has already paid for (preprocessing vs provenance, CKA saturation,
+auto-interp labels as leads). Written agent-first, because sessions here start
+cold and the alternative is asserting from memory. Every claim in it is either
+dated with a command to re-check or marked secondary and cited.
+
 ## What this is — and is not
 
 Mottled visualizes the **geometry of latent dynamics** — where a run's hidden
