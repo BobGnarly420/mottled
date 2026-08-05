@@ -138,12 +138,22 @@ distinct:
   bundled samples or offline CI.
 - **Hardware** — frontier MoE is not a support question. Kimi K2's weights
   are ~1 TB.
-- **Ecosystem** — GPT-2 stays in the *SAE-dependent* samples because the
-  public trained-dictionary ecosystem (SAELens, Neuronpedia) is
-  overwhelmingly GPT-2-small, and M2's real-feature work depends on one
-  existing. Gemma Scope and Llama Scope exist but sit behind the licence gate
-  above. **This is the one that actually constrains the project**, and it is
-  the argument for the remaining M2 item.
+- **Ecosystem** — GPT-2 stays in the *SAE-dependent* samples because its
+  dictionaries come with published Neuronpedia explanations. That is
+  convenience, not the frontier of what is available, and an earlier draft of
+  this section overstated it: public SAEs exist for **Gemma-2 2B/9B** (Gemma
+  Scope, ungated), **Llama-3 8B** (EleutherAI, OpenMOSS), and **Qwen3
+  1.7B/8B** — the last published by Qwen for their own *ungated* models,
+  per-layer, which makes `Qwen3-1.7B-Base` + `Qwen/SAE-Res-Qwen3-1.7B-Base`
+  a fully-ungated modern feature path and the obvious next M2 target.
+
+  The measured shape of the gap, since it is easy to overstate: **capture**
+  scales freely (the residual decomposition is exact on Qwen2.5-1.5B);
+  **trained dictionaries** lag frontier by roughly two orders of magnitude
+  (~8-9B public vs ~1T frontier) and a generation or so in time;
+  **explanations** lag furthest (Neuronpedia's GPT-2 labels were written by
+  GPT-3.5); and **closed weights** are not a gap but a wall, which is what
+  M4's degraded producer exists for.
 
 ## Standing hazard: within-model assumptions
 

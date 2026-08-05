@@ -82,10 +82,12 @@ continues `" in the reservoir, and the water level"`; GPT-2 continues
 the same way but are license-gated on the Hub — they need an accepted licence
 and an `HF_TOKEN`, so they cannot back bundled samples or offline CI.
 Frontier-scale MoE models are a hardware question, not a support question:
-Kimi K2's weights are ~1 TB. GPT-2 remains in the samples for one specific
-reason — the public *trained-SAE* ecosystem (SAELens, Neuronpedia) is
-overwhelmingly GPT-2-small, and M2's real-feature work depends on it — not
-because it is the ceiling.
+Kimi K2's weights are ~1 TB. GPT-2 remains in the *SAE-dependent* samples
+because its dictionaries come with published Neuronpedia explanations — but
+that is a convenience, not the state of the art. Public trained SAEs now
+exist for Gemma-2 2B/9B (Gemma Scope), Llama-3 8B, and Qwen3 1.7B/8B — the
+last published by Qwen for their own ungated models, which is the obvious
+path to a fully-ungated modern feature demo.
 
 ### A real model, not a sketch
 
