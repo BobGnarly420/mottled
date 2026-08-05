@@ -196,9 +196,10 @@ def test_render_overlay(cfg, result):
 
 def test_streamlit_app_compare_mode():
     """Drive the real app headlessly in A/B mode."""
-    AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
+    pytest.importorskip("streamlit.testing.v1")
+    from tests.apptest import app_test
 
-    at = AppTest.from_file("ui.py", default_timeout=120)
+    at = app_test(default_timeout=120)
     at.run()
     at.text_area(key="prompt").set_value(PROMPT_A)
     at.text_area(key="prompt_b").set_value(PROMPT_B)

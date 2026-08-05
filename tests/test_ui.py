@@ -66,9 +66,10 @@ def test_marble_animation_is_continuous(result):
 
 def test_streamlit_app_interactive():
     """Drive the real Streamlit app headlessly: run capture, scrub, inspect."""
-    AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
+    pytest.importorskip("streamlit.testing.v1")
+    from tests.apptest import app_test
 
-    at = AppTest.from_file("ui.py", default_timeout=120)
+    at = app_test(default_timeout=120)
     at.run()
     assert not at.exception
 
@@ -88,9 +89,10 @@ def test_streamlit_app_interactive():
 
 def test_streamlit_app_surfaces_projection_fidelity_inline():
     """Fidelity is stated in the main view, not buried in a collapsed panel."""
-    AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
+    pytest.importorskip("streamlit.testing.v1")
+    from tests.apptest import app_test
 
-    at = AppTest.from_file("ui.py", default_timeout=120)
+    at = app_test(default_timeout=120)
     at.run()
     at.text_area(key="prompt").set_value("The capital of France is")
     at.selectbox(key="model").select("synthetic")

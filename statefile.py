@@ -200,6 +200,9 @@ def save_scene(result: dict, path_or_fh) -> None:
         run: dict[str, Any] = {
             "label": chr(65 + i),
             "prompt": prompts[i] if i < len(prompts) else "",
+            # per-run model identity: the scene-level `meta` describes run 0,
+            # which is wrong for a scene whose runs are *different models*
+            "model": traj.meta.get("model"),
             "tokens": list(traj.tokens),
             "trajectory_labels": [str(t.label or t.token) for t in trajectories],
             "points": w.add(f"run{i}.points",

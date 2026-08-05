@@ -174,9 +174,10 @@ def test_run_intervention_pipeline():
 
 def test_streamlit_app_scene_mode():
     """Drive the real app with two overlay prompts and attention flow on."""
-    AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
+    pytest.importorskip("streamlit.testing.v1")
+    from tests.apptest import app_test
 
-    at = AppTest.from_file("ui.py", default_timeout=120)
+    at = app_test(default_timeout=120)
     at.run()
     at.text_area(key="prompt").set_value(PROMPTS[0])
     at.text_area(key="prompt_b").set_value(PROMPTS[1] + "\n" + PROMPTS[2])

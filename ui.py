@@ -262,8 +262,21 @@ def main() -> None:
     # everything else falls back to the demo dictionary, clearly labeled.
     _REAL_SAE = {768: ("jbloom/GPT2-Small-SAEs-Reformatted", "blocks.8.hook_resid_pre")}
 
+    def _real_sae_source():
+        """The trained dictionary for this capture, if one applies.
+
+        Keyed on the hidden width, which only identifies a model's residual
+        stream when the states *are* a residual stream. A readout-space
+        trajectory's axes are vocabulary entries, not hidden dimensions, so a
+        width collision there would offer a residual SAE for probability
+        vectors — the fit report would call it out, but it should never be
+        offered in the first place."""
+        if traj.meta.get("space") == "readout":
+            return None
+        return _REAL_SAE.get(traj.dim)
+
     def _active_sae():
-        source = _REAL_SAE.get(traj.dim) if st.session_state.get("sae_real", True) else None
+        source = _real_sae_source() if st.session_state.get("sae_real", True) else None
         if source is not None:
             try:
                 return _hub_sae(*source), source
@@ -293,7 +306,7 @@ def main() -> None:
     overlay_label = "feature"
     with st.sidebar:
         layer = st.slider("Layer", 0, traj.n_layers - 1, traj.n_layers - 1, key="layer")
-        if (sae_on or field_on) and traj.dim in _REAL_SAE:
+        if (sae_on or field_on) and _real_sae_source() is not None:
             st.checkbox("Trained SAE (gpt2-small-res-jb, layer 8)", value=True,
                         key="sae_real",
                         help="Joseph Bloom's GPT-2-small residual-stream SAE, "

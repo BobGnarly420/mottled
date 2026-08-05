@@ -113,3 +113,22 @@ start.
 M1 → M2 → M3 ship independently and in order; M4 and M5 can interleave after
 M1; M6 builds on M1 (decode axis) + M5 (package split). Each milestone lands
 green (offline test suite + viewer Node tests) before the next starts.
+
+## Standing hazard: within-model assumptions
+
+For most of this project's life, "two runs" meant "two prompts through one
+model", so shared depth, shared width and shared tokenization were free. The
+cross-model work (M6) made all three optional, and code written under the old
+assumption fails in a specific way: it does not crash, it quietly measures
+the wrong thing or hides part of the picture. Five instances have been found
+and fixed (`_assemble_scene`, the A/B panel, the layer scrubber, scene-level
+model identity, the SAE width heuristic).
+
+New code that touches two runs should state which of these it needs — and
+guard or refuse rather than assume:
+
+- **same depth** — anything comparing layer *l* to layer *l*,
+- **same width** — anything indexing hidden dimensions,
+- **same tokenization** — anything pairing state (l, t) with state (m, t),
+- **hidden space at all** — readout-space trajectories have vocabulary axes,
+  so heuristics keyed on width do not mean there what they mean elsewhere.

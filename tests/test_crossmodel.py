@@ -451,3 +451,57 @@ def test_model_panel_shows_the_generation_split():
     render_model_comparison(st, result)
     assert "diverge at step 1" in st.all_text()
     assert st.tables == 1
+
+
+# --------------------------------------------- within-model assumptions
+def test_scrubber_spans_the_deepest_run_not_the_shallowest():
+    """Runs of unequal depth are normal now (two models on one terrain).
+    Taking the minimum silently made the deeper model's late layers
+    unreachable, with no sign anything had been cut."""
+    from config import MarbleConfig
+    from pipeline import _assemble_scene
+    from render import render
+
+    deep = synthetic.capture(PROMPT, n_layers=13)
+    shallow = synthetic.capture(PROMPT, n_layers=7)
+    cfg = MarbleConfig(use_cache=False, density_bootstrap=0)
+
+    for order in ([deep, shallow], [shallow, deep]):   # either run may be first
+        trajs, _ = X.readout_space(order)
+        r = _assemble_scene(cfg, trajs)
+        fig = render(r["traj"], r["mesh"], r["trajectories"], r["fine_paths"],
+                     traj_b=r["traj_b"], trajectories_b=r["trajectories_b"],
+                     fine_paths_b=r["fine_paths_b"],
+                     frames_per_layer=cfg.frames_per_layer)
+        steps = fig.layout.sliders[0].steps
+        assert len(steps) == 13, "the deepest run must stay reachable"
+        assert steps[-1].label == "12"
+
+
+def test_scene_records_which_model_each_run_came_from():
+    """Scene-level meta describes run 0 — wrong for a scene whose runs are
+    different models."""
+    import io
+
+    import statefile
+    from config import MarbleConfig
+    from pipeline import run_model_scene
+
+    cfg = MarbleConfig(use_cache=False, density_bootstrap=0)
+    result = run_model_scene(cfg, PROMPT, ["synthetic", "synthetic"])
+    buf = io.BytesIO()
+    statefile.save_scene(result, buf)
+    buf.seek(0)
+    runs = statefile.load_scene(buf)["runs"]
+    assert [r["model"] for r in runs] == ["synthetic", "synthetic"]
+
+
+def test_readout_space_is_never_offered_a_residual_sae():
+    """The trained dictionary is keyed on hidden width, which only identifies
+    a residual stream when the states *are* one. Readout-space axes are
+    vocabulary entries; a width collision must not offer a residual SAE for
+    probability vectors."""
+    (ra, _), _ = X.readout_space([_traj(), _traj("the capital of germany is")])
+    assert ra.meta["space"] == "readout"
+    # the guard keys off that marker, not the width
+    assert ra.meta.get("space") == "readout" and ra.dim != _traj().dim
