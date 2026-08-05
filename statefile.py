@@ -222,6 +222,25 @@ def save_scene(result: dict, path_or_fh) -> None:
             # the decode record (prompt/continuation boundary + per-step
             # token, id, p, entropy) — additive, so old readers ignore it
             run["generation"] = _jsonable(traj.meta["generation"])
+        insp = (result.get("inspector_list") or [])
+        if i < len(insp) and insp[i]:
+            # inspector layers the viewer cannot recompute (pipeline.
+            # attach_inspector): nearest vocabulary tokens per state, and the
+            # attn/MLP share of each block's write — additive
+            e, block = insp[i], {}
+            if "neighbor_idx" in e:
+                block["tokens"] = list(e["neighbor_tokens"])
+                block["idx"] = w.add(f"run{i}.inspector.nidx",
+                                     np.asarray(e["neighbor_idx"], np.int32))
+                block["sim"] = w.add(f"run{i}.inspector.nsim",
+                                     np.asarray(e["neighbor_sim"], np.float32))
+            if "component_shares" in e:
+                block["component_shares"] = w.add(
+                    f"run{i}.inspector.shares",
+                    np.asarray(e["component_shares"], np.float32))
+            if block:
+                run["inspector"] = block
+
         feats = (result.get("features_list") or [])
         if i < len(feats) and isinstance(feats[i], dict):
             # SAE feature layer (ui.attach_features): dominant feature per
@@ -274,6 +293,13 @@ def load_scene(path_or_fh) -> dict:
         for run in manifest["runs"]
     ]
     for run in scene["runs"]:
+        if isinstance(run.get("inspector"), dict):
+            run["inspector"] = {
+                **run["inspector"],
+                **{k: arrays[run["inspector"][k]]
+                   for k in ("idx", "sim", "component_shares")
+                   if run["inspector"].get(k) in arrays},
+            }
         if isinstance(run.get("features"), dict):
             run["features"] = {
                 **run["features"],

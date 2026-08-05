@@ -205,3 +205,65 @@ def test_scene_carries_sae_feature_layer(tmp_path):
     plain = run_scene(cfg, [PROMPT])
     F.save_scene(plain, path)
     assert "features" not in F.load_scene(path)["runs"][0]
+
+
+def test_scene_carries_inspector_layers(tmp_path):
+    """Neighbors and the attn/MLP split cannot be recomputed from a scene
+    file — the embedding matrix and the residual components are far too big
+    to ship — so they are resolved before export and round-trip as compact
+    arrays."""
+    import numpy as np
+
+    from neighbors import TokenNeighbors
+    from pipeline import attach_inspector
+
+    cfg = MarbleConfig(model="synthetic", use_cache=False, density_bootstrap=0)
+    result = attach_inspector(run_scene(cfg, [PROMPT]), n_neighbors=5)
+    path = tmp_path / "scene.mtj"
+    F.save_scene(result, path)
+    run = F.load_scene(path)["runs"][0]
+    traj = result["traj"]
+    L, T = traj.n_layers, traj.n_tokens
+
+    ins = run["inspector"]
+    assert ins["idx"].shape == (L, T, 5) and ins["idx"].dtype == np.int32
+    assert ins["sim"].shape == (L, T, 5)
+    assert 0 < len(ins["tokens"]) <= L * T * 5      # compact table, not the vocab
+    assert int(ins["idx"].max()) < len(ins["tokens"])
+
+    # the stored neighbors are the ones the live index gives
+    tn = TokenNeighbors(traj.embedding_matrix, traj.vocab)
+    live = tn.nearest(traj.hidden[3, 2], k=5)
+    stored = [ins["tokens"][j] for j in ins["idx"][3, 2]]
+    assert [t for t, _ in live] == stored
+    np.testing.assert_allclose([s for _, s in live], ins["sim"][3, 2], rtol=1e-5)
+
+    shares = ins["component_shares"]
+    assert shares.shape == (L - 1, T, 2)
+    np.testing.assert_allclose(shares.sum(axis=-1), 1.0, atol=1e-5)
+
+
+def test_scene_without_inspector_is_unchanged(tmp_path):
+    cfg = MarbleConfig(model="synthetic", use_cache=False, density_bootstrap=0)
+    path = tmp_path / "plain.mtj"
+    F.save_scene(run_scene(cfg, [PROMPT]), path)
+    assert "inspector" not in F.load_scene(path)["runs"][0]
+
+
+def test_attach_inspector_skips_runs_without_the_source_data(tmp_path):
+    """A run captured without components (or without an embedding matrix)
+    contributes what it has instead of failing the whole export."""
+    from models import synthetic
+    from pipeline import _assemble_scene, attach_inspector
+
+    cfg = MarbleConfig(model="synthetic", use_cache=False, density_bootstrap=0)
+    plain = synthetic.capture(PROMPT)              # no components captured
+    result = {"prompts": [PROMPT], "prompt": PROMPT, **_assemble_scene(cfg, [plain])}
+    attach_inspector(result)
+    entry = result["inspector_list"][0]
+    assert "neighbor_idx" in entry                  # embeddings were available
+    assert "component_shares" not in entry          # components were not
+    path = tmp_path / "partial.mtj"
+    F.save_scene(result, path)
+    ins = F.load_scene(path)["runs"][0]["inspector"]
+    assert "idx" in ins and "component_shares" not in ins

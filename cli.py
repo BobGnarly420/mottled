@@ -55,6 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "export":
         import statefile
         from config import MarbleConfig
+        from pipeline import attach_inspector
         from ui import run_scene
 
         cfg = MarbleConfig(model=args.model, use_cache=False,
@@ -65,14 +66,15 @@ def main(argv: list[str] | None = None) -> int:
 
             names = [m.strip() for m in args.models.split(",") if m.strip()]
             result = run_model_scene(cfg, args.prompts[0], names)
-            statefile.save_scene(result, args.output)
+            statefile.save_scene(attach_inspector(result), args.output)
             print(f"wrote {args.output}: {len(names)} models on "
                   f"{result['shared_vocab']} shared vocabulary entries")
             for name, cmp in zip(names[1:], result["model_comparisons"]):
                 print(f"  {names[0]} vs {name}: final JS "
                       f"{cmp.final_divergence:.4f}, top-1 {cmp.top_a!r} vs {cmp.top_b!r}")
             return 0
-        statefile.save_scene(run_scene(cfg, args.prompts), args.output)
+        statefile.save_scene(attach_inspector(run_scene(cfg, args.prompts)),
+                             args.output)
         print(f"wrote {args.output}")
         return 0
 

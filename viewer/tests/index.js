@@ -5,4 +5,5 @@
 require("./parser.test.js");
 require("./generation.test.js");
 require("./features.test.js");
+require("./inspector.test.js");
 require("./bvh.test.js");

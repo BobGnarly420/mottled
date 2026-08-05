@@ -14,12 +14,22 @@ DEFAULT_PROMPT = "The capital of France is"
 # Model families the transformers backend has been exercised against share
 # the Llama-style module layout (Qwen / Llama / Mistral / Gemma).  "synthetic"
 # is a dependency-free backend used for tests, demos and UI development.
+# Verified end-to-end (capture + logit lens + attention + exact residual
+# decomposition). Qwen2.5-1.5B is the default *modern* reference: GQA, RoPE,
+# SwiGLU, RMSNorm, 29 layers x 1536 — nothing like GPT-2's 2019 design, and
+# the decomposition still reconciles to 0.0000. Llama-3.2 and Gemma-2 are
+# license-gated on the Hub, so they need an accepted licence + HF_TOKEN and
+# cannot back the bundled samples or CI. GPT-2 stays because the public
+# trained-SAE ecosystem (SAELens, Neuronpedia) is overwhelmingly GPT-2-small,
+# which is what M2's real-feature work depends on — not because it is the
+# ceiling.
 MODEL_CHOICES = [
     "synthetic",
     "Qwen/Qwen2.5-0.5B-Instruct",
-    "meta-llama/Llama-3.2-1B",
+    "Qwen/Qwen2.5-1.5B-Instruct",
+    "meta-llama/Llama-3.2-1B",      # gated: needs an accepted licence
     "mistralai/Mistral-7B-v0.3",
-    "google/gemma-2-2b",
+    "google/gemma-2-2b",            # gated: needs an accepted licence
     "gpt2",
 ]
 

@@ -126,7 +126,15 @@ def readout_trajectory(traj: StateTrajectory, vocab: list[str]) -> StateTrajecto
         entropy=entropy,
         topk=topk,
         vocab=out_vocab,
-        embedding_matrix=np.eye(len(out_vocab), dtype=np.float32),
+        # No embedding matrix. The obvious choice — an identity, since each
+        # axis of readout space *is* a vocabulary entry — is O(V^2): for two
+        # models sharing 42k tokens that is a 7 GB allocation, which killed
+        # the process outright on a 1.5B-parameter pair. It also buys
+        # nothing: "the nearest vocabulary token to this state" in readout
+        # space is just the state's largest component, which `topk` already
+        # reports. Consumers must treat the matrix as optional (it always
+        # was, for producers that have no embedding table).
+        embedding_matrix=None,
         meta=meta,
     )
     out.validate()

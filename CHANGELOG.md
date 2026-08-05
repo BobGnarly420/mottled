@@ -2,6 +2,62 @@
 
 ## Unreleased
 
+### Features with names (roadmap M2)
+An SAE's features are indices until something explains them, and an unnamed
+feature overlay is a colour with no meaning.
+- `sae.fetch_labels` retrieves Neuronpedia's auto-interp explanations for the
+  features that actually fire — lazy (there is no bulk endpoint without a
+  key), disk-cached so a second look is free, and it never raises for network
+  reasons: an unreachable source just leaves the bare indices.
+  `sae.apply_labels` writes them onto a dictionary, leaving unexplained
+  features as `fN`.
+- **The provenance travels with the text.** These explanations are written by
+  a language model reading a feature's top activations, so `FeatureLabel`
+  carries `explained_by` and `method`, and `ui._label_provenance` states in
+  the explorer that they are auto-generated descriptions of what a feature
+  *correlates with*, not of what it computes — leads, not labels.
+- Checked against the live source: the strongest feature on "The capital of
+  France is" is published as *"locations or cities specifically denoted as
+  'capital' in the text"*.
+
+### Real models, and a memory bomb they exposed
+Mottled had been *demonstrated* on GPT-2 throughout, which invited the fair
+question of whether it handles anything modern. It does, and that is now
+verified rather than asserted — but proving it found a bug.
+- **Qwen2.5-1.5B-Instruct** (29 x 1536, GQA / RoPE / SwiGLU / RMSNorm)
+  captures end to end with attention and an *exactly* reconciling residual
+  decomposition (`max |h[l+1] - (h[l] + attn + mlp)| = 0.0000`). New samples
+  `qwen-capitals.mtj` and `models-qwen-gpt2.mtj`; `MODEL_CHOICES` gains
+  Qwen2.5-1.5B and marks which entries are licence-gated.
+- **Fixed an O(V^2) allocation in readout space.** `readout_trajectory` gave
+  its trajectories `np.eye(V_shared)` as an embedding matrix — conceptually
+  tidy, since each axis *is* a vocabulary entry, and a **7 GB** array for two
+  models sharing 42k tokens. It killed the process outright on the
+  Qwen/GPT-2 pair. The identity bought nothing either: the nearest vocabulary
+  token to a readout state is its largest component, which `topk` already
+  reports. Now `None`, which every consumer already had to handle.
+- The viewer now reads the per-run `model` field (added writer-side in the
+  previous change but never surfaced) and shows it in the runs panel — the
+  point of a cross-model scene.
+
+### Viewer inspector parity (roadmap M3)
+The web viewer is the *shareable* surface — it is what someone sees when you
+send them a link — but its inspector showed less than the explorer's, because
+the two readouts it lacked depend on data far too large to ship in a scene:
+the `(V, D)` embedding matrix (semantic neighbors) and the
+`2 × (L-1) × T × D` residual components (the attention/MLP split).
+- `pipeline.attach_inspector` resolves both *before* export, where they
+  collapse to almost nothing: the k nearest vocabulary tokens per state as
+  indices into a compact table of only the strings that appear, and the
+  attn/MLP share per state, which is two numbers rather than two
+  D-dimensional vectors. A 15-token GPT-2 scene gains ~0.9 s and stays 90 KB.
+- Carried additively in `.mtj` as a per-run `inspector` record (documented in
+  `docs/mtj-format.md`), attached by the explorer's export button and by
+  `mottled export`. Runs missing either source contribute what they have
+  rather than failing the export.
+- The bundled `scene-abc`, `single` and `gpt2-capitals` samples were
+  regenerated to carry it.
+
 ### Fixed: Streamlit app tests broke on Streamlit 1.61
 `AppTest.from_file` resolves a *relative* path against the file that calls
 it as of 1.61 (older releases resolved against the working directory), so

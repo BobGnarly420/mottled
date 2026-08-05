@@ -505,3 +505,30 @@ def test_readout_space_is_never_offered_a_residual_sae():
     assert ra.meta["space"] == "readout"
     # the guard keys off that marker, not the width
     assert ra.meta.get("space") == "readout" and ra.dim != _traj().dim
+
+
+def test_readout_space_does_not_materialise_an_identity_embedding():
+    """Regression: readout space once carried `np.eye(V_shared)` as its
+    embedding matrix — conceptually tidy (each axis *is* a vocabulary entry)
+    and O(V^2) in memory. For two models sharing 42k tokens that is a 7 GB
+    allocation, which killed the process on a real 1.5B-parameter pair. It
+    buys nothing either: the nearest vocabulary token to a readout state is
+    just its largest component, which `topk` already reports."""
+    (ra, rb), vocab = X.readout_space([_traj(), _traj("the capital of germany is")])
+    assert ra.embedding_matrix is None and rb.embedding_matrix is None
+    ra.validate()          # optional everywhere it matters
+    # the information the identity would have carried is already present
+    assert ra.topk is not None and ra.vocab[-1] == X.UNSHARED_TOKEN
+
+
+def test_attach_inspector_skips_neighbors_without_an_embedding_matrix():
+    """The inspector layer degrades rather than failing when a producer has
+    no embedding table — which readout space now deliberately does not."""
+    from config import MarbleConfig
+    from pipeline import attach_inspector, run_model_scene
+
+    cfg = MarbleConfig(use_cache=False, density_bootstrap=0)
+    result = attach_inspector(
+        run_model_scene(cfg, PROMPT, ["synthetic", "synthetic"]))
+    for entry in result["inspector_list"]:
+        assert "neighbor_idx" not in entry      # no embeddings -> no neighbors

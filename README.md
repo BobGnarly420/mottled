@@ -61,6 +61,34 @@ captured by Mottled and rendered by Mottled.
 Given "the residual stream moves, turns, and settles", the model's top
 continuation is " into" — it completes the thesis.
 
+### A modern model, not just GPT-2
+
+Mottled is model-agnostic by construction, and that is verified rather than
+asserted. **Qwen2.5-1.5B-Instruct** — 29 layers x 1536, grouped-query
+attention, RoPE, SwiGLU, RMSNorm, nothing like GPT-2's 2019 design — captures
+end to end, and its residual decomposition still reconciles **exactly**
+(`max |h[l+1] - (h[l] + attn + mlp)| = 0.0000`).
+[`qwen-capitals.mtj`](viewer/samples/qwen-capitals.mtj) is that capture.
+
+The capability gap is visible in the tool. Asked for the capital of France,
+Qwen answers `" Paris"` (28.6%) where GPT-2 says `" the"` —
+[`models-qwen-gpt2.mtj`](viewer/samples/models-qwen-gpt2.mtj) puts both on one
+terrain across a 29x1536 vs 13x768 divide and 42,257 shared vocabulary
+entries. Given *"The residual stream moves, turns, and settles"*, Qwen
+continues `" in the reservoir, and the water level"`; GPT-2 continues
+`" into the ground."` and starts repeating itself.
+
+**On bigger models.** `meta-llama/Llama-3.2-1B` and `google/gemma-2-2b` work
+the same way but are license-gated on the Hub — they need an accepted licence
+and an `HF_TOKEN`, so they cannot back bundled samples or offline CI.
+Frontier-scale MoE models are a hardware question, not a support question:
+Kimi K2's weights are ~1 TB. GPT-2 remains in the *SAE-dependent* samples
+because its dictionaries come with published Neuronpedia explanations — but
+that is a convenience, not the state of the art. Public trained SAEs now
+exist for Gemma-2 2B/9B (Gemma Scope), Llama-3 8B, and Qwen3 1.7B/8B — the
+last published by Qwen for their own ungated models, which is the obvious
+path to a fully-ungated modern feature demo.
+
 ### A real model, not a sketch
 
 ![The web viewer rendering a real GPT-2 A/B capture](docs/images/viewer-gpt2.png)
@@ -100,6 +128,7 @@ from sae import demo_sae, feature_trajectory  # SAE feature activations
 from sae import feature_field                 # SAE over the projection plane
 from sae import from_sae_lens, from_state_dict  # load a real trained SAE
 from sae import fetch_from_hub, fit_report      # fetch one + measure its fit
+from sae import fetch_labels, apply_labels      # name the features that fire
 from ui import attach_features                  # feature layer into scene exports
 from intervene import direction_from_token, faithfulness  # data-derived steering
 from attractor import analyze, explain        # why the basin forms, in prose
@@ -594,6 +623,16 @@ is the default, `contrast` says how far each row's winner beats its field, and
 the trade is documented rather than buried: exact scale invariance is kept,
 exact rotation invariance is not.
 
+## Field notes
+
+[`docs/field-notes.md`](docs/field-notes.md) is a dated, re-verifiable
+orientation to the interpretability landscape — the tool stack, which public
+SAE suites actually exist, what is genuinely contested, and the traps this
+project has already paid for (preprocessing vs provenance, CKA saturation,
+auto-interp labels as leads). Written agent-first, because sessions here start
+cold and the alternative is asserting from memory. Every claim in it is either
+dated with a command to re-check or marked secondary and cited.
+
 ## What this is — and is not
 
 Mottled visualizes the **geometry of latent dynamics** — where a run's hidden
@@ -603,6 +642,13 @@ the projection. It is deliberately *not* a proof of mechanism:
 - A basin shows states **accumulating**, not a circuit **computing**. Attention
   flow and the intervention divergence/faithfulness readouts are *measurements*
   of what happened, not identified causes.
+- Feature **names** come from Neuronpedia's auto-interp explanations, written
+  by a language model reading each feature's top activations. They are
+  descriptions of what a feature *correlates with*, not of what it computes,
+  and the explorer says so and names the model that wrote them. Treat them as
+  leads. (They can also be strikingly apt: the feature firing hardest on "The
+  capital of France is" is published as *"locations or cities specifically
+  denoted as 'capital' in the text"*.)
 - An SAE overlay is only as interpretable as the SAE you load — *on the
   activation distribution it was trained on*. The explorer fetches a real
   trained dictionary for GPT-2 (`sae.fetch_from_hub`, no sae-lens needed) and

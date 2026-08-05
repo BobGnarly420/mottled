@@ -31,7 +31,7 @@ terrain and draped trajectory points; raw trajectories don't).
 | left-drag | orbit |
 | right-drag or shift-drag | pan |
 | wheel | zoom |
-| hover anywhere along a trajectory | highlight + inspector (run, layer — fractional between layers, token, entropy, neighborhood fidelity, features, top-k readout) |
+| hover anywhere along a trajectory | highlight + inspector (run, layer — fractional between layers, token, entropy, neighborhood fidelity, features, top-k readout, nearest vocabulary tokens by cosine, and the attn/MLP split of the block's residual write) |
 | click a trajectory | pin the inspector to that reading (Escape or a click on empty space clears it) |
 | slider / play button | scrub or animate the marbles across layers |
 | runs panel checkboxes | show / hide individual runs |

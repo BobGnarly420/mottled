@@ -13,6 +13,7 @@
   --color-accent: #4B7CF3;
   --color-accent-subtle: rgba(75, 124, 243, 0.08);
   --color-loss: #E05050;
+  --color-live: #00CCA8;
   --radius-xs: 2px;
   --radius-sm: 3px;
   --ease-precision: cubic-bezier(0.16, 1, 0.3, 1);
@@ -91,6 +92,20 @@ button:active { transform: translateY(1px); }
 #info-panel .topk .bar { display: inline-block; height: 7px;
   background: var(--color-accent); border-radius: var(--radius-xs);
   margin-right: 6px; vertical-align: middle; }
+/* nearest vocabulary tokens: same rows as the top-k readout, but the bars
+   carry a cosine, not a probability — a muted accent keeps the two readings
+   apart, and `pre` preserves the leading space a BPE piece may quote with */
+#info-panel .nbrs .bar { background: rgba(75, 124, 243, 0.5); }
+#info-panel .nbrs .mono { white-space: pre; }
+/* attn/MLP split of a block's residual write: one proportional two-part bar
+   (accent = attention, live teal = MLP) over the two percentages */
+#info-panel .resid { margin-top: 5px; font-size: 11px; }
+#info-panel .resid .mono { font-size: 11px; }
+#info-panel .resid-bar { display: flex; height: 7px; margin: 3px 0 2px;
+  border-radius: var(--radius-xs); overflow: hidden;
+  background: var(--color-surface-1); }
+#info-panel .resid-bar .attn { background: var(--color-accent); }
+#info-panel .resid-bar .mlp { background: var(--color-live); }
 /* a clicked reading is pinned: the panel holds until Escape or a click on
    empty space, and says so in the accent that marks live state */
 #info-panel.pinned { border-color: var(--color-accent); }
@@ -116,3 +131,8 @@ button:active { transform: translateY(1px); }
 @media (prefers-reduced-motion: reduce) {
   button, select { transition: none; }
 }
+
+/* which model produced a run — the scene-level meta describes run 0 only,
+   so a cross-model scene needs this per run */
+#runs-list .model { display: block; font-size: 10px; color: var(--color-accent);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
