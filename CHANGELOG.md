@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Features with names (roadmap M2)
+An SAE's features are indices until something explains them, and an unnamed
+feature overlay is a colour with no meaning.
+- `sae.fetch_labels` retrieves Neuronpedia's auto-interp explanations for the
+  features that actually fire — lazy (there is no bulk endpoint without a
+  key), disk-cached so a second look is free, and it never raises for network
+  reasons: an unreachable source just leaves the bare indices.
+  `sae.apply_labels` writes them onto a dictionary, leaving unexplained
+  features as `fN`.
+- **The provenance travels with the text.** These explanations are written by
+  a language model reading a feature's top activations, so `FeatureLabel`
+  carries `explained_by` and `method`, and `ui._label_provenance` states in
+  the explorer that they are auto-generated descriptions of what a feature
+  *correlates with*, not of what it computes — leads, not labels.
+- Checked against the live source: the strongest feature on "The capital of
+  France is" is published as *"locations or cities specifically denoted as
+  'capital' in the text"*.
+
 ### Real models, and a memory bomb they exposed
 Mottled had been *demonstrated* on GPT-2 throughout, which invited the fair
 question of whether it handles anything modern. It does, and that is now

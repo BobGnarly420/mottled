@@ -47,9 +47,13 @@ Today Mottled has one time axis: layers. Autoregressive decode is the second.
 - [x] Scenes carry real features (`ui.attach_features` → additive `.mtj`
       `features` layer with measured fit); bundled `gpt2-features.mtj`
       sample from the calibrated TL pairing.
-- [ ] Feature labels (from SAELens/Neuronpedia metadata when present) in
-      both viewers; feature-field domain coloring with real semantics on
-      first contact.
+- [x] Feature **labels**: `sae.fetch_labels` pulls Neuronpedia's auto-interp
+      explanations for the features that actually fire (lazy, disk-cached,
+      offline-safe), `sae.apply_labels` writes them onto the dictionary, and
+      the explorer names them — with `ui._label_provenance` stating who wrote
+      them and that they describe correlates, not computation.
+- [ ] Feature-field domain coloring keyed by those labels rather than by
+      feature index.
 
 ### M3 — A tangible viewer
 - [x] `bvh.py` ported to `viewer/bvh.js` and pinned by a cross-language

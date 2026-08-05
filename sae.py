@@ -427,3 +427,138 @@ def feature_field(sae: SAE, projector, grid_x: np.ndarray, grid_y: np.ndarray) -
         dominant=dominant.reshape(shape),
         n_active=(acts > 0).sum(axis=-1).reshape(shape).astype(np.int32),
     )
+
+
+# ------------------------------------------------------------ feature labels
+# Neuronpedia hosts auto-interpretability explanations for the public SAEs.
+# A dictionary's features are just indices until something names them, and an
+# unnamed feature overlay is a colour with no meaning.
+_NEURONPEDIA = "https://www.neuronpedia.org/api/feature/{model}/{sae}/{index}"
+
+# Mottled's SAE sources -> the (model, sae) pair Neuronpedia knows them by.
+NEURONPEDIA_SOURCES = {
+    ("jbloom/GPT2-Small-SAEs-Reformatted", "blocks.8.hook_resid_pre"):
+        ("gpt2-small", "8-res-jb"),
+}
+
+
+@dataclass
+class FeatureLabel:
+    """An auto-generated explanation of one SAE feature.
+
+    These are **not** ground truth. Each is written by a language model
+    reading the feature's top activations, so `explained_by` and `method`
+    travel with the text and surfaces are expected to say so. `score` is the
+    auto-interp score when the source published one, and is often absent.
+    """
+
+    index: int
+    description: str
+    explained_by: str | None = None
+    method: str | None = None
+    score: float | None = None
+
+    def __str__(self) -> str:
+        return f"f{self.index} · {self.description}"
+
+
+def fetch_labels(
+    indices,
+    source: tuple[str, str] | None = None,
+    model_id: str | None = None,
+    sae_id: str | None = None,
+    cache_dir: str | Path | None = None,
+    timeout: float = 10.0,
+    fetch=None,
+) -> dict[int, FeatureLabel]:
+    """Look up auto-interp explanations for specific features.
+
+    Deliberately lazy and bounded: pass only the features you are about to
+    show (a scene has a handful active out of ~24k), because there is no bulk
+    endpoint without an API key. Results are cached on disk, so a second look
+    costs nothing and an offline run still works.
+
+    Never raises for network reasons — an unreachable source yields no labels,
+    and the caller falls back to bare indices. `fetch` is injectable for
+    tests.
+    """
+    import json
+    import urllib.request
+
+    if source is not None:
+        model_id, sae_id = NEURONPEDIA_SOURCES.get(tuple(source), (None, None))
+    if not model_id or not sae_id:
+        return {}
+
+    root = Path(cache_dir or Path.home() / ".cache" / "mottled" / "labels")
+    cache_file = root / f"{model_id}__{sae_id}.json"
+    cached: dict = {}
+    if cache_file.exists():
+        try:
+            cached = json.loads(cache_file.read_text())
+        except (OSError, ValueError):
+            cached = {}
+
+    def _default_fetch(url: str) -> dict:
+        req = urllib.request.Request(url, headers={"User-Agent": "mottled"})
+        with urllib.request.urlopen(req, timeout=timeout) as res:
+            return json.loads(res.read())
+
+    fetch = fetch or _default_fetch
+    out: dict[int, FeatureLabel] = {}
+    fresh = False
+    for i in sorted({int(i) for i in indices}):
+        key = str(i)
+        if key not in cached:
+            try:
+                payload = fetch(_NEURONPEDIA.format(model=model_id, sae=sae_id, index=i))
+                exps = (payload or {}).get("explanations") or []
+                cached[key] = _first_explanation(exps)
+                fresh = True
+            except Exception:      # offline, rate-limited, changed shape …
+                continue
+        entry = cached.get(key)
+        if entry:
+            out[i] = FeatureLabel(index=i, description=str(entry.get("description", "")),
+                                  explained_by=entry.get("explained_by"),
+                                  method=entry.get("method"),
+                                  score=entry.get("score"))
+    if fresh:
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            cache_file.write_text(json.dumps(cached))
+        except OSError:
+            pass
+    return out
+
+
+def _first_explanation(explanations: list) -> dict | None:
+    """The first usable explanation record, flattened to what we keep."""
+    for e in explanations:
+        desc = (e or {}).get("description")
+        if desc:
+            scores = e.get("scores") or []
+            score = None
+            for s in scores:
+                if isinstance(s, dict) and isinstance(s.get("value"), (int, float)):
+                    score = float(s["value"])
+                    break
+            return {"description": str(desc),
+                    "explained_by": e.get("explanationModelName"),
+                    "method": e.get("typeName"),
+                    "score": score}
+    return None
+
+
+def apply_labels(sae: SAE, labels: dict) -> SAE:
+    """Write fetched labels onto a dictionary's `labels` list, in place.
+
+    Features without an explanation keep their bare `fN` name, so a partial
+    lookup degrades to exactly what the dictionary showed before.
+    """
+    if sae.labels is None:
+        sae.labels = [f"f{i}" for i in range(sae.n_features)]
+    for i, label in labels.items():
+        if 0 <= int(i) < sae.n_features and label.description:
+            sae.labels[int(i)] = f"f{i} · {label.description}"
+    return sae

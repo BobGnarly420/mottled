@@ -65,6 +65,22 @@ __all__ = [
 ]
 
 
+def _label_provenance(labels: dict) -> str:
+    """The sentence that must accompany auto-interp feature names.
+
+    These explanations are written by a language model reading a feature's
+    top activations. They are frequently apt and sometimes wrong, and either
+    way they are a *description of correlates*, not a definition of what the
+    feature computes — so the surface says who wrote them rather than
+    presenting them as the feature's meaning.
+    """
+    writers = sorted({l.explained_by for l in labels.values() if l.explained_by})
+    who = ", ".join(writers) if writers else "an unnamed model"
+    return (f"Feature names are **auto-generated explanations** (Neuronpedia, "
+            f"written by {who}) — descriptions of what a feature correlates "
+            f"with, not of what it computes. Treat them as leads, not labels.")
+
+
 def render_model_comparison(st, result: dict) -> None:
     """The cross-model panel: what the models do, how they represent, and
     where each measurement stops being valid.
@@ -260,6 +276,10 @@ def main() -> None:
     def _hub_sae(repo_id: str, subfolder: str):
         return sae_mod.fetch_from_hub(repo_id, subfolder)
 
+    @st.cache_resource(show_spinner="Naming features…")
+    def _feature_labels(source: tuple, indices: tuple):
+        return sae_mod.fetch_labels(indices, source=source)
+
     # GPT-2 gets a real trained dictionary by default (fetched on first use);
     # everything else falls back to the demo dictionary, clearly labeled.
     _REAL_SAE = {768: ("jbloom/GPT2-Small-SAEs-Reformatted", "blocks.8.hook_resid_pre")}
@@ -321,6 +341,16 @@ def main() -> None:
             _sae_fit_caption(active_sae, sae_source)
             acts = sae_mod.feature_trajectory(traj, active_sae)
             choices = [int(f) for f in sae_mod.active_features(acts, k=25)]
+            # Name the features that actually fire. A dictionary's features
+            # are indices until something explains them, and an unnamed
+            # overlay is a colour with no meaning. Only the active handful is
+            # looked up (there is no bulk endpoint), cached on disk, and a
+            # failed lookup simply leaves the bare index.
+            if choices and sae_source is not None:
+                fetched = _feature_labels(tuple(sae_source), tuple(choices))
+                if fetched:
+                    sae_mod.apply_labels(active_sae, fetched)
+                    st.caption(_label_provenance(fetched))
             if choices and result.get("traj_b") is None:
                 feat = st.selectbox(
                     "SAE feature", choices,

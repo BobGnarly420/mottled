@@ -126,6 +126,7 @@ from sae import demo_sae, feature_trajectory  # SAE feature activations
 from sae import feature_field                 # SAE over the projection plane
 from sae import from_sae_lens, from_state_dict  # load a real trained SAE
 from sae import fetch_from_hub, fit_report      # fetch one + measure its fit
+from sae import fetch_labels, apply_labels      # name the features that fire
 from ui import attach_features                  # feature layer into scene exports
 from intervene import direction_from_token, faithfulness  # data-derived steering
 from attractor import analyze, explain        # why the basin forms, in prose
@@ -629,6 +630,13 @@ the projection. It is deliberately *not* a proof of mechanism:
 - A basin shows states **accumulating**, not a circuit **computing**. Attention
   flow and the intervention divergence/faithfulness readouts are *measurements*
   of what happened, not identified causes.
+- Feature **names** come from Neuronpedia's auto-interp explanations, written
+  by a language model reading each feature's top activations. They are
+  descriptions of what a feature *correlates with*, not of what it computes,
+  and the explorer says so and names the model that wrote them. Treat them as
+  leads. (They can also be strikingly apt: the feature firing hardest on "The
+  capital of France is" is published as *"locations or cities specifically
+  denoted as 'capital' in the text"*.)
 - An SAE overlay is only as interpretable as the SAE you load — *on the
   activation distribution it was trained on*. The explorer fetches a real
   trained dictionary for GPT-2 (`sae.fetch_from_hub`, no sae-lens needed) and

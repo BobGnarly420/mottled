@@ -568,3 +568,85 @@ def test_fit_report_flags_mismatched_dictionary():
     fit_x = S.fit_report(mismatched, traj)
     assert fit_m.best_error < 1e-5
     assert fit_x.best_error > 10 * max(fit_m.best_error, 1e-6)
+
+
+# ------------------------------------------------------- feature labels (M2)
+def _explanation(desc="a description", model="gpt-3.5-turbo",
+                 method="oai_token-act-pair", scores=None):
+    return {"explanations": [{"description": desc, "explanationModelName": model,
+                              "typeName": method, "scores": scores or []}]}
+
+
+def test_fetch_labels_reads_and_caches(tmp_path):
+    calls = []
+
+    def fake(url):
+        calls.append(url)
+        idx = url.rsplit("/", 1)[-1]
+        return _explanation(desc=f"feature {idx} fires on things")
+
+    src = ("jbloom/GPT2-Small-SAEs-Reformatted", "blocks.8.hook_resid_pre")
+    got = S.fetch_labels([7, 3], source=src, cache_dir=tmp_path, fetch=fake)
+    assert set(got) == {3, 7}
+    assert got[3].description == "feature 3 fires on things"
+    assert got[3].explained_by == "gpt-3.5-turbo"      # provenance travels
+    assert got[3].method == "oai_token-act-pair"
+    assert len(calls) == 2
+
+    # a second look is free, and does not touch the network at all
+    def explode(url):
+        raise AssertionError("should have been cached")
+
+    again = S.fetch_labels([3, 7], source=src, cache_dir=tmp_path, fetch=explode)
+    assert {i: l.description for i, l in again.items()} == \
+           {i: l.description for i, l in got.items()}
+
+
+def test_fetch_labels_never_raises_offline(tmp_path):
+    """An unreachable source yields no names; it must not break the overlay."""
+    def down(url):
+        raise OSError("no network")
+
+    src = ("jbloom/GPT2-Small-SAEs-Reformatted", "blocks.8.hook_resid_pre")
+    assert S.fetch_labels([1, 2], source=src, cache_dir=tmp_path, fetch=down) == {}
+    # an unknown source is simply not looked up
+    assert S.fetch_labels([1], source=("who/what", "where"), cache_dir=tmp_path) == {}
+
+
+def test_apply_labels_keeps_bare_names_for_unexplained_features():
+    sae = S.demo_sae(8, n_features=6, seed=2)
+    S.apply_labels(sae, {2: S.FeatureLabel(index=2, description="capital cities")})
+    assert sae.feature_label(2) == "f2 · capital cities"
+    assert sae.feature_label(5) == "f5"          # untouched, still an index
+    sae.validate()                                # labels stay length-F
+
+
+def test_label_provenance_names_the_writer_not_the_feature():
+    """Auto-interp text describes correlates, not computation — the surface
+    has to say so, and say who wrote it."""
+    from ui import _label_provenance
+
+    note = _label_provenance({1: S.FeatureLabel(1, "capitals", explained_by="gpt-3.5-turbo")})
+    assert "auto-generated" in note
+    assert "gpt-3.5-turbo" in note
+    assert "not of what it computes" in note or "not what it computes" in note
+
+
+@pytest.mark.network
+def test_real_labels_name_the_capital_feature():
+    """The point of the whole M2 milestone, checked against the live source:
+    the feature that fires hardest on 'the capital of france is' is one whose
+    published explanation is about capital cities."""
+    from capture import capture
+
+    src = ("jbloom/GPT2-Small-SAEs-Reformatted", "blocks.8.hook_resid_pre")
+    real = S.fetch_from_hub(*src)
+    traj = capture("gpt2", "The capital of France is")
+    acts = S.feature_trajectory(traj, real)
+    top = [int(f) for f, _ in S.top_features(acts, 8, -1, k=5)]
+
+    labels = S.fetch_labels(top, source=src)
+    assert labels, "expected published explanations for these features"
+    text = " ".join(l.description.lower() for l in labels.values())
+    assert "capital" in text, f"no capital-related feature among {top}: {text}"
+    assert all(l.explained_by for l in labels.values())   # provenance present
