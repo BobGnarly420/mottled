@@ -52,6 +52,74 @@ class Trajectory:
 
 
 @dataclass
+class Routing:
+    """Which experts each token was sent to, in a sparse-MoE model.
+
+    In a dense model every token takes the same path and the interesting
+    variation is all in the activations. In a sparse MoE it is not: the
+    router makes a *discrete* choice per token per layer, and that choice is
+    a legible, low-dimensional trace of how the model is treating this token
+    — arguably the most interpretable signal such a model emits, and one that
+    needs no dictionary learning to read.
+
+    experts : (M, T, k) int32   — the k expert ids chosen per token
+    weights : (M, T, k) float32 — their router weights (rows sum to ~1)
+    layers  : (M,) int32        — which block each row came from, because MoE
+              layers are usually interleaved with dense ones rather than
+              being every layer
+    n_experts : the pool each choice was made from
+    """
+
+    experts: np.ndarray
+    weights: np.ndarray
+    layers: np.ndarray
+    n_experts: int
+
+    @property
+    def n_moe_layers(self) -> int:
+        return self.experts.shape[0]
+
+    @property
+    def top_k(self) -> int:
+        return self.experts.shape[-1]
+
+    def validate(self, n_tokens: int) -> None:
+        M, T, k = self.experts.shape
+        if self.weights.shape != (M, T, k):
+            raise ValueError(f"weights {self.weights.shape} != experts {(M, T, k)}")
+        if self.layers.shape != (M,):
+            raise ValueError(f"layers {self.layers.shape} != {(M,)}")
+        if T != n_tokens:
+            raise ValueError(f"routing covers {T} tokens, trajectory has {n_tokens}")
+        if self.experts.size and (self.experts.min() < 0
+                                  or self.experts.max() >= self.n_experts):
+            raise ValueError("expert ids outside the pool")
+
+    def path(self, token: int) -> list[tuple[int, list[int]]]:
+        """[(layer, [expert ids])] for one token — its route through the model."""
+        t = int(token) % self.experts.shape[1]
+        return [(int(l), [int(e) for e in self.experts[m, t]])
+                for m, l in enumerate(self.layers)]
+
+    def agreement(self, other: "Routing") -> np.ndarray:
+        """(M, T) fraction of experts shared with another routing, per state.
+
+        The natural cross-run comparison for a sparse model: two prompts that
+        route the same way are being processed the same way, whatever their
+        activations look like.
+        """
+        if other.experts.shape != self.experts.shape:
+            raise ValueError("routings must have the same shape to compare")
+        M, T, k = self.experts.shape
+        out = np.empty((M, T), dtype=np.float32)
+        for m in range(M):
+            for t in range(T):
+                out[m, t] = len(set(self.experts[m, t]) &
+                                set(other.experts[m, t])) / k
+        return out
+
+
+@dataclass
 class StateTrajectory:
     """Hidden-state evolution of a full forward pass."""
 
@@ -68,6 +136,7 @@ class StateTrajectory:
     attention: np.ndarray | None = None      # (L-1, T, T) head-averaged
     # attention: attention[b, t, s] is how much block b's destination token t
     # reads from source token s (causal: zero for s > t, rows sum to 1)
+    routing: "Routing | None" = None          # sparse-MoE expert routing
     meta: dict[str, Any] = field(default_factory=dict)
 
     # ------------------------------------------------------------------ shape
@@ -100,6 +169,8 @@ class StateTrajectory:
         if self.attention is not None and self.attention.shape != (L - 1, T, T):
             raise ValueError(
                 f"attention shape {self.attention.shape} != {(L - 1, T, T)}")
+        if self.routing is not None:
+            self.routing.validate(T)
         if not np.isfinite(self.hidden).all():
             raise ValueError("hidden contains non-finite values")
 

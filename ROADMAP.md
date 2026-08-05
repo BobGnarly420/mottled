@@ -124,6 +124,35 @@ start.
       (readout divergence, layer alignment with its identified/flat rows, the
       generation split), so the atlas is reachable without the API.
 
+### M7 — Models too big to hold *(in progress)*
+Frontier models are sparse MoE and do not fit in memory: Kimi K3 is 93 layers,
+2.8T parameters, ~1.5 TB of weights, 16 of 896 experts active per token.
+- [x] `stream.stream_capture`: build the skeleton with no weights, materialise
+      each block from disk immediately before it runs, release it immediately
+      after. Peak memory is one block plus activations. Pinned **bit-exact**
+      against an in-memory capture, and the residency bound is asserted, not
+      assumed.
+- [x] `capture(..., capture_routing=True)` → `StateTrajectory.routing`: which
+      experts each token was sent to, per layer. In a sparse model this is the
+      most legible signal available — a *discrete* choice, readable with no
+      dictionary learning — and `Routing.agreement` compares two runs by the
+      paths they took rather than the activations they produced. Refuses on a
+      dense model instead of returning an empty routing.
+- [x] Loud failure when a checkpoint's layout does not match the runtime
+      module (MoE checkpoints store experts per-expert; the runtime wants them
+      fused). Silently skipping leaves the experts empty and the whole capture
+      is wrong while still looking like numbers.
+- [ ] Verify against K3 itself: needs ~1.5 TB of disk. Untested at that scale —
+      the mechanism is proven at small scale only, and the honest claim stops
+      there.
+- [ ] **AttnRes.** K3 retrieves across depth selectively rather than
+      accumulating uniformly, so `h[l+1] = h[l] + attn + mlp` may not hold.
+      The decomposition must be *measured* on K3 and refused if it does not
+      reconcile — an additive story told about a non-additive model is exactly
+      the failure this project exists to prevent.
+- [ ] KDA is linear attention: there is no `T×T` matrix to capture. Attention
+      capture must refuse there, as it already does on Mamba.
+
 ## Status
 
 M1, M2, M3 and M6 are complete. Two items remain, both blocked on something

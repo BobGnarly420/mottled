@@ -49,5 +49,5 @@ mottled-convert-sae = "convert_sae:main"
 py-modules = ["bvh", "cache", "capture", "cli", "compare", "config", "convert_sae",
               "crossmodel", "density", "design_tokens", "intervene", "metrics",
               "neighbors", "pipeline", "projection", "render", "sae", "serve",
-              "statefile", "terrain", "trajectory", "ui"]
+              "statefile", "stream", "terrain", "trajectory", "ui"]
 packages = ["models"]
