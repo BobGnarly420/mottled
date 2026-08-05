@@ -56,14 +56,11 @@ Today Mottled has one time axis: layers. Autoregressive decode is the second.
       territories by area with plane centroids, and `render_feature_field`
       writes the label of each onto the plane.
 
-      *Deviation, deliberate:* the item originally said "coloring keyed by
-      those labels rather than by feature index". Implemented as naming
-      instead, because recolouring by label meaning would be actively
-      misleading — golden-angle hue encodes **identity** (adjacent ids are
-      made maximally distinct on purpose), so keying it to semantics would
-      both destroy that separation and turn colour proximity into an implied
-      semantic metric no 1-D hue can carry. Colour answers *which feature*;
-      the label answers *what it is about*. **M2 is complete.**
+      *Named, not recoloured, on purpose:* golden-angle hue encodes
+      **identity** — adjacent ids are made maximally distinct so regions stay
+      legible — so keying hue to label meaning would destroy that separation
+      *and* imply a semantic metric a 1-D hue cannot carry. Colour answers
+      which feature owns a region; the name answers what it is about.
 
 ### M3 — A tangible viewer
 - [x] `bvh.py` ported to `viewer/bvh.js` and pinned by a cross-language
@@ -173,11 +170,9 @@ distinct:
 
 ## Orientation
 
-New here — human or agent — start with [`docs/field-notes.md`](docs/field-notes.md):
-what the field currently believes, what it disputes, and the specific traps
-this codebase has already hit. It exists because a session confidently wrote
-a 2023-true claim about the SAE ecosystem into the README in 2026; dated
-facts with a re-verification command beat remembered ones.
+Start with [`docs/field-notes.md`](docs/field-notes.md): what the field
+currently believes, what it disputes, and the traps this codebase has already
+paid for. Every claim there is dated with a command to re-check it.
 
 ## Standing hazard: within-model assumptions
 
