@@ -22,8 +22,19 @@ attention, MoE routing), and hand-rolling those forwards would be both
 wrong and unmaintainable. Here the architecture stays HuggingFace's problem
 and only *when weights exist* is ours.
 
-What this does not do: it does not make a 1.5 TB model fast, and it does not
-avoid needing the weights on disk. It removes the RAM ceiling, nothing else.
+Point `checkpoint` at a hub repo or a URL instead of a directory and the
+weights never land on local disk in full either — `remote.RemoteWeights`
+fetches one layer's byte ranges, writes them to a cache file, and deletes it
+once the block has been read:
+
+    traj = stream_capture("hf://moonshotai/Kimi-K2-Instruct", "The capital of")
+
+Egress is then the binding cost — one full read of the checkpoint per pass —
+so `stream_capture_batch` runs many prompts through each block while it is
+resident. Twenty prompts cost one download, not twenty.
+
+What this does not do: it does not make a 1.5 TB model fast. It removes the
+RAM ceiling, and with a remote source the disk ceiling; nothing else.
 """
 
 from __future__ import annotations
@@ -246,13 +257,64 @@ class StreamedBlocks:
         for i in list(self.resident):
             _release(self.blocks[i])
         self.resident.clear()
+        # A remote source keeps the last layer on disk until something asks
+        # for the next one. Nothing will, so say the pass is over.
+        if hasattr(self.shards, "release"):
+            self.shards.release()
 
-    def stacked(self) -> "torch.Tensor":
+    def stacked(self, row: int = 0, start: int = 0) -> "torch.Tensor":
+        """The residual stream for one sequence in the batch, pads dropped."""
         n = len(self.blocks) + 1
         missing = [i for i in range(n) if i not in self.states]
         if missing:
             raise RuntimeError(f"missing streamed captures for layers {missing}")
-        return torch.stack([self.states[i][0] for i in range(n)]).float().cpu()
+        return torch.stack(
+            [self.states[i][row, start:] for i in range(n)]).float().cpu()
+
+
+def _open_weights(checkpoint, cache_dir=None, cache_bytes=None,
+                  revision="main", token=None):
+    """Resolve a checkpoint to (weights, directory-to-load-metadata-from).
+
+    A local path is read in place. Anything else — a hub repo id, an
+    `hf://` spec, a base URL — is served over range requests by
+    `remote.RemoteWeights`, whose only local footprint is one layer at a time.
+    """
+    root = Path(checkpoint)
+    if root.exists():
+        return ShardIndex(root), root
+    from remote import RemoteWeights
+
+    weights = RemoteWeights(checkpoint, cache_dir=cache_dir,
+                            cache_bytes=cache_bytes, revision=revision,
+                            token=token)
+    return weights, weights.fetch_config()
+
+
+def _pad_batch(tokenizer, prompts):
+    """Left-pad a batch, and say where each sequence really starts.
+
+    Left padding keeps every sequence's last token at the same index, which
+    is where a causal model's prediction lives. It also makes the positions
+    wrong unless they are passed explicitly, so they are computed from the
+    mask rather than left to default to `0..T-1`.
+    """
+    ids = [tokenizer(p, return_tensors="pt")["input_ids"][0] for p in prompts]
+    width = max(len(i) for i in ids)
+    pad = getattr(tokenizer, "pad_token_id", None)
+    if pad is None:
+        pad = getattr(tokenizer, "eos_token_id", None) or 0
+
+    rows, mask = [], []
+    for seq in ids:
+        gap = width - len(seq)
+        rows.append(torch.cat([torch.full((gap,), int(pad), dtype=seq.dtype), seq]))
+        mask.append(torch.cat([torch.zeros(gap, dtype=torch.long),
+                               torch.ones(len(seq), dtype=torch.long)]))
+    attention = torch.stack(mask)
+    positions = (attention.cumsum(-1) - 1).clamp(min=0)
+    starts = [width - len(seq) for seq in ids]
+    return torch.stack(rows), attention, positions, starts, ids
 
 
 def stream_capture(
@@ -264,13 +326,18 @@ def stream_capture(
     keep_resident: int = 1,
     capture_routing: bool = False,
     dtype: str = "float32",
+    cache_dir=None,
+    cache_bytes: int | None = None,
+    revision: str = "main",
+    token: str | None = None,
 ) -> StateTrajectory:
     """Capture the residual stream without ever holding the whole model.
 
     `checkpoint` is a local HuggingFace checkpoint directory (config + one or
-    more `.safetensors`). Blocks are streamed from those files; the
-    embeddings, final norm and LM head stay resident, since they are a single
-    matrix each rather than a per-layer cost.
+    more `.safetensors`), or a remote one: `org/model`, `hf://org/model`, or
+    a base URL. Blocks are streamed from there; the embeddings, final norm
+    and LM head stay resident, since they are a single matrix each rather
+    than a per-layer cost.
 
     `keep_resident` is how many blocks may be materialised at once — 1 is the
     minimum-memory setting. Raise it only to trade memory for fewer loads.
@@ -278,21 +345,62 @@ def stream_capture(
     The result is an ordinary `StateTrajectory`: everything downstream is
     unchanged, which is the point of having an interchange format.
     """
+    return stream_capture_batch(
+        checkpoint, [prompt], tokenizer=tokenizer, top_k=top_k,
+        keep_logits=keep_logits, keep_resident=keep_resident,
+        capture_routing=capture_routing, dtype=dtype, cache_dir=cache_dir,
+        cache_bytes=cache_bytes, revision=revision, token=token)[0]
+
+
+def stream_capture_batch(
+    checkpoint: str | Path,
+    prompts,
+    tokenizer=None,
+    top_k: int = 5,
+    keep_logits: bool = True,
+    keep_resident: int = 1,
+    capture_routing: bool = False,
+    dtype: str = "float32",
+    cache_dir=None,
+    cache_bytes: int | None = None,
+    revision: str = "main",
+    token: str | None = None,
+) -> list[StateTrajectory]:
+    """Trace many prompts against one pass over the weights.
+
+    The unit cost of streaming is reading the checkpoint, not running the
+    prompt: a Kimi-scale layer is ~17 GB to fetch and microseconds to apply
+    to five tokens. So the prompts go through together, and each block is
+    loaded exactly once for the whole batch.
+
+    Returns one `StateTrajectory` per prompt. A single-prompt pass is
+    bit-exact against an in-memory capture. In a batch the *longest* prompt
+    still is; shorter ones are padded, and masked softmax over a padded row
+    reassociates its sum, so they land within float round-off — measured at
+    ~3e-8 absolute, ~3e-7 relative on a 6-layer test model. Batch prompts of
+    equal length, or use `stream_capture`, if you need the bits identical.
+    """
     if not HAS_TORCH:
         raise ImportError("stream_capture needs torch")
     from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
+    prompts = list(prompts)
+    if not prompts:
+        raise ValueError("stream_capture_batch needs at least one prompt")
+
+    shards, meta_dir = _open_weights(checkpoint, cache_dir=cache_dir,
+                                     cache_bytes=cache_bytes,
+                                     revision=revision, token=token)
     root = Path(checkpoint)
-    config = AutoConfig.from_pretrained(root)
+    config = AutoConfig.from_pretrained(meta_dir)
     if tokenizer is None:
-        tokenizer = AutoTokenizer.from_pretrained(root)
+        tokenizer = AutoTokenizer.from_pretrained(meta_dir)
 
     with torch.device("meta"):
         model = AutoModelForCausalLM.from_config(config)
     model.eval()
     _materialise_computed_buffers(model, config)
 
-    shards = ShardIndex(root)
     inner = getattr(model, "model", model)
     blocks = list(inner.layers)
 
@@ -313,57 +421,73 @@ def stream_capture(
 
     from capture import _clean_token, _entropy_topk, _routing_from
 
-    enc = tokenizer(prompt, return_tensors="pt")
-    input_ids = enc["input_ids"]
-    tokens = [_clean_token(t)
-              for t in tokenizer.convert_ids_to_tokens(input_ids[0].tolist())]
+    input_ids, attention, positions, starts, per_prompt = _pad_batch(tokenizer, prompts)
+    batched = len(prompts) > 1
 
     with StreamedBlocks(model, shards, blocks, keep=keep_resident) as sb, \
             torch.no_grad():
         out = model(input_ids,
+                    **({"attention_mask": attention, "position_ids": positions}
+                       if batched else {}),
                     **({"output_router_logits": True} if capture_routing else {}))
-    hidden = sb.stacked()
 
-    routing = _routing_from(out, model, capture_routing)
+    spans = list(enumerate(starts))
+    routings = _routing_from(out, model, capture_routing, spans=spans)
+    if routings is None:
+        routings = [None] * len(prompts)
 
-    # Logit lens, one chunk at a time: the head is resident, the states are not
-    # large, and this mirrors `capture.logit_lens` exactly.
     norm = getattr(inner, "norm", None)
     head = getattr(model, "lm_head", None)
     if head is None:
         raise ValueError("checkpoint exposes no LM head; cannot apply the logit lens")
-    outs = []
-    with torch.no_grad():
-        for i in range(hidden.shape[0]):
-            h = hidden[i : i + 1].to(dtype=torch_dtype)
-            if norm is not None:
-                h = norm(h)
-            outs.append(head(h).float())
-    logits = torch.cat(outs, dim=0).numpy()
 
-    vocab = [_clean_token(t)
-             for t in tokenizer.convert_ids_to_tokens(range(logits.shape[-1]))]
-    entropy, topk = _entropy_topk(logits, vocab, top_k)
+    receipt = shards.receipt() if hasattr(shards, "receipt") else {}
+    trajectories = []
+    for row, start in spans:
+        hidden = sb.stacked(row, start)
+        tokens = [_clean_token(t) for t in
+                  tokenizer.convert_ids_to_tokens(per_prompt[row].tolist())]
 
-    traj = StateTrajectory(
-        hidden=hidden.numpy(),
-        tokens=tokens,
-        logits=logits.astype(np.float16) if keep_logits else None,
-        entropy=entropy,
-        topk=topk,
-        vocab=vocab,
-        routing=routing,
-        meta={
+        # Logit lens, one layer at a time: the head is resident, the states
+        # are not large, and this mirrors `capture.logit_lens` exactly.
+        outs = []
+        with torch.no_grad():
+            for i in range(hidden.shape[0]):
+                h = hidden[i: i + 1].to(dtype=torch_dtype)
+                if norm is not None:
+                    h = norm(h)
+                outs.append(head(h).float())
+        logits = torch.cat(outs, dim=0).numpy()
+
+        vocab = [_clean_token(t)
+                 for t in tokenizer.convert_ids_to_tokens(range(logits.shape[-1]))]
+        entropy, topk = _entropy_topk(logits, vocab, top_k)
+
+        meta = {
             "backend": "streamed",
             "model": str(root),
-            "prompt": prompt,
+            "prompt": prompts[row],
             "streamed": True,
             "n_blocks": len(blocks),
             "block_loads": sb.loads,
             "keep_resident": keep_resident,
             # what a streamed pass cannot give you, stated rather than implied
             "absent": ["residual decomposition", "attention patterns"],
-        },
-    )
-    traj.validate()
-    return traj
+        }
+        if batched:
+            meta["batch"] = len(prompts)
+        if receipt:
+            meta["remote"] = receipt
+        traj = StateTrajectory(
+            hidden=hidden.numpy(),
+            tokens=tokens,
+            logits=logits.astype(np.float16) if keep_logits else None,
+            entropy=entropy,
+            topk=topk,
+            vocab=vocab,
+            routing=routings[row],
+            meta=meta,
+        )
+        traj.validate()
+        trajectories.append(traj)
+    return trajectories

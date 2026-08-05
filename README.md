@@ -178,6 +178,48 @@ Qwen2.5-1.5B-Instruct (GQA/RoPE/SwiGLU/RMSNorm), GPT-2, DistilGPT-2,
 Pythia-70m, synthetic. Llama-3.2 and Gemma-2 work identically but are
 licence-gated on the Hub, so they can't back bundled samples or offline CI.
 
+### Models too big to hold
+
+A forward pass with no gradients only needs block *i*'s weights while block
+*i* is running. So `stream.stream_capture` builds the model skeleton with no
+weights at all, materialises each block immediately before it runs, and
+releases it immediately after. Peak RAM is one block plus activations.
+
+```python
+from stream import stream_capture, stream_capture_batch
+
+traj  = stream_capture("hf://moonshotai/Kimi-K2-Instruct", "The capital of")
+many  = stream_capture_batch(ckpt, prompts)      # one pass, N trajectories
+```
+
+Point it at a repo id or URL instead of a directory and the weights don't
+land on local disk either: `remote.py` reads one layer's byte ranges out of
+the published shards, writes them to a cache file, and deletes it once the
+block has been read. Range granularity matters — shard boundaries are *not*
+layer boundaries, and Qwen3-30B-A3B packs five layers into one shard while
+splitting another layer across two.
+
+Egress is then the binding cost, one full read of the checkpoint per pass,
+so `stream_capture_batch` runs every prompt through each block while it's
+resident. Twenty prompts, one download. The bill is on the trajectory
+(`meta.remote`: bytes fetched, requests made, peak cache bytes).
+
+Streamed output is bit-exact against an in-memory capture — `max |Δh| = 0.0`,
+asserted, along with the residency bound. Two things it refuses instead of
+absorbing: a checkpoint whose layout leaves parameters unloaded (MoE stores
+experts per-expert, the runtime wants them fused; a silent skip means empty
+experts and a capture that's wrong while still looking like numbers), and a
+host that answers `200` to a range request, which at this scale is a terabyte
+arriving where 17 GB was asked for.
+
+`capture(..., capture_routing=True)` records which experts each token was
+sent to, per layer. In a sparse model that's the most legible signal there
+is — a discrete choice, readable with no dictionary learning — and
+`Routing.agreement` compares two runs by the paths they took rather than the
+activations they produced. It refuses on a dense model.
+
+None of this has been verified at K3 scale. The mechanism is proven small.
+
 **Mamba** is the proof the abstraction isn't transformer-shaped: its layout
 resolves structurally, block capture and the logit lens work unchanged, and
 the captures that don't apply to a state-space model — attention patterns, the

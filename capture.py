@@ -437,7 +437,7 @@ def _clean_token(tok) -> str:
     return str(tok).replace("▁", " ").replace("Ġ", " ").replace("Ċ", "\\n")
 
 
-def _routing_from(out, model, wanted: bool):
+def _routing_from(out, model, wanted: bool, spans=None):
     """Expert routing from a forward pass, or None.
 
     HF's sparse-MoE models return `router_logits` as one (T, n_experts)
@@ -449,6 +449,11 @@ def _routing_from(out, model, wanted: bool):
     Dense models have no router. Rather than return an empty routing that
     later reads as "this token used no experts", this refuses — the same
     contract attention capture has on Mamba.
+
+    `spans` un-batches the result. Router logits come back flattened over
+    `(batch * tokens)`, so a batched pass needs to be told the padding: pass
+    one `(row, start)` per sequence and get one `Routing` per sequence back,
+    padding already dropped.
     """
     if not wanted:
         return None
@@ -480,13 +485,23 @@ def _routing_from(out, model, wanted: bool):
     # so align the returned rows to the *last* n blocks rather than assuming
     # they start at 0.
     first = max(0, n_blocks - len(layers))
+    batch = len(spans) if spans else 1
     for m, lg in enumerate(layers):
         probs = torch.softmax(lg.float(), dim=-1)
         w, e = torch.topk(probs, k=min(k, probs.shape[-1]), dim=-1)
+        if batch > 1:
+            e = e.reshape(batch, -1, e.shape[-1])
+            w = w.reshape(batch, -1, w.shape[-1])
         experts.append(e.cpu().numpy().astype(np.int32))
         weights.append((w / w.sum(-1, keepdim=True)).cpu().numpy().astype(np.float32))
         idx.append(first + m)
 
-    return Routing(
-        experts=np.stack(experts), weights=np.stack(weights),
-        layers=np.asarray(idx, dtype=np.int32), n_experts=n_experts)
+    experts, weights = np.stack(experts), np.stack(weights)
+    layer_idx = np.asarray(idx, dtype=np.int32)
+    if spans is None:
+        return Routing(experts=experts, weights=weights,
+                       layers=layer_idx, n_experts=n_experts)
+    return [Routing(experts=experts[:, row, start:] if batch > 1 else experts[:, start:],
+                    weights=weights[:, row, start:] if batch > 1 else weights[:, start:],
+                    layers=layer_idx, n_experts=n_experts)
+            for row, start in spans]

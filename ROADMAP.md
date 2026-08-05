@@ -142,9 +142,40 @@ Frontier models are sparse MoE and do not fit in memory: Kimi K3 is 93 layers,
       module (MoE checkpoints store experts per-expert; the runtime wants them
       fused). Silently skipping leaves the experts empty and the whole capture
       is wrong while still looking like numbers.
-- [ ] Verify against K3 itself: needs ~1.5 TB of disk. Untested at that scale —
-      the mechanism is proven at small scale only, and the honest claim stops
-      there.
+- [x] `remote.RemoteWeights`: the weights never land on local disk in full
+      either. HTTP range requests read one layer's byte spans out of the
+      published shards, write them to a cache file, and delete it once the
+      block has been read — so peak local disk is one layer, not the whole
+      checkpoint. Range granularity is the point: shard boundaries are *not*
+      layer boundaries (Qwen3-30B-A3B packs five layers per shard and splits
+      one layer across two), so fetching whole files can cost several times
+      the layer. A host that ignores `Range` answers `200` with the entire
+      file, which at this scale is a terabyte where 17 GB was asked for, so
+      that is refused rather than paid.
+- [x] `stream_capture_batch`: egress, not RAM, is now the binding cost — one
+      pass over a 1.5 TB checkpoint per capture. So prompts share the pass:
+      each block is loaded once and every prompt in the batch goes through it
+      while it is resident. Twenty prompts cost one download.
+- [x] Every remotely-streamed trajectory carries the receipt
+      (`meta.remote`: bytes fetched, requests made, peak cache bytes). The
+      cost of a design this expensive belongs in the artifact, not the docs.
+- [ ] Verify against K3 itself. The mechanism is proven at small scale only,
+      and the honest claim stops there. What is known from the published
+      index files rather than assumed: K2's shards are one layer each at
+      **17.07 GB**, 2327 tensors laid out contiguously, so a layer coalesces
+      to essentially one range request — and 17 GB is what must fit local
+      disk *and* RAM while that block runs. K3 at ~1.56 TB over 93 layers is
+      the same order.
+- [ ] **Fetch only the routed experts.** Nearly all of a sparse layer's bytes
+      are experts, and a short prompt routes to a small fraction of them —
+      K2 sends each token to 8 of 384. `remote.unrouted_expert_bytes`
+      measures that waste after the fact from the routing the capture already
+      recorded, so the case for acting on it is a number rather than an
+      intuition. Acting on it is a much more delicate change: the router runs
+      on post-attention states, so the route cannot be known until the block
+      is half-executed, and a fused expert layout cannot be partially loaded
+      at all. It only ships with the check that every expert the forward
+      actually used was one we fetched.
 - [ ] **AttnRes.** K3 retrieves across depth selectively rather than
       accumulating uniformly, so `h[l+1] = h[l] + attn + mlp` may not hold.
       The decomposition must be *measured* on K3 and refused if it does not
