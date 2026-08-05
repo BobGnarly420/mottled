@@ -325,7 +325,6 @@ def stream_capture(
     keep_logits: bool = True,
     keep_resident: int = 1,
     capture_routing: bool = False,
-    dtype: str = "float32",
     cache_dir=None,
     cache_bytes: int | None = None,
     revision: str = "main",
@@ -348,7 +347,7 @@ def stream_capture(
     return stream_capture_batch(
         checkpoint, [prompt], tokenizer=tokenizer, top_k=top_k,
         keep_logits=keep_logits, keep_resident=keep_resident,
-        capture_routing=capture_routing, dtype=dtype, cache_dir=cache_dir,
+        capture_routing=capture_routing, cache_dir=cache_dir,
         cache_bytes=cache_bytes, revision=revision, token=token)[0]
 
 
@@ -360,7 +359,6 @@ def stream_capture_batch(
     keep_logits: bool = True,
     keep_resident: int = 1,
     capture_routing: bool = False,
-    dtype: str = "float32",
     cache_dir=None,
     cache_bytes: int | None = None,
     revision: str = "main",
@@ -373,12 +371,19 @@ def stream_capture_batch(
     to five tokens. So the prompts go through together, and each block is
     loaded exactly once for the whole batch.
 
-    Returns one `StateTrajectory` per prompt. A single-prompt pass is
-    bit-exact against an in-memory capture. In a batch the *longest* prompt
-    still is; shorter ones are padded, and masked softmax over a padded row
-    reassociates its sum, so they land within float round-off — measured at
-    ~3e-8 absolute, ~3e-7 relative on a 6-layer test model. Batch prompts of
-    equal length, or use `stream_capture`, if you need the bits identical.
+    Returns one `StateTrajectory` per prompt.
+
+    Batching is *not* bit-exact and cannot be. A batched pass gives every
+    matmul a different shape, and a different shape means different blocking
+    and a different summation order — so the answer moves in the last bits,
+    by an amount that depends on the BLAS the machine happens to have. This
+    was measured at ~6e-9 absolute here and was exactly zero on a different
+    CPU, which is the whole point: do not read a zero on one machine as a
+    guarantee. Padding adds a second, smaller source of the same thing.
+
+    So: `stream_capture` on one prompt is bit-exact against an in-memory
+    capture, and is what to use when the bits must match. `stream_capture_batch`
+    trades that for one download instead of N.
     """
     if not HAS_TORCH:
         raise ImportError("stream_capture needs torch")
@@ -405,7 +410,9 @@ def stream_capture_batch(
     blocks = list(inner.layers)
 
     # Everything that is not a block: one matrix each, so they stay resident.
-    torch_dtype = getattr(torch, dtype)
+    # Nothing is cast: the pass runs in the checkpoint's own dtype, which is
+    # both what fits at frontier scale and what makes the result comparable
+    # to an in-memory load of the same checkpoint.
     for name, module in (("embed", getattr(inner, "embed_tokens", None)),
                          ("norm", getattr(inner, "norm", None)),
                          ("head", getattr(model, "lm_head", None))):
@@ -419,7 +426,7 @@ def stream_capture_batch(
         elif name == "head" and getattr(config, "tie_word_embeddings", False):
             module.weight = getattr(inner, "embed_tokens").weight
 
-    from capture import _clean_token, _entropy_topk, _routing_from
+    from capture import _clean_token, _entropy_topk, _routing_from, logit_lens
 
     input_ids, attention, positions, starts, per_prompt = _pad_batch(tokenizer, prompts)
     batched = len(prompts) > 1
@@ -436,9 +443,17 @@ def stream_capture_batch(
     if routings is None:
         routings = [None] * len(prompts)
 
-    norm = getattr(inner, "norm", None)
-    head = getattr(model, "lm_head", None)
-    if head is None:
+    # Reuse `capture.logit_lens` rather than re-deriving it. This started as
+    # a hand-rolled copy that chunked the layer stack one layer at a time
+    # instead of four, which is the same arithmetic and was bit-identical on
+    # the machine it was written on — and differed in the last bit on CI's,
+    # where float16 storage turned that into a visible 4e-6. Which BLAS
+    # detail did it is not established. The fix is not to explain the
+    # difference but to remove the question: one call, one code path.
+    from models.families import resolve_family
+
+    adapter = resolve_family(model)
+    if adapter.lm_head is None:
         raise ValueError("checkpoint exposes no LM head; cannot apply the logit lens")
 
     receipt = shards.receipt() if hasattr(shards, "receipt") else {}
@@ -448,16 +463,7 @@ def stream_capture_batch(
         tokens = [_clean_token(t) for t in
                   tokenizer.convert_ids_to_tokens(per_prompt[row].tolist())]
 
-        # Logit lens, one layer at a time: the head is resident, the states
-        # are not large, and this mirrors `capture.logit_lens` exactly.
-        outs = []
-        with torch.no_grad():
-            for i in range(hidden.shape[0]):
-                h = hidden[i: i + 1].to(dtype=torch_dtype)
-                if norm is not None:
-                    h = norm(h)
-                outs.append(head(h).float())
-        logits = torch.cat(outs, dim=0).numpy()
+        logits = logit_lens(hidden, adapter).numpy()
 
         vocab = [_clean_token(t)
                  for t in tokenizer.convert_ids_to_tokens(range(logits.shape[-1]))]

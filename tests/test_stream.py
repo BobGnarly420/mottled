@@ -67,7 +67,14 @@ def _moe(tmp_path, layers=4, n_experts=8, k=2):
 # ------------------------------------------------------------- streaming
 def test_streamed_capture_is_exactly_the_in_memory_capture(tmp_path):
     """The whole correctness claim: streaming changes *when* weights exist,
-    not what the model computes."""
+    not what the model computes.
+
+    Bit-exactness here is only safe to assert because both paths make the
+    *same calls* — same weights, same forward, same shapes, and one shared
+    `logit_lens`. An earlier version reimplemented the lens with different
+    chunking; it was bit-identical locally and off by one float16 bucket on
+    CI. Equal arithmetic is not equal bits.
+    """
     model, path = _dense(tmp_path)
     tok = DummyTokenizer()
     mem = capture(model, PROMPT, tokenizer=tok)

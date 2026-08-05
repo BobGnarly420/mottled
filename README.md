@@ -204,8 +204,12 @@ so `stream_capture_batch` runs every prompt through each block while it's
 resident. Twenty prompts, one download. The bill is on the trajectory
 (`meta.remote`: bytes fetched, requests made, peak cache bytes).
 
-Streamed output is bit-exact against an in-memory capture — `max |Δh| = 0.0`,
-asserted, along with the residency bound. Two things it refuses instead of
+A single-prompt streamed pass is bit-exact against an in-memory capture —
+`max |Δh| = 0.0`, asserted, along with the residency bound. Batching is not
+and can't be: a batched pass gives every matmul a different shape, so the
+answer moves in the last bits by an amount that depends on the machine's
+BLAS. It was zero on one CPU and ~6e-9 on another, which is exactly why
+that's a tolerance and not a promise. Two things it refuses instead of
 absorbing: a checkpoint whose layout leaves parameters unloaded (MoE stores
 experts per-expert, the runtime wants them fused; a silent skip means empty
 experts and a capture that's wrong while still looking like numbers), and a

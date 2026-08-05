@@ -155,7 +155,11 @@ Frontier models are sparse MoE and do not fit in memory: Kimi K3 is 93 layers,
 - [x] `stream_capture_batch`: egress, not RAM, is now the binding cost — one
       pass over a 1.5 TB checkpoint per capture. So prompts share the pass:
       each block is loaded once and every prompt in the batch goes through it
-      while it is resident. Twenty prompts cost one download.
+      while it is resident. Twenty prompts cost one download. Batching is a
+      documented *tolerance*, not a bit-exact claim — a batched pass reshapes
+      every matmul, so the last bits move by an amount that depends on the
+      machine's BLAS (zero on one CPU, ~6e-9 on another). `stream_capture` on
+      a single prompt stays bit-exact and is what to use when bits matter.
 - [x] Every remotely-streamed trajectory carries the receipt
       (`meta.remote`: bytes fetched, requests made, peak cache bytes). The
       cost of a design this expensive belongs in the artifact, not the docs.

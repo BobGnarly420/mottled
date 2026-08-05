@@ -182,9 +182,11 @@ def test_batched_prompts_match_individual_ones(tmp_path):
     """Padding is where batching goes wrong silently: the pads must not reach
     the real tokens, and the positions must survive left-padding.
 
-    The longest prompt is unpadded and must be bit-exact. The padded ones may
-    differ only by float round-off — masked softmax reassociates the sum — so
-    the bound is tight enough that a real leak from the pads would break it.
+    The bound is round-off, not zero, and deliberately so: batching changes
+    every matmul's shape and therefore its summation order, so the last bits
+    move by an amount that depends on the machine's BLAS. It is tight enough
+    that a pad actually reaching a real token would break it, and loose enough
+    not to encode one CPU's rounding as a promise.
     """
     model, path = _dense(tmp_path, layers=4)
     prompts = ["the capital of france is", "geese", "two words here"]
@@ -192,13 +194,11 @@ def test_batched_prompts_match_individual_ones(tmp_path):
     alone = [capture(model, p, tokenizer=tok) for p in prompts]
     together = stream_capture_batch(path, prompts, tokenizer=DummyTokenizer())
 
-    longest = max(range(3), key=lambda i: alone[i].hidden.shape[1])
-    for i, (solo, batched) in enumerate(zip(alone, together)):
+    for solo, batched in zip(alone, together):
         assert solo.tokens == batched.tokens
         assert solo.hidden.shape == batched.hidden.shape
         np.testing.assert_allclose(batched.hidden, solo.hidden, atol=1e-6)
         assert batched.meta["batch"] == 3
-    np.testing.assert_array_equal(together[longest].hidden, alone[longest].hidden)
 
 
 def test_batched_routing_is_split_per_prompt(tmp_path):
