@@ -39,6 +39,7 @@ from pipeline import (  # noqa: F401
     _assemble_scene,
     _capture_with,
     attach_features,
+    attach_inspector,
     degraded_note,
     run_compare,
     run_intervention,
@@ -57,7 +58,8 @@ from render import (  # noqa: F401
 
 __all__ = [
     "run_pipeline", "run_scene", "run_compare", "run_intervention",
-    "run_model_scene", "attach_features", "degraded_note",
+    "run_model_scene", "attach_features", "attach_inspector",
+    "degraded_note",
     "render", "render_feature_field", "field_rgb",
     "main",
 ]
@@ -334,6 +336,9 @@ def main() -> None:
 
         import io as _io
 
+        # inspector layers (neighbors, attn/MLP share) so the shareable
+        # viewer is not the lesser surface
+        attach_inspector(result, n_neighbors=cfg.n_neighbors)
         if acts is not None and sae_source is not None:
             # trained dictionary active: export its feature layer + measured
             # fit with the scene (demo features are decorative — not exported)

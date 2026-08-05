@@ -269,6 +269,61 @@ def attach_features(result: dict, sae, source: str | None = None,
     return result
 
 
+def attach_inspector(result: dict, n_neighbors: int = 5) -> dict:
+    """Precompute the inspector layers a scene file cannot recover on its own.
+
+    The explorer can show semantic neighbors and the attention/MLP split
+    because it still holds the embedding matrix (V x D) and the residual
+    components (2 x (L-1) x T x D) in memory. A scene file carries neither —
+    they are orders of magnitude larger than everything else in it — so the
+    web viewer has been the lesser surface. Both reduce to something tiny if
+    they are resolved *before* export:
+
+    * neighbors  -> the k nearest vocabulary tokens per state, as indices into
+                    a compact table of just the strings that actually appear
+    * components -> the attention/MLP share per state, which is two numbers,
+                    not two D-dimensional vectors
+
+    Mutates and returns `result` (adds "inspector_list", aligned with the
+    runs); `statefile.save_scene` carries it into the `.mtj` additively.
+    Runs lacking the source data are skipped individually rather than
+    failing the export.
+    """
+    from neighbors import TokenNeighbors
+
+    trajs = result.get("trajs") or [result["traj"]]
+    out = []
+    for traj in trajs:
+        entry: dict = {}
+
+        if traj.embedding_matrix is not None and traj.vocab:
+            tn = TokenNeighbors(traj.embedding_matrix, traj.vocab)
+            flat = traj.hidden.reshape(-1, traj.dim)
+            table: dict[str, int] = {}
+            idx = np.zeros((len(flat), n_neighbors), dtype=np.int32)
+            sim = np.zeros((len(flat), n_neighbors), dtype=np.float32)
+            for i, vec in enumerate(flat):
+                for j, (tok, s) in enumerate(tn.nearest(vec, k=n_neighbors)):
+                    idx[i, j] = table.setdefault(tok, len(table))
+                    sim[i, j] = s
+            shape = (traj.n_layers, traj.n_tokens, n_neighbors)
+            entry["neighbor_tokens"] = list(table)
+            entry["neighbor_idx"] = idx.reshape(shape)
+            entry["neighbor_sim"] = sim.reshape(shape)
+
+        comps = traj.components
+        if comps is not None and {"attn", "mlp"} <= set(comps):
+            a = np.linalg.norm(comps["attn"].astype(np.float64), axis=-1)
+            m = np.linalg.norm(comps["mlp"].astype(np.float64), axis=-1)
+            total = np.maximum(a + m, 1e-12)
+            entry["component_shares"] = np.stack(
+                [a / total, m / total], axis=-1).astype(np.float32)
+
+        out.append(entry)
+    result["inspector_list"] = out
+    return result
+
+
 def run_model_scene(cfg: MarbleConfig, prompt: str, models: list,
                     loaded: dict | None = None) -> dict:
     """One prompt, several **models**, on one terrain.

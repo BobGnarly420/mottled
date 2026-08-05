@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Viewer inspector parity (roadmap M3)
+The web viewer is the *shareable* surface — it is what someone sees when you
+send them a link — but its inspector showed less than the explorer's, because
+the two readouts it lacked depend on data far too large to ship in a scene:
+the `(V, D)` embedding matrix (semantic neighbors) and the
+`2 × (L-1) × T × D` residual components (the attention/MLP split).
+- `pipeline.attach_inspector` resolves both *before* export, where they
+  collapse to almost nothing: the k nearest vocabulary tokens per state as
+  indices into a compact table of only the strings that appear, and the
+  attn/MLP share per state, which is two numbers rather than two
+  D-dimensional vectors. A 15-token GPT-2 scene gains ~0.9 s and stays 90 KB.
+- Carried additively in `.mtj` as a per-run `inspector` record (documented in
+  `docs/mtj-format.md`), attached by the explorer's export button and by
+  `mottled export`. Runs missing either source contribute what they have
+  rather than failing the export.
+- The bundled `scene-abc`, `single` and `gpt2-capitals` samples were
+  regenerated to carry it.
+
 ### Fixed: Streamlit app tests broke on Streamlit 1.61
 `AppTest.from_file` resolves a *relative* path against the file that calls
 it as of 1.61 (older releases resolved against the working directory), so

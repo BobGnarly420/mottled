@@ -94,6 +94,16 @@ Fields:
     "mode" ("greedy"|"sample"), "temperature", "seed", "steps": [{ "token",
     "id", "p", "entropy" }, …] }`. Token indices `>= prompt_tokens` were
     generated.
+  - `inspector` *(optional)*: readouts a viewer cannot recompute, because
+    the inputs (the `(V, D)` embedding matrix, the `2 x (L-1) x T x D`
+    residual components) are far larger than the scene itself, so they are
+    resolved before export: `{ "tokens": [str, …] (a compact table of only
+    the strings that appear), "idx" -> `(L, T, k)` int32 into that table,
+    "sim" -> `(L, T, k)` float32 cosine similarity (nearest first),
+    "component_shares" -> `(L-1, T, 2)` float32 attention/MLP share of each
+    block's residual write, each pair summing to 1 }`. Any member may be
+    absent independently. Note the block axis: `component_shares[b]`
+    describes the write producing layer `b+1`, so layer 0 has none.
   - `features` *(optional)*: an SAE feature layer with its **measured fit**
     attached: `{ "source", "hook", "best_layer", "recon_error" → `(L,)`
     float32 array ref, "top_id" → `(L, T)` int32 array ref (dominant
