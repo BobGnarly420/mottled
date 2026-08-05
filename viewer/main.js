@@ -750,6 +750,33 @@ function setPickInfo(pick, pinned) {
       `<span class="mono">'${esc(t)}'</span> <span class="dim">${(p * 100).toFixed(1)}%</span></div>`).join("");
     html += `<div class="topk"><span class="dim">top-k readout</span>${rows}</div>`;
   }
+  if (run.inspector) {
+    // Nearest vocabulary tokens to this hidden state (cosine in embedding
+    // space, nearest first) — the explorer's "nearest semantic neighbors",
+    // resolved at export because the (V, D) embedding matrix dwarfs the
+    // scene. Bars echo the top-k rows but read as similarity, not
+    // probability, so they are drawn in a muted accent.
+    const nbrs = MTJ.neighborsAt(run.inspector, pick.layer, tok, 5);
+    if (nbrs.length) {
+      const rows = nbrs.map((n) =>
+        `<div><span class="bar" style="width:${Math.max(2, Math.max(0, n.sim) * 120)}px"></span>` +
+        `<span class="mono">'${esc(n.token)}'</span> <span class="dim">cos ${n.sim.toFixed(3)}</span></div>`).join("");
+      html += `<div class="topk nbrs"><span class="dim">nearest tokens</span>${rows}</div>`;
+    }
+    // Attention/MLP split of the block write that produced this state. Layer 0
+    // is the embedding stream — written by no block — so the section is simply
+    // absent there, as it is for runs captured without residual components.
+    const share = MTJ.componentShareAt(run.inspector, pick.layer, tok);
+    const sum = share ? share.attn + share.mlp : 0;
+    if (share && Number.isFinite(sum) && sum > 1e-9) {
+      const a = Math.min(1, Math.max(0, share.attn / sum)) * 100;
+      html += `<div class="resid"><span class="dim">residual write</span>` +
+              `<div class="resid-bar"><span class="attn" style="width:${a.toFixed(1)}%"></span>` +
+              `<span class="mlp" style="width:${(100 - a).toFixed(1)}%"></span></div>` +
+              `<div class="mono">attn ${a.toFixed(0)}%<span class="dim"> · </span>` +
+              `mlp ${(100 - a).toFixed(0)}%</div></div>`;
+    }
+  }
   if (pinned) html += `<div class="ip-pin">pinned · Esc to clear</div>`;
   ui.infoPanel.innerHTML = html;
   ui.infoPanel.classList.toggle("pinned", pinned);
@@ -816,6 +843,7 @@ function buildUI(scene) {
     label.appendChild(cb);
     label.insertAdjacentHTML("beforeend",
       `<span class="swatch" style="background:${sw}"></span><b>${esc(run.label)}</b>` +
+      (run.model ? `<span class="model mono" title="${esc(run.model)}">${esc(run.model)}</span>` : "") +
       `<span class="prompt" title="${esc(run.prompt)}">${esc(run.prompt)}</span>`);
     if (run.generation) {
       // decode summary: mode (+temperature when sampled), token count, and

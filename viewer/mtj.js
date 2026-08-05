@@ -127,6 +127,32 @@
       };
     };
 
+    // Optional per-run inspector layer (writers >= scene-v6): readouts a
+    // viewer cannot recompute from a scene alone, because their inputs (the
+    // (V, D) embedding matrix, the 2 x (L-1) x T x D residual components) are
+    // far larger than the scene itself — the nearest vocabulary tokens to
+    // each hidden state, and the attention/MLP split of every block's write
+    // to the residual stream. Members are independent: a capture without
+    // residual components carries no `component_shares`, a producer with no
+    // embedding matrix carries no `idx`/`sim`. A missing, non-string, or
+    // dangling ref drops just that member; when nothing resolves the record
+    // reads null (same contract as `features` and `generation`).
+    const resolveInspector = (e) => {
+      if (!e || typeof e !== "object" || Array.isArray(e)) return null;
+      const idx = typeof e.idx === "string" ? arrays[e.idx] || null : null;
+      const sim = typeof e.sim === "string" ? arrays[e.sim] || null : null;
+      const shares = typeof e.component_shares === "string"
+        ? arrays[e.component_shares] || null : null;
+      if (!idx && !sim && !shares) return null;
+      return {
+        // compact string table the neighbor indices point into
+        tokens: Array.isArray(e.tokens) ? e.tokens.map(String) : [],
+        idx,                        // (L, T, k) int32, nearest first
+        sim,                        // (L, T, k) float32 cosine
+        component_shares: shares,   // (L-1, T, 2) float32, blocks on axis 0
+      };
+    };
+
     const t = manifest.terrain || {};
     const terrain = {
       x: resolve(t.x, "terrain.x"),
@@ -160,6 +186,12 @@
                      !Array.isArray(r.generation)) ? r.generation : null,
         // optional SAE feature record (writers >= scene-v5)
         features: resolveFeatures(r.features),
+        // optional inspector record (writers >= scene-v6): nearest vocabulary
+        // tokens per state + attn/MLP share of each block's residual write
+        inspector: resolveInspector(r.inspector),
+        // which model produced this run. Scene-level `meta` describes run 0,
+        // which is simply wrong for a scene whose runs are different models.
+        model: typeof r.model === "string" ? r.model : null,
       };
     });
     if (!runs.length) throw new Error("corrupt scene: no runs");
@@ -262,7 +294,60 @@
     return s;
   }
 
+  // ------------------------------------------------ inspector helpers
+  // A run's optional `inspector` record carries the nearest vocabulary tokens
+  // to every hidden state and the attention/MLP split of each block's write to
+  // the residual stream. Everything here is null-safe: an absent, partial, or
+  // malformed record reads as "not available" so scenes without it — and
+  // scenes carrying only one of the two layers — behave exactly as before.
+
+  function neighborsAt(inspector, layer, tokenIdx, limit) {
+    // the nearest vocabulary tokens to the state at (layer, tokenIdx) as
+    // [{token, sim}, …] nearest-first (at most `limit`), or [] when the
+    // record is absent or the indices fall outside the arrays' shapes
+    if (!inspector || typeof inspector !== "object") return [];
+    const idx = inspector.idx, sim = inspector.sim;
+    // the pair is only readable together: ids without similarities (or the
+    // reverse) is not a neighbor list
+    if (!idx || !sim || !Array.isArray(idx.shape) || idx.shape.length !== 3) return [];
+    if (!idx.data || !sim.data) return [];
+    if (!Number.isInteger(layer) || !Number.isInteger(tokenIdx)) return [];
+    const [L, T, K] = idx.shape;
+    if (layer < 0 || layer >= L || tokenIdx < 0 || tokenIdx >= T) return [];
+    const tokens = Array.isArray(inspector.tokens) ? inspector.tokens : [];
+    const n = Number.isInteger(limit) ? Math.min(Math.max(limit, 0), K) : K;
+    const base = (layer * T + tokenIdx) * K;
+    const out = [];
+    for (let j = 0; j < n; j++) {
+      const o = base + j;
+      if (o >= idx.data.length || o >= sim.data.length) break;
+      const ti = idx.data[o];
+      if (!(ti >= 0) || ti >= tokens.length) continue; // index off the table
+      out.push({ token: String(tokens[ti]), sim: sim.data[o] });
+    }
+    return out;
+  }
+
+  function componentShareAt(inspector, layer, tokenIdx) {
+    // {attn, mlp} share of the block write that produced the state at
+    // (layer, tokenIdx), or null. The array's first axis is *blocks*: block b
+    // writes the state at layer b+1, so layer l reads index l-1 and layer 0 —
+    // the embedding stream, written by no block — has no share at all.
+    if (!inspector || typeof inspector !== "object") return null;
+    const cs = inspector.component_shares;
+    if (!cs || !cs.data || !Array.isArray(cs.shape) || cs.shape.length !== 3) return null;
+    if (!Number.isInteger(layer) || !Number.isInteger(tokenIdx)) return null;
+    const [B, T, C] = cs.shape;
+    if (C < 2) return null;
+    const block = layer - 1;
+    if (block < 0 || block >= B || tokenIdx < 0 || tokenIdx >= T) return null;
+    const o = (block * T + tokenIdx) * C;
+    if (o + 1 >= cs.data.length) return null;
+    return { attn: cs.data[o], mlp: cs.data[o + 1] };
+  }
+
   return { parse, loadScene, decodeFloat16, SUPPORTED_VERSION,
            isGeneratedToken, generationStep, continuationText, decodeSummary,
-           generationBoundary, featureAt, featureFitSummary };
+           generationBoundary, featureAt, featureFitSummary,
+           neighborsAt, componentShareAt };
 });

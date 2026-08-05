@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Real models, and a memory bomb they exposed
+Mottled had been *demonstrated* on GPT-2 throughout, which invited the fair
+question of whether it handles anything modern. It does, and that is now
+verified rather than asserted — but proving it found a bug.
+- **Qwen2.5-1.5B-Instruct** (29 x 1536, GQA / RoPE / SwiGLU / RMSNorm)
+  captures end to end with attention and an *exactly* reconciling residual
+  decomposition (`max |h[l+1] - (h[l] + attn + mlp)| = 0.0000`). New samples
+  `qwen-capitals.mtj` and `models-qwen-gpt2.mtj`; `MODEL_CHOICES` gains
+  Qwen2.5-1.5B and marks which entries are licence-gated.
+- **Fixed an O(V^2) allocation in readout space.** `readout_trajectory` gave
+  its trajectories `np.eye(V_shared)` as an embedding matrix — conceptually
+  tidy, since each axis *is* a vocabulary entry, and a **7 GB** array for two
+  models sharing 42k tokens. It killed the process outright on the
+  Qwen/GPT-2 pair. The identity bought nothing either: the nearest vocabulary
+  token to a readout state is its largest component, which `topk` already
+  reports. Now `None`, which every consumer already had to handle.
+- The viewer now reads the per-run `model` field (added writer-side in the
+  previous change but never surfaced) and shows it in the runs panel — the
+  point of a cross-model scene.
+
 ### Viewer inspector parity (roadmap M3)
 The web viewer is the *shareable* surface — it is what someone sees when you
 send them a link — but its inspector showed less than the explorer's, because
