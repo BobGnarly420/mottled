@@ -272,7 +272,7 @@ def attach_features(result: dict, sae, source: str | None = None,
 def attach_inspector(result: dict, n_neighbors: int = 5) -> dict:
     """Precompute the inspector layers a scene file cannot recover on its own.
 
-    The explorer can show semantic neighbors and the attention/MLP split
+    The explorer can show representation-space neighbors and the attention/MLP split
     because it still holds the embedding matrix (V x D) and the residual
     components (2 x (L-1) x T x D) in memory. A scene file carries neither —
     they are orders of magnitude larger than everything else in it — so the

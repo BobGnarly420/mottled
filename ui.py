@@ -479,15 +479,26 @@ def main() -> None:
                    'external landscape. The pinned callout marks the basin; open '
                    '**Why this attractor** in the inspector for this run\'s numbers.')
 
+        st.caption("Scenes generate hypotheses, not mechanisms — "
+                   "`docs/validity.md` is the inferential contract.")
         with st.expander("What this is — and is not", expanded=False):
             st.markdown(
-                "Mottled visualizes the **geometry of latent dynamics** — where a "
-                "run's hidden states go and pile up — and measures how much of that "
-                "geometry survives the projection. It is **not** a proof of "
-                "mechanism.\n\n"
-                "- A basin shows states *accumulating*, not a circuit *computing*. "
+                "Mottled visualizes the **geometry of a run's latent "
+                "trajectories** — where hidden states go and pile up — and "
+                "measures how much of that geometry survives the projection. "
+                "It summarizes representation-space behavior under the analysis "
+                "choices you declared; it generates mechanistic hypotheses, it "
+                "does **not** establish mechanisms (the full inferential "
+                "contract is `docs/validity.md`).\n\n"
+                "- A basin is a **state concentration region** under this "
+                "projection and density estimator — states *accumulating*, not "
+                "a circuit *computing*. "
                 "Attention flow and the intervention divergence are **measurements** "
                 "of what happened, not identified causes.\n"
+                "- Logit-lens readouts are **probe diagnostics** — what the "
+                "output head would say if pointed at an intermediate state — "
+                "and nearest-token lists are **representation-space** "
+                "neighbors, not verified semantic ones.\n"
                 "- An SAE overlay is only as interpretable as the SAE you load; the "
                 "bundled `demo_sae` is a random dictionary (decorative). Load real "
                 "weights with `sae.load_npz` / the `mottled-convert-sae` CLI.\n"
@@ -561,7 +572,7 @@ def main() -> None:
             st.progress(min(max(p, 0.0), 1.0), text=f"{tok!r} — {p:.1%}")
 
         if traj.embedding_matrix is not None and traj.vocab is not None:
-            st.markdown("**Nearest semantic neighbors**")
+            st.markdown("**Nearest neighbors (representation space)**")
             tn = _token_neighbors(traj)
             for tok, sim in tn.nearest(state.vector, k=cfg.n_neighbors):
                 st.write(f"`{tok}`  ·  cos {sim:.3f}")

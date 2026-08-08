@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### The inferential contract (docs/validity.md)
+The tool's central research-validity risk — an attractive within-run
+visualization mistaken for evidence of a model mechanism — now has a
+dedicated answer instead of scattered caveats.
+- **`docs/validity.md`**: what each Mottled artifact licenses you to claim,
+  from the projection robustness envelope through the SAE claim gates to
+  researcher degrees of freedom — including the tool's own known limits
+  (the i.i.d. density bootstrap understates uncertainty on dependent
+  states; the honest upgrades are named and marked unimplemented).
+- **Framing tightened to match**: a basin is a *state concentration region*
+  under the chosen projection and estimator; "semantic manifold" is gone
+  from README and site; neighbors are labeled *representation-space*
+  neighbors everywhere; the explorer and README's "What this is — and is
+  not" open with the one-sentence boundary and link the contract.
+
 ### Features with names (roadmap M2)
 An SAE's features are indices until something explains them, and an unnamed
 feature overlay is a colour with no meaning.

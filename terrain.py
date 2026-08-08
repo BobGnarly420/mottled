@@ -2,7 +2,7 @@
 
 The landscape's density field becomes a smoothed height map; trajectories are
 draped over it by interpolating the surface height at their (x, y) positions,
-so the marble visibly rolls over the semantic terrain.
+so the marble visibly rolls over the density terrain.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ def height_map(
     """Smooth the density field and scale it into heights.
 
     invert=True turns dense regions into valleys (the marble settles into
-    semantic attractors); by default dense regions are peaks.
+    state concentration regions); by default dense regions are peaks.
     """
     z = gaussian_filter(np.asarray(density, dtype=np.float64), sigma=smooth_sigma)
     if invert:
