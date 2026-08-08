@@ -5,6 +5,25 @@ summarizes representation-space behavior under declared analysis choices; it
 generates mechanistic hypotheses that require full-dimensional, controlled,
 and causally targeted validation.
 
+**The 30-second version** — scan this before interpreting your first scene:
+
+- A basin = states accumulated under *this* projection and estimator.
+  Not an attractor. Not a circuit.
+- A successful steer = sufficiency under the tested conditions. Not the
+  mechanism that normally produces the behavior.
+- Nearest tokens = representation-space neighbors. Not semantic neighbors.
+- Logit lens = a readout diagnostic. Not the model's "belief" at that layer.
+- SAE labels = auto-interp correlations. Not verified functions.
+- `density_se` = a lower bound (the bootstrap treats dependent states as
+  independent). Not a confidence statement.
+- A pretty picture ≠ a mechanism. Confirm on held-out prompts, in full
+  hidden space, with causal methods.
+
+The rest of this file is the full version of each line, for paper authors
+and methodologists.
+
+---
+
 This file is the project's inferential contract. The README says what the
 tool does; this says what a result from it *licenses you to claim*. The
 main research-validity risk of a tool like this is specific: an attractive
@@ -203,8 +222,8 @@ semantic neighbors. Proximity can reflect token frequency, syntax,
 position, morphology, formatting, or shared downstream logit behavior.
 The honest name for what `neighbors.py` returns is
 **representation-space neighbors**: the k nearest token embeddings to a
-hidden state under the declared normalization. The UI's "semantic
-neighbors" label is shorthand for that, and any write-up should say which
+hidden state under the declared normalization. The explorer labels them
+that way, and any write-up should say which
 space, which layer, which normalization, and that the index is token
 *embeddings*, not observed hidden states.
 

@@ -480,6 +480,8 @@ def main() -> None:
                    'external landscape. The pinned callout marks the basin; open '
                    '**Why this attractor** in the inspector for this run\'s numbers.')
 
+        st.caption("Scenes generate hypotheses, not mechanisms — "
+                   "`docs/validity.md` is the inferential contract.")
         with st.expander("What this is — and is not", expanded=False):
             st.markdown(
                 "Mottled visualizes the **geometry of a run's latent "
@@ -571,7 +573,7 @@ def main() -> None:
             st.progress(min(max(p, 0.0), 1.0), text=f"{tok!r} — {p:.1%}")
 
         if traj.embedding_matrix is not None and traj.vocab is not None:
-            st.markdown("**Nearest semantic neighbors**")
+            st.markdown("**Nearest neighbors (representation space)**")
             tn = _token_neighbors(traj)
             for tok, sim in tn.nearest(state.vector, k=cfg.n_neighbors):
                 st.write(f"`{tok}`  ·  cos {sim:.3f}")

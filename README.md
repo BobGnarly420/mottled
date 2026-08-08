@@ -24,7 +24,7 @@ Prompt → forward pass → capture residual stream after every block
 layer scrubber and the token inspector](docs/images/explorer.png)
 *The Streamlit explorer with an A/B overlay — "The capital of France is" vs
 "The capital of Germany is" — marbles at layer 12, inspector showing the
-final token's predictions and semantic neighbors.*
+final token's predictions and representation-space neighbors.*
 
 **Live demo:** [bobgnarly420.github.io/mottled](https://bobgnarly420.github.io/mottled/) —
 landing page plus the web viewer with bundled sample scenes (synthetic and
@@ -44,7 +44,8 @@ mottled export "The residual stream" --generate 8 -o decode.mtj   # + continuati
 
 Enter a prompt (e.g. `The capital of France is`), pick a model, press
 **Run capture**. You get an animated hidden-state trajectory over a density
-terrain, semantic neighbors, entropy evolution, and a layer scrubber.
+terrain, representation-space neighbors, entropy evolution, and a layer
+scrubber.
 
 The default `synthetic` backend needs no model download (or even torch) —
 it generates deterministic, realistic trajectories so you can explore the
@@ -741,7 +742,10 @@ research tool.
 - **Next** — desktop shell, volumetric field rendering for ensembles, SAE
   feature flows across layers, feature field in the web viewer, richer
   scene management (pin/hide runs, saved scenes), diffusion / recording
-  producers.
+  producers; an **analysis-manifest export** (the full parameterization —
+  projection, estimator, bandwidth, seeds, model and SAE artifact hashes —
+  as one citable, timestamped record), so the reproducibility norms in
+  [docs/validity.md](docs/validity.md) have an affordance, not just advice.
 
 ## License
 
