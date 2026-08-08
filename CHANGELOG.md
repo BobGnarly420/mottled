@@ -22,6 +22,35 @@ writes each layer. The new instrument combines them: is an injected effect
   drop-and-return in the effect can be read against the block that might
   have rebuilt it. Attached by `run_intervention` for directional steers
   whenever the baseline carries the residual decomposition.
+### The inferential contract (docs/validity.md)
+An attractive within-run visualization can be mistaken for evidence of a
+model mechanism — that is this tool's central research-validity risk, and
+it is now addressed head-on rather than piecemeal.
+- **`docs/validity.md`**: what each Mottled artifact licenses you to claim.
+  The boundary in one sentence: Mottled visualizes and quantitatively
+  summarizes representation-space behavior under declared analysis choices;
+  it generates mechanistic hypotheses that require full-dimensional,
+  controlled, and causally targeted validation. Covers the projection
+  robustness envelope, why "dynamics" is three different claims (depth
+  progression / decode progression / dynamical-system behavior), logit lens
+  as a readout diagnostic, what a successful steer does and does not show
+  (sufficiency under tested conditions, not mechanism), per-level SAE claim
+  gates, representation-space vs semantic neighbors, cross-model comparison
+  as a readout-alignment diagnostic, and researcher degrees of freedom.
+- **Known limits stated as limits**: the density bootstrap resamples
+  individual states, but layer-token states are highly dependent, so
+  `density_se` understates uncertainty — a lower bound, useful for spotting
+  bandwidth artifacts, not for confidence statements. Block bootstrap,
+  prompt ensembles, structure-preserving nulls, and a pre-specified basin
+  criterion are named as the honest upgrades, and marked unimplemented.
+- **Framing tightened where it overreached**: "trajectories over a semantic
+  manifold" → a projected density terrain (README, site); the pipeline
+  exposes *representation-space* neighborhoods; a basin is a **state
+  concentration region** under the chosen projection and estimator, with
+  "attractor" kept as descriptive geometry and reserved, as a technical
+  claim, for perturbation-stability and recurrence tests the tool does not
+  perform. "What this is — and is not" now opens with the one-sentence
+  boundary and links the contract.
 
 ### Features with names (roadmap M2)
 An SAE's features are indices until something explains them, and an unnamed
