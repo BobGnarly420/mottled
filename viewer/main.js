@@ -752,7 +752,7 @@ function setPickInfo(pick, pinned) {
   }
   if (run.inspector) {
     // Nearest vocabulary tokens to this hidden state (cosine in embedding
-    // space, nearest first) — the explorer's "nearest semantic neighbors",
+    // space, nearest first) — the explorer's representation-space neighbors,
     // resolved at export because the (V, D) embedding matrix dwarfs the
     // scene. Bars echo the top-k rows but read as similarity, not
     // probability, so they are drawn in a muted accent.
