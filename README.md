@@ -6,16 +6,18 @@
 **Interactive latent trajectory explorer for transformer forward passes.**
 
 Mottled (formerly MARBLE) visualizes hidden-state evolution as
-trajectories over a semantic manifold. It is *not* a neuron inspector,
-feature-attribution tool, or explainability dashboard — it instruments
-**latent dynamics**: how the
+trajectories over a projected density terrain. It is *not* a neuron
+inspector, feature-attribution tool, or explainability dashboard — it
+instruments **latent trajectories**: how the
 residual stream moves, turns, and settles as a prompt flows through the
-layers of a transformer.
+layers of a transformer. It is an instrument for *generating* mechanistic
+hypotheses, not for establishing them — the precise inferential contract
+is [docs/validity.md](docs/validity.md).
 
 ```
 Prompt → forward pass → capture residual stream after every block
        → project hidden vectors → estimate local manifold
-       → animate trajectory → expose semantic neighborhoods
+       → animate trajectory → expose representation-space neighborhoods
 ```
 
 ![The Mottled explorer: an A/B prompt scene on the density terrain, with the
@@ -358,7 +360,11 @@ In the explorer this runs by default: the scene pins a callout to the
 density peak (member count, layer range, settle layer, stabilized top-1),
 and the **Why this attractor** inspector panel carries the full explanation
 with the step and entropy profiles. "Attractor" stays descriptive geometry
-— where this run's states accumulate — not a dynamical-systems claim.
+— a **state concentration region**: where this run's projected states
+accumulate under the chosen projection and density estimator — not a
+dynamical-systems claim, which would need perturbation-stability and
+recurrence tests this tool does not perform
+([docs/validity.md](docs/validity.md)).
 
 ```python
 from attractor import analyze, explain
@@ -633,15 +639,37 @@ auto-interp labels as leads). Written agent-first, because sessions here start
 cold and the alternative is asserting from memory. Every claim in it is either
 dated with a command to re-check or marked secondary and cited.
 
+[`docs/validity.md`](docs/validity.md) is its companion: the inferential
+contract — what a Mottled artifact licenses you to claim, the known limits
+of each measurement (including the tool's own, like the i.i.d. density
+bootstrap understating uncertainty on dependent states), and the controls a
+research-grade claim needs on top.
+
 ## What this is — and is not
 
-Mottled visualizes the **geometry of latent dynamics** — where a run's hidden
-states travel and pile up — and measures how much of that geometry survives
-the projection. It is deliberately *not* a proof of mechanism:
+Mottled visualizes the **geometry of a run's latent trajectories** — where
+hidden states travel and pile up — and measures how much of that geometry
+survives the projection. The boundary, in one sentence: *Mottled visualizes
+and quantitatively summarizes representation-space behavior under declared
+analysis choices; it generates mechanistic hypotheses that require
+full-dimensional, controlled, and causally targeted validation.* The full
+inferential contract — what each artifact licenses you to claim, and the
+controls a research-grade claim needs on top — is
+**[docs/validity.md](docs/validity.md)**. The short form:
 
-- A basin shows states **accumulating**, not a circuit **computing**. Attention
+- A basin shows states **accumulating**, not a circuit **computing** — it is
+  a *state concentration region* under the chosen projection and density
+  estimator, and a pattern that only exists in the projection is a pattern
+  about the projection. Attention
   flow and the intervention divergence/faithfulness readouts are *measurements*
-  of what happened, not identified causes.
+  of what happened, not identified causes; a successful steer shows
+  **sufficiency under the tested conditions**, not the mechanism that
+  normally produces the behavior.
+- Logit-lens predictions and entropies are **readout diagnostics** — what
+  the output head would say if pointed at an intermediate state — not
+  evidence the model has "decided" at that layer. Nearest-token lists are
+  **representation-space neighbors**; whether they are *semantic* neighbors
+  is a hypothesis the display does not test.
 - Feature **names** come from Neuronpedia's auto-interp explanations, written
   by a language model reading each feature's top activations. They are
   descriptions of what a feature *correlates with*, not of what it computes,
@@ -662,7 +690,15 @@ the projection. It is deliberately *not* a proof of mechanism:
   a random dictionary (decorative), and now measures as such.
 - Every scene states its **projection fidelity** inline and flags the states
   whose neighborhoods did not survive the flattening, so a low-fidelity picture
-  can't be mistaken for solid structure.
+  can't be mistaken for solid structure. An average fidelity score still does
+  not validate the one salient feature you are looking at — a claim about a
+  specific ridge or basin needs the robustness envelope in
+  [docs/validity.md](docs/validity.md): other seeds, other methods, and
+  agreement with full-dimensional measures.
+- The knobs that make Mottled a good exploratory instrument — projections,
+  estimators, bandwidths, prompts, magnitudes — are researcher degrees of
+  freedom. A picture found by turning them is a hypothesis; confirming it
+  takes held-out prompts and a criterion fixed before looking.
 
 For **verified causal claims** — circuit discovery, path patching, activation
 patching at scale — reach for a dedicated tool
