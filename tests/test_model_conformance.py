@@ -83,7 +83,7 @@ process.stdin.on("data", d => raw += d).on("end", () => {
     if (optional) return null;
     throw new Error("missing weight " + n);
   }};
-  const out = M.forward(weights, p.tokens, p.config, { captureComponents: true });
+  M.forward(weights, p.tokens, p.config, { captureComponents: true }).then(out => {
   process.stdout.write(JSON.stringify({
     hidden: Array.from(out.hidden),
     logits: Array.from(out.logits),
@@ -91,6 +91,7 @@ process.stdin.on("data", d => raw += d).on("end", () => {
     mlp: Array.from(out.components.mlp),
     nLayers: out.nLayers,
   }));
+  }).catch(e => { console.error(e); process.exit(1); });
 });
 """
 

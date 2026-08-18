@@ -163,7 +163,7 @@
    *
    * `weights` supplies flat Float32Arrays by name; a quantised loader is free
    * to dequantise lazily as long as it returns the same shapes. */
-  function forward(weights, tokenIds, config, opts = {}) {
+  async function forward(weights, tokenIds, config, opts = {}) {
     const ops = opts.ops || cpuOps;
     const T = tokenIds.length;
     const D = config.hiddenSize;
@@ -192,36 +192,36 @@
       const p = `layers.${l}.`;
 
       // --- attention block
-      let x = ops.rmsNorm(h, weights.get(p + "input_layernorm"), T, D, eps);
-      let q = ops.matmul(x, weights.get(p + "q_proj"), T, D, nH * headDim);
-      let k = ops.matmul(x, weights.get(p + "k_proj"), T, D, nKv * headDim);
-      const v = ops.matmul(x, weights.get(p + "v_proj"), T, D, nKv * headDim);
+      let x = await ops.rmsNorm(h, weights.get(p + "input_layernorm"), T, D, eps);
+      let q = await ops.matmul(x, weights.get(p + "q_proj"), T, D, nH * headDim);
+      let k = await ops.matmul(x, weights.get(p + "k_proj"), T, D, nKv * headDim);
+      const v = await ops.matmul(x, weights.get(p + "v_proj"), T, D, nKv * headDim);
 
       // Qwen3 normalises each head before the rotation; Llama has no such
       // weights and the step is simply absent.
       const qNorm = weights.get(p + "q_norm", true);
       const kNorm = weights.get(p + "k_norm", true);
-      if (qNorm) q = ops.rmsNorm(q, qNorm, T * nH, headDim, eps);
-      if (kNorm) k = ops.rmsNorm(k, kNorm, T * nKv, headDim, eps);
+      if (qNorm) q = await ops.rmsNorm(q, qNorm, T * nH, headDim, eps);
+      if (kNorm) k = await ops.rmsNorm(k, kNorm, T * nKv, headDim, eps);
 
       q = applyRope(q, nH, T, headDim, cos, sin);
       k = applyRope(k, nKv, T, headDim, cos, sin);
 
       const ctx = attention(q, k, v, T, nH, nKv, headDim);
-      const attnOut = ops.matmul(ctx, weights.get(p + "o_proj"), T, nH * headDim, D);
+      const attnOut = await ops.matmul(ctx, weights.get(p + "o_proj"), T, nH * headDim, D);
 
       if (components) components.attn.set(attnOut, l * T * D);
-      h = ops.add(h, attnOut);
+      h = await ops.add(h, attnOut);
 
       // --- MLP block
-      x = ops.rmsNorm(h, weights.get(p + "post_attention_layernorm"), T, D, eps);
-      const gate = ops.matmul(x, weights.get(p + "gate_proj"), T, D, inter);
-      const up = ops.matmul(x, weights.get(p + "up_proj"), T, D, inter);
-      const act = ops.swiglu(gate, up, T, inter);
-      const mlpOut = ops.matmul(act, weights.get(p + "down_proj"), T, inter, D);
+      x = await ops.rmsNorm(h, weights.get(p + "post_attention_layernorm"), T, D, eps);
+      const gate = await ops.matmul(x, weights.get(p + "gate_proj"), T, D, inter);
+      const up = await ops.matmul(x, weights.get(p + "up_proj"), T, D, inter);
+      const act = await ops.swiglu(gate, up, T, inter);
+      const mlpOut = await ops.matmul(act, weights.get(p + "down_proj"), T, inter, D);
 
       if (components) components.mlp.set(mlpOut, l * T * D);
-      h = ops.add(h, mlpOut);
+      h = await ops.add(h, mlpOut);
 
       hidden.set(h, (l + 1) * T * D);
     }
@@ -229,9 +229,9 @@
     // Final norm + unembedding. The norm is *not* written back into the
     // residual record: `hidden` is the stream as the blocks left it, which is
     // what the logit lens is then applied to per layer.
-    const normed = ops.rmsNorm(h, weights.get("norm"), T, D, eps);
+    const normed = await ops.rmsNorm(h, weights.get("norm"), T, D, eps);
     const head = weights.get("lm_head", true) || embed;   // tied embeddings
-    const logits = ops.matmul(normed, head, T, D, config.vocabSize);
+    const logits = await ops.matmul(normed, head, T, D, config.vocabSize);
 
     return { hidden, logits, components, nLayers: L + 1, nTokens: T, dim: D };
   }
@@ -241,14 +241,14 @@
    * This is a *readout diagnostic*, not evidence the model has committed to a
    * token at that layer — see docs/validity.md. The name says probe, and the
    * viewer labels it that way. */
-  function logitLens(hidden, layer, weights, config, opts = {}) {
+  async function logitLens(hidden, layer, weights, config, opts = {}) {
     const ops = opts.ops || cpuOps;
     const T = opts.nTokens, D = config.hiddenSize;
     const slice = hidden.subarray(layer * T * D, (layer + 1) * T * D);
-    const normed = ops.rmsNorm(slice, weights.get("norm"), T, D,
+    const normed = await ops.rmsNorm(slice, weights.get("norm"), T, D,
                                config.rmsNormEps ?? 1e-6);
     const head = weights.get("lm_head", true) || weights.get("embed_tokens");
-    return ops.matmul(normed, head, T, D, config.vocabSize);
+    return await ops.matmul(normed, head, T, D, config.vocabSize);
   }
 
   return { forward, logitLens, cpuOps, ropeTable, applyRope, attention };

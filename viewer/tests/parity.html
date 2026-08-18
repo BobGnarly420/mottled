@@ -1,0 +1,158 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Mottled — CPU/WebGPU parity</title>
+<style>
+  body { background:#080B18; color:#E6E9F2; font:13px/1.6 ui-monospace,Menlo,monospace;
+         margin:0; padding:32px; }
+  h1 { font-size:15px; font-weight:600; letter-spacing:.02em; margin:0 0 4px; }
+  p  { color:#8B93AB; max-width:64ch; margin:0 0 20px; }
+  table { border-collapse:collapse; margin-top:16px; }
+  th,td { border:1px solid #232842; padding:6px 12px; text-align:left; }
+  th { color:#8B93AB; font-weight:500; }
+  .ok   { color:#4ADE80; }
+  .bad  { color:#F87171; }
+  .warn { color:#FBBF24; }
+  button { background:#4B7CF3; color:#fff; border:0; padding:8px 16px;
+           font:inherit; cursor:pointer; }
+</style>
+
+<h1>CPU / WebGPU parity</h1>
+<p>
+  <code>viewer/model.js</code> is pinned against HuggingFace on the Python side
+  (<code>tests/test_model_conformance.py</code>), but that pins the <em>CPU</em>
+  backend. The WebGPU kernels cannot be executed in a headless CI container, so
+  this page is where they get verified: it runs one forward pass through both
+  backends over identical weights and reports the largest disagreement.
+  Open it on a machine with a GPU. Until it has been run and passed, treat the
+  WebGPU path as unverified.
+</p>
+<button id="run">Run parity check</button>
+<div id="out"></div>
+
+<script src="../model.js"></script>
+<script src="../ops-webgpu.js"></script>
+<script>
+const CONFIG = {
+  hiddenSize: 64, numLayers: 3, numHeads: 8, numKvHeads: 4, headDim: 8,
+  intermediateSize: 128, vocabSize: 96, rmsNormEps: 1e-6, ropeTheta: 10000.0,
+};
+
+function randomWeights(cfg, seed = 1) {
+  // xorshift so a failure is reproducible rather than a different random model
+  // every reload.
+  let s = seed >>> 0;
+  const rnd = () => {
+    s ^= s << 13; s >>>= 0; s ^= s >> 17; s ^= s << 5; s >>>= 0;
+    return (s / 4294967296) * 2 - 1;
+  };
+  const fill = (n, scale = 0.08) =>
+    Float32Array.from({ length: n }, () => rnd() * scale);
+
+  const D = cfg.hiddenSize, I = cfg.intermediateSize;
+  const qd = cfg.numHeads * cfg.headDim, kd = cfg.numKvHeads * cfg.headDim;
+  const store = new Map([
+    ["embed_tokens", fill(cfg.vocabSize * D)],
+    ["norm", fill(D, 0.1).map((v) => v + 1)],
+    ["lm_head", fill(cfg.vocabSize * D)],
+  ]);
+  for (let l = 0; l < cfg.numLayers; l++) {
+    const p = `layers.${l}.`;
+    store.set(p + "q_proj", fill(qd * D));
+    store.set(p + "k_proj", fill(kd * D));
+    store.set(p + "v_proj", fill(kd * D));
+    store.set(p + "o_proj", fill(D * qd));
+    store.set(p + "gate_proj", fill(I * D));
+    store.set(p + "up_proj", fill(I * D));
+    store.set(p + "down_proj", fill(D * I));
+    store.set(p + "input_layernorm", fill(D, 0.1).map((v) => v + 1));
+    store.set(p + "post_attention_layernorm", fill(D, 0.1).map((v) => v + 1));
+  }
+  return { get: (n, optional) => store.get(n) ?? (optional ? null : (() => {
+    throw new Error("missing weight " + n);
+  })()) };
+}
+
+const maxAbsDiff = (a, b) => {
+  let m = 0;
+  for (let i = 0; i < a.length; i++) m = Math.max(m, Math.abs(a[i] - b[i]));
+  return m;
+};
+const relDiff = (a, b) => {
+  let num = 0, den = 1e-30;
+  for (let i = 0; i < a.length; i++) {
+    num = Math.max(num, Math.abs(a[i] - b[i]));
+    den = Math.max(den, Math.abs(a[i]));
+  }
+  return num / den;
+};
+
+document.getElementById("run").onclick = async () => {
+  const out = document.getElementById("out");
+  out.innerHTML = "<p>running…</p>";
+  const rows = [];
+
+  let gpu;
+  try {
+    gpu = await MottledOpsWebGPU.create();
+  } catch (e) {
+    out.innerHTML = `<p class="bad">${e.message}</p>
+      <p>WebGPU is required. Chrome/Edge 113+ on a machine with a GPU.</p>`;
+    return;
+  }
+
+  const weights = randomWeights(CONFIG);
+  const tokens = [3, 17, 42, 8, 25, 60, 11];
+
+  const t0 = performance.now();
+  const cpu = await MottledModel.forward(weights, tokens, CONFIG,
+    { captureComponents: true });
+  const tCpu = performance.now() - t0;
+
+  const t1 = performance.now();
+  const web = await MottledModel.forward(weights, tokens, CONFIG,
+    { ops: gpu, captureComponents: true });
+  const tGpu = performance.now() - t1;
+
+  // f32 kernels accumulate in a different order than the CPU loop, so parity
+  // is a tolerance, not bit-equality. 1e-3 relative over a 3-layer stack is
+  // comfortably tighter than anything that would move a top-1 readout.
+  const TOL = 1e-3;
+  const check = (label, a, b) => {
+    const rel = relDiff(a, b);
+    rows.push([label, maxAbsDiff(a, b).toExponential(2), rel.toExponential(2),
+               rel <= TOL]);
+  };
+
+  check("hidden (all layers)", cpu.hidden, web.hidden);
+  check("logits", cpu.logits, web.logits);
+  check("attn writes", cpu.components.attn, web.components.attn);
+  check("mlp writes", cpu.components.mlp, web.components.mlp);
+
+  const argmax = (arr, n, v) => {
+    const out = [];
+    for (let t = 0; t < n; t++) {
+      let best = 0;
+      for (let i = 1; i < v; i++) if (arr[t * v + i] > arr[t * v + best]) best = i;
+      out.push(best);
+    }
+    return out;
+  };
+  const sameTop1 = JSON.stringify(argmax(cpu.logits, tokens.length, CONFIG.vocabSize))
+    === JSON.stringify(argmax(web.logits, tokens.length, CONFIG.vocabSize));
+
+  const pass = rows.every((r) => r[3]) && sameTop1;
+  out.innerHTML = `
+    <p class="${pass ? "ok" : "bad"}">${pass ? "PASS — the WebGPU backend agrees with the CPU reference."
+      : "FAIL — the backends disagree beyond tolerance."}</p>
+    <table>
+      <tr><th>quantity</th><th>max |Δ|</th><th>relative</th><th>within 1e-3</th></tr>
+      ${rows.map((r) => `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td>
+        <td class="${r[3] ? "ok" : "bad"}">${r[3] ? "yes" : "no"}</td></tr>`).join("")}
+      <tr><td>top-1 readout identical</td><td colspan="2">—</td>
+          <td class="${sameTop1 ? "ok" : "bad"}">${sameTop1 ? "yes" : "no"}</td></tr>
+    </table>
+    <p>CPU ${tCpu.toFixed(0)} ms · WebGPU ${tGpu.toFixed(0)} ms
+       (this model is far too small for the GPU to win; the kernels exist for
+       real weights, where the CPU path stops being usable).</p>`;
+};
+</script>
