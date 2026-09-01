@@ -44,7 +44,46 @@ def main(argv: list[str] | None = None) -> int:
                                "in readout space (the vocabulary the models share), "
                                "since they share no hidden space.")
 
+    p_weights = sub.add_parser(
+        "export-weights",
+        help="write a model as .mwt so the web viewer can run it in-browser")
+    p_weights.add_argument("model", help="HuggingFace model id or local path")
+    p_weights.add_argument("-o", "--output", default=None,
+                           help="default: <model name>.mwt")
+    p_weights.add_argument("--quant", default="q8", choices=["q8", "f16", "f32"],
+                           help="q8 = per-output-row int8 (default, smallest); "
+                                "norms and the embedding table stay f32 either way")
+    p_weights.add_argument("--no-tokenizer", action="store_true",
+                           help="omit the id->piece table used to label states")
+
     args = parser.parse_args(argv)
+
+    if args.command == "export-weights":
+        import mweights
+
+        try:
+            import transformers
+        except ImportError:
+            print("export-weights needs transformers: "
+                  'pip install "mottled[models]"', file=sys.stderr)
+            return 1
+
+        out = Path(args.output or f"{args.model.split('/')[-1]}.mwt")
+        model = transformers.AutoModelForCausalLM.from_pretrained(args.model)
+        tok = None
+        if not args.no_tokenizer:
+            tok = transformers.AutoTokenizer.from_pretrained(args.model)
+
+        header = mweights.export_model(model, model.config, out,
+                                       quant=args.quant, tokenizer=tok)
+        size = out.stat().st_size
+        cfg = header["config"]
+        print(f"{out}  {size / 1e6:.1f} MB  ({args.quant})", file=sys.stderr)
+        print(f"  {cfg['numLayers']} layers x {cfg['hiddenSize']}, "
+              f"vocab {cfg['vocabSize']}"
+              f"{', tied embeddings' if cfg['tiedEmbeddings'] else ''}",
+              file=sys.stderr)
+        return 0
 
     if args.command == "serve":
         from serve import run_server
