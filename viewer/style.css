@@ -55,6 +55,15 @@ button:active { transform: translateY(1px); }
   border-radius: var(--radius-sm); padding: 5px 8px; font: inherit; }
 #capture-row textarea:focus { outline: none; border-color: var(--color-accent); }
 #capture-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+#model-row { margin-top: 10px; border-top: 1px solid var(--color-border);
+             padding-top: 10px; }
+#model-row input { width: 100%; background: var(--color-surface-1);
+                   color: var(--color-text); border: 1px solid var(--color-border);
+                   padding: 5px 7px; font: inherit; font-size: 12px; }
+#model-row input:focus { outline: none; border-color: var(--color-accent); }
+#model-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+#modelStatus { flex: 1; overflow: hidden; text-overflow: ellipsis;
+               white-space: nowrap; }
 
 #runs-panel { top: 12px; right: 12px; min-width: 220px; max-width: 320px; }
 .panel-head { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;

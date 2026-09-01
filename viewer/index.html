@@ -18,6 +18,14 @@
     <input id="fileInput" type="file" accept=".mtj" hidden>
     <span class="dim hint">or drag a .mtj anywhere</span>
   </div>
+  <div id="model-row">
+    <input id="modelUrl" type="text" spellcheck="false"
+      placeholder="model URL (.mwt or .gguf) — or drop one in">
+    <div id="model-actions">
+      <button id="modelBtn">Load model</button>
+      <span id="modelStatus" class="dim hint mono"></span>
+    </div>
+  </div>
   <div id="capture-row" hidden>
     <textarea id="capturePrompts" rows="2"
       placeholder="one prompt per line"></textarea>
@@ -56,6 +64,13 @@
 
 <script src="mtj.js"></script>
 <script src="bvh.js"></script>
+<script src="scene.js"></script>
+<script src="model.js"></script>
+<script src="tokenizer.js"></script>
+<script src="weights.js"></script>
+<script src="gguf.js"></script>
+<script src="ops-webgpu.js"></script>
+<script src="capture.js"></script>
 <script src="main.js"></script>
 </body>
 </html>

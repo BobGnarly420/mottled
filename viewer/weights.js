@@ -103,7 +103,13 @@
     };
   }
 
-  async function fetchModel(url, onProgress) {
+  /* Download to an ArrayBuffer, reporting progress.
+   *
+   * Separate from `fetchModel` because the caller may not know yet which
+   * reader the bytes need — a `.mwt` and a GGUF are told apart by their magic,
+   * and at these sizes deciding that by fetching twice is not an option.
+   */
+  async function fetchBuffer(url, onProgress) {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
 
@@ -111,7 +117,7 @@
     // than looking hung; falls back to arrayBuffer() where streams or the
     // length header are unavailable.
     const total = Number(res.headers.get("content-length")) || 0;
-    if (!res.body || !onProgress) return open(await res.arrayBuffer());
+    if (!res.body || !onProgress) return res.arrayBuffer();
 
     const reader = res.body.getReader();
     const chunks = [];
@@ -126,8 +132,12 @@
     const merged = new Uint8Array(received);
     let at = 0;
     for (const c of chunks) { merged.set(c, at); at += c.length; }
-    return open(merged.buffer);
+    return merged.buffer;
   }
 
-  return { open, fetchModel, parseHeader, f16to32 };
+  async function fetchModel(url, onProgress) {
+    return open(await fetchBuffer(url, onProgress));
+  }
+
+  return { open, fetchModel, fetchBuffer, parseHeader, f16to32 };
 });

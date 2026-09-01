@@ -198,18 +198,37 @@ def export_model(model, config, path, *, quant: str = "q8", tokenizer=None) -> d
 
 
 def _tokenizer_record(tokenizer) -> dict:
-    """The vocabulary, as text the viewer can label states with.
+    """Everything `viewer/tokenizer.js` needs to encode a typed prompt.
 
-    Only what a *readout* needs travels: the id -> piece table. Encoding a
-    prompt still happens through the real tokenizer (server-side, or a
-    tokenizer shipped alongside); shipping a decode table is what lets the
-    inspector name a token without pretending to re-implement BPE.
+    The id -> piece table alone only supports *labelling* states. A live
+    viewer has to go the other way too — text to ids — so the merge ranks and
+    the added tokens travel with it. Merges are the bulk of this (Qwen3 has
+    ~151k), but they are short strings and compress well over the wire, and
+    without them a prompt cannot be tokenized in the page at all.
     """
     vocab = tokenizer.get_vocab()
     pieces = [""] * (max(vocab.values()) + 1)
     for piece, idx in vocab.items():
         pieces[idx] = piece
-    return {"pieces": pieces, "size": len(pieces)}
+
+    record = {"pieces": pieces, "size": len(pieces)}
+
+    backend = getattr(tokenizer, "backend_tokenizer", None)
+    if backend is not None:
+        spec = json.loads(backend.to_str())
+        model = spec.get("model", {})
+        if model.get("type") == "BPE":
+            # Normalise both published shapes ("a b" and ["a", "b"]) to pairs;
+            # the JS accepts either, but one shape in the file is simpler.
+            record["merges"] = [
+                m if isinstance(m, list) else m.split(" ", 1)
+                for m in model.get("merges", [])
+            ]
+        record["addedTokens"] = [
+            {"content": a["content"], "id": a["id"]}
+            for a in spec.get("added_tokens", [])
+        ]
+    return record
 
 
 def read_header(path) -> dict:
