@@ -9,7 +9,7 @@ import pytest
 
 import statefile as F
 from config import MarbleConfig
-from models import synthetic
+import tiny as synthetic
 from ui import run_scene
 
 PROMPT = "the capital of france is"
@@ -106,8 +106,8 @@ def test_reader_ignores_unknown_fields(tmp_path, traj):
 # -------------------------------------------------------------------- scenes
 @pytest.fixture(scope="module")
 def scene_result():
-    cfg = MarbleConfig(model="synthetic", use_cache=False, density_bootstrap=8)
-    return run_scene(cfg, [PROMPT, "the capital of germany is"])
+    cfg = MarbleConfig(model="tiny", use_cache=False, density_bootstrap=8)
+    return run_scene(cfg, [PROMPT, "the capital of germany is"], **synthetic.mt())
 
 
 def test_scene_roundtrip(tmp_path, scene_result):
@@ -143,8 +143,8 @@ def test_scene_carries_uncertainty_layers(tmp_path, scene_result):
 
 
 def test_scene_without_bootstrap_omits_se(tmp_path):
-    cfg = MarbleConfig(model="synthetic", use_cache=False, density_bootstrap=0)
-    result = run_scene(cfg, [PROMPT])
+    cfg = MarbleConfig(model="tiny", use_cache=False, density_bootstrap=0)
+    result = run_scene(cfg, [PROMPT], **synthetic.mt())
     buf = io.BytesIO()
     F.save_scene(result, buf)
     buf.seek(0)
@@ -167,8 +167,8 @@ def test_scene_contains_no_hidden_states(tmp_path, scene_result):
 def test_scene_from_single_run_pipeline(tmp_path):
     from ui import run_pipeline
 
-    cfg = MarbleConfig(model="synthetic", use_cache=False)
-    result = run_pipeline(cfg, PROMPT)
+    cfg = MarbleConfig(model="tiny", use_cache=False)
+    result = run_pipeline(cfg, PROMPT, **synthetic.mt())
     buf = io.BytesIO()
     F.save_scene(result, buf)
     buf.seek(0)
@@ -183,8 +183,8 @@ def test_scene_carries_sae_feature_layer(tmp_path):
     import sae as S
     from ui import attach_features, run_scene
 
-    cfg = MarbleConfig(model="synthetic", use_cache=False, density_bootstrap=0)
-    result = run_scene(cfg, [PROMPT, "the capital of germany is"])
+    cfg = MarbleConfig(model="tiny", use_cache=False, density_bootstrap=0)
+    result = run_scene(cfg, [PROMPT, "the capital of germany is"], **synthetic.mt())
     sae = S.demo_sae(result["traj"].dim, 32, seed=4)
     attach_features(result, sae, source="test/repo", hook="blocks.8.hook_resid_pre")
 
@@ -202,7 +202,7 @@ def test_scene_carries_sae_feature_layer(tmp_path):
         acts = sae.encode(traj.hidden)
         assert np.array_equal(feats["top_id"], acts.argmax(axis=-1))
 
-    plain = run_scene(cfg, [PROMPT])
+    plain = run_scene(cfg, [PROMPT], **synthetic.mt())
     F.save_scene(plain, path)
     assert "features" not in F.load_scene(path)["runs"][0]
 
@@ -217,8 +217,8 @@ def test_scene_carries_inspector_layers(tmp_path):
     from neighbors import TokenNeighbors
     from pipeline import attach_inspector
 
-    cfg = MarbleConfig(model="synthetic", use_cache=False, density_bootstrap=0)
-    result = attach_inspector(run_scene(cfg, [PROMPT]), n_neighbors=5)
+    cfg = MarbleConfig(model="tiny", use_cache=False, density_bootstrap=0)
+    result = attach_inspector(run_scene(cfg, [PROMPT], **synthetic.mt()), n_neighbors=5)
     path = tmp_path / "scene.mtj"
     F.save_scene(result, path)
     run = F.load_scene(path)["runs"][0]
@@ -244,19 +244,19 @@ def test_scene_carries_inspector_layers(tmp_path):
 
 
 def test_scene_without_inspector_is_unchanged(tmp_path):
-    cfg = MarbleConfig(model="synthetic", use_cache=False, density_bootstrap=0)
+    cfg = MarbleConfig(model="tiny", use_cache=False, density_bootstrap=0)
     path = tmp_path / "plain.mtj"
-    F.save_scene(run_scene(cfg, [PROMPT]), path)
+    F.save_scene(run_scene(cfg, [PROMPT], **synthetic.mt()), path)
     assert "inspector" not in F.load_scene(path)["runs"][0]
 
 
 def test_attach_inspector_skips_runs_without_the_source_data(tmp_path):
     """A run captured without components (or without an embedding matrix)
     contributes what it has instead of failing the whole export."""
-    from models import synthetic
+    import tiny as synthetic
     from pipeline import _assemble_scene, attach_inspector
 
-    cfg = MarbleConfig(model="synthetic", use_cache=False, density_bootstrap=0)
+    cfg = MarbleConfig(model="tiny", use_cache=False, density_bootstrap=0)
     plain = synthetic.capture(PROMPT)              # no components captured
     result = {"prompts": [PROMPT], "prompt": PROMPT, **_assemble_scene(cfg, [plain])}
     attach_inspector(result)

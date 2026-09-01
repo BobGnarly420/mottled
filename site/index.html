@@ -32,7 +32,7 @@
 <header class="hero">
   <div class="overline"><span class="overline-rule" aria-hidden="true"></span>Latent dynamics instrumentation</div>
   <h1>Interactive <em>latent trajectory</em> explorer for transformer forward passes.</h1>
-  <p class="hero-lede">Mottled instruments latent dynamics — how the residual stream moves, turns, and settles as a prompt flows through the layers of a transformer. It is not a neuron inspector or an attribution dashboard: hidden-state evolution is drawn as animated trajectories over a semantic density terrain, with a logit-lens readout at every state.</p>
+  <p class="hero-lede">Mottled instruments latent dynamics — how the residual stream moves, turns, and settles as a prompt flows through the layers of a transformer. It is not a neuron inspector or an attribution dashboard: hidden-state evolution is drawn as animated trajectories over a projected density terrain, with a logit-lens readout at every state.</p>
   <div class="hero-ctas">
     <a class="btn btn-primary" href="viewer/?file=samples/scene-abc.mtj">Launch viewer <span aria-hidden="true">&rarr;</span></a>
     <a class="btn btn-ghost" href="https://github.com/BobGnarly420/mottled">View source on GitHub</a>
@@ -47,7 +47,7 @@
       <span class="panel-meta">streamlit run ui.py</span>
     </figcaption>
     <img src="assets/explorer.png" alt="The Mottled explorer: an A/B prompt scene on the density terrain, with the layer scrubber and the token inspector" width="1600" height="900">
-    <figcaption class="panel-caption">The Streamlit explorer with an A/B overlay &mdash; &ldquo;The capital of France is&rdquo; against &ldquo;The capital of Germany is&rdquo; &mdash; marbles at layer 12, inspector showing the final token&rsquo;s predictions and semantic neighbors.</figcaption>
+    <figcaption class="panel-caption">The Streamlit explorer with an A/B overlay &mdash; &ldquo;The capital of France is&rdquo; against &ldquo;The capital of Germany is&rdquo; &mdash; marbles at layer 12, inspector showing the final token&rsquo;s predictions and representation-space neighbors.</figcaption>
   </figure>
   <figure class="panel">
     <figcaption class="panel-bar">
@@ -71,7 +71,7 @@
     <div class="card">
       <span class="card-index">02</span>
       <h3>Density terrain</h3>
-      <p>Hidden states are projected onto a semantic manifold and animated over a density terrain, with a layer scrubber and per-state semantic neighbors.</p>
+      <p>Hidden states are projected to a low-dimensional plane and animated over a density terrain, with a layer scrubber and per-state representation-space neighbors.</p>
     </div>
     <div class="card">
       <span class="card-index">03</span>
@@ -105,7 +105,7 @@
       <div class="diagram-head">Producers</div>
       <div class="node">transformers capture<span class="node-meta">hooks on every block</span></div>
       <div class="node">Mamba<span class="node-meta">state-space &mdash; no attention at all</span></div>
-      <div class="node">synthetic generator<span class="node-meta">deterministic, no torch</span></div>
+      <div class="node">in-browser forward pass<span class="node-meta">WebGPU, no server</span></div>
       <div class="node node-future">future: diffusion &middot; recordings</div>
     </div>
     <div class="diagram-flow" aria-hidden="true"><span>&rarr;</span></div>
@@ -133,7 +133,7 @@
       <div class="panel-bar"><span class="panel-label">Explorer</span><span class="panel-meta">Python 3</span></div>
       <pre><code>pip install -r requirements.txt
 streamlit run ui.py</code></pre>
-      <p class="code-note">The default synthetic backend needs no model download. Select a HuggingFace model for real captures.</p>
+      <p class="code-note">Every capture is a real model; <code>gpt2</code> is the default because it is the smallest honest one. The web viewer can also run a model in the browser.</p>
     </div>
     <div class="code-panel">
       <div class="panel-bar"><span class="panel-label">Web viewer</span><span class="panel-meta">any static server</span></div>

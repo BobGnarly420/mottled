@@ -28,7 +28,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Real transformer captures (the synthetic producer needs none of these).
+# Real transformer captures. Optional only because a viewer, an analysis or a
+# .mtj consumer needs none of it — capture does.
 models = ["torch>=2.1", "transformers>=4.44"]
 umap = ["umap-learn>=0.5"]
 faiss = ["faiss-cpu>=1.7"]

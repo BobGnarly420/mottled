@@ -6,27 +6,30 @@
 **Interactive latent trajectory explorer for transformer forward passes.**
 
 Mottled (formerly MARBLE) visualizes hidden-state evolution as
-trajectories over a semantic manifold. It is *not* a neuron inspector,
-feature-attribution tool, or explainability dashboard — it instruments
-**latent dynamics**: how the
+trajectories over a projected density terrain. It is *not* a neuron
+inspector, feature-attribution tool, or explainability dashboard — it
+instruments **latent trajectories**: how the
 residual stream moves, turns, and settles as a prompt flows through the
-layers of a transformer.
+layers of a transformer. It is an instrument for *generating* mechanistic
+hypotheses, not for establishing them — the precise inferential contract
+is [docs/validity.md](docs/validity.md).
 
 ```
 Prompt → forward pass → capture residual stream after every block
        → project hidden vectors → estimate local manifold
-       → animate trajectory → expose semantic neighborhoods
+       → animate trajectory → expose representation-space neighborhoods
 ```
 
 ![The Mottled explorer: an A/B prompt scene on the density terrain, with the
 layer scrubber and the token inspector](docs/images/explorer.png)
 *The Streamlit explorer with an A/B overlay — "The capital of France is" vs
 "The capital of Germany is" — marbles at layer 12, inspector showing the
-final token's predictions and semantic neighbors.*
+final token's predictions and representation-space neighbors.*
 
 **Live demo:** [bobgnarly420.github.io/mottled](https://bobgnarly420.github.io/mottled/) —
-landing page plus the web viewer with bundled sample scenes (synthetic and
-real GPT-2), no install required.
+landing page plus the web viewer with bundled sample scenes (real GPT-2 and
+Qwen captures), no install required — and, with a model loaded in the page,
+live capture in the browser.
 
 ## Quickstart
 
@@ -42,12 +45,14 @@ mottled export "The residual stream" --generate 8 -o decode.mtj   # + continuati
 
 Enter a prompt (e.g. `The capital of France is`), pick a model, press
 **Run capture**. You get an animated hidden-state trajectory over a density
-terrain, semantic neighbors, entropy evolution, and a layer scrubber.
+terrain, representation-space neighbors, entropy evolution, and a layer
+scrubber.
 
-The default `synthetic` backend needs no model download (or even torch) —
-it generates deterministic, realistic trajectories so you can explore the
-tool instantly. Select a HuggingFace model (Qwen / Llama / Mistral / Gemma /
-GPT-2) for real captures.
+Every capture is a real model. `gpt2` is the default because it is the
+smallest honest one; select any of Qwen / Llama / Mistral / Gemma from the
+sidebar. The web viewer can also run a model **in the browser** — see
+[Capture in the browser](#capture-in-the-browser) — so the hosted demo is a
+live instrument rather than a gallery of pre-baked captures.
 
 ### Self-portrait
 
@@ -170,7 +175,7 @@ Mamba (state-space)   ─┼─►  StateTrajectory  ─► .mtj  ───┼�
 TransformerLens       ─┤    (in memory)      (on disk)   ├─ Jupyter (render() is a
 API logprobs          ─┤                                 │  plain Plotly figure)
   (degraded)          ─┤                                 └─ future: desktop app
-synthetic generator   ─┘
+in-browser (WebGPU)   ─┘
 future: diffusion, neuro recordings
 ```
 
@@ -182,8 +187,8 @@ dependencies. Full-fidelity trajectory files round-trip a capture; compact
 trajectories, terrain, inspector stats) so a viewer only has to draw.
 
 Transformers are one producer (`models/families.py` resolves
-Qwen/Llama/Mistral/Gemma/GPT-2/NeoX layouts structurally); the synthetic
-generator (`models/synthetic.py`) is another; **Mamba** — a state-space
+Qwen/Llama/Mistral/Gemma/GPT-2/NeoX layouts structurally); the browser's own
+forward pass (`viewer/model.js`) is another; **Mamba** — a state-space
 model with no attention at all — is the proof the abstraction is not
 transformer-shaped: its `backbone.layers` layout resolves structurally and
 block capture + logit lens work unchanged (captures that don't apply, like
@@ -223,7 +228,12 @@ density, terrain, metrics, comparison, every viewer) works unchanged.
 | `crossmodel.py` | Comparison *across* models: readout space (the shared vocabulary as a shared coordinate system), depth-normalised divergence, and CKA layer alignment that reports whether it is identified |
 | `sae.py` | Sparse-autoencoder features: apply (never train) an SAE to every captured state; demo dictionary + npz interchange |
 | `statefile.py` | `.mtj` interchange: save/load full StateTrajectories and viewer-ready scene bundles ([format spec](docs/mtj-format.md)) |
+| `mweights.py` | `.mwt` export: a model's weights in a form the browser can fetch (per-output-row int8 by default) |
 | `viewer/` | Self-contained WebGL viewer for `.mtj` scenes — no build step, no dependencies |
+| `viewer/model.js` | Instrumented Llama/Qwen3-family forward pass in the browser — records the residual stream after every block (pinned against HF) |
+| `viewer/scene.js` | The scene pipeline (projection → density → terrain → drape) in JS, so a scene can be built with no server |
+| `viewer/weights.js` / `viewer/gguf.js` | Weight readers: `.mwt`, and GGUF including the ternary (1.58-bit) builds |
+| `viewer/ops-webgpu.js` | WebGPU kernels behind the same `ops` contract the CPU reference implements |
 | `serve.py` | Optional stdlib capture backend: serves the viewer + a JSON API so the browser can generate scenes |
 | `cli.py` | `mottled` console commands: explorer (default), `serve`, `export` |
 | `site/` | Static landing page (deployed with the viewer to GitHub Pages) |
@@ -254,8 +264,8 @@ Edits: `Perturb` (push a state — the grab gesture), `SetState`, `InjectNoise`
 (seeded), `FreezeLayer` (skip a block's update). Multiple interventions compose
 in one pass. `divergence(baseline, branch)` measures where a branch separates
 (state-space profile + the layer the top-1 prediction flips) — a measurement,
-not a claimed cause. Interventions require a torch model; the synthetic backend
-is analytic and not resumable.
+not a claimed cause. Interventions require a torch model: the forward pass has
+to be resumable from an edited state.
 
 Steering directions come from **data, not magic numbers**:
 `direction_from_token(traj, id)` is a token's own (un)embedding axis and
@@ -293,8 +303,8 @@ In the UI, fill in **Prompt B** and run: both trajectories are drawn on a
 single terrain built from the union of states (B dashed), with the comparison
 metrics and the per-layer A–B distance in the inspector.
 `ui.run_compare(cfg, prompt_a, prompt_b)` is the programmatic entry point.
-Everything is backend-agnostic — a synthetic run and the comparison stack work
-without torch; the runs only need the same layer count and hidden dimension.
+Everything is backend-agnostic — the comparison stack never touches a model,
+only trajectories; the runs need the same layer count and hidden dimension.
 
 ### SAE features & residual decomposition
 
@@ -304,8 +314,7 @@ additive writes to the residual stream.  For pre-norm architectures
 (Llama-style, GPT-2, NeoX) the decomposition is exact:
 `hidden[l+1] = hidden[l] + attn[l] + mlp[l]` (pinned by tests).
 `metrics.component_shares` turns it into a per-layer attention-vs-MLP
-balance, and the UI plots it in the inspector.  The synthetic backend emits
-an analogous exact decomposition, so the whole path works without torch.
+balance, and the UI plots it in the inspector.
 
 `sae.py` applies sparse autoencoders to trajectories — it never trains them.
 An SAE is four plain numpy arrays (`w_enc`, `b_enc`, `w_dec`, `b_dec`).
@@ -358,7 +367,11 @@ In the explorer this runs by default: the scene pins a callout to the
 density peak (member count, layer range, settle layer, stabilized top-1),
 and the **Why this attractor** inspector panel carries the full explanation
 with the step and entropy profiles. "Attractor" stays descriptive geometry
-— where this run's states accumulate — not a dynamical-systems claim.
+— a **state concentration region**: where this run's projected states
+accumulate under the chosen projection and density estimator — not a
+dynamical-systems claim, which would need perturbation-stability and
+recurrence tests this tool does not perform
+([docs/validity.md](docs/validity.md)).
 
 ```python
 from attractor import analyze, explain
@@ -411,7 +424,7 @@ attention pattern (`StateTrajectory.attention`, `(L-1, T, T)`; the eager
 attention path is forced so the matrix actually materialises).  The renderer
 can draw **attention flow** — edges from each token's state to the states it
 reads from at the selected layer — and the inspector lists the top attended
-tokens.  The synthetic backend generates a causal, deterministic analog.
+tokens.
 
 `ui.run_intervention(cfg, prompt, edits, model, tokenizer)` is interactive
 patching: the baseline and a perturb-and-replay branch (`intervene.py`)
@@ -459,6 +472,51 @@ zero build step; producers in other languages only need to follow
 form — type prompts, press Capture, and the scene is generated server-side
 and streamed back as `.mtj`. On plain static hosting (GitHub Pages) the
 form simply never appears.
+
+### Capture in the browser
+
+The web viewer used to only *draw* scenes — building one needed Python, so
+the hosted demo could show captures somebody else had made and nothing else.
+The forward pass, the scene pipeline and the weights now all exist
+client-side, so the page can run a real open-weight model itself.
+
+The hard part is not inference, it is **instrumentation**: Mottled needs the
+residual stream after every block, and no chat-oriented runtime exposes that.
+So `viewer/model.js` implements the forward pass rather than borrowing one —
+Llama/Qwen3 family (RMSNorm, rotary, grouped-query attention, SwiGLU, with
+Qwen3's per-head q/k norms optional) — recording `hidden[0]` as the embedding
+stream and `hidden[l+1] = hidden[l] + attn[l] + mlp[l]`, the same layout
+`capture.py` produces. It is pinned against HuggingFace's own outputs on
+locally-built models (`tests/test_model_conformance.py`), because a
+reimplementation is only worth having if it is *the same computation*.
+
+```bash
+mottled export-weights Qwen/Qwen3-0.6B -o qwen3-0.6b.mwt   # ~598 MB at q8
+```
+
+Weights arrive two ways. `.mwt` (`mweights.py` → `viewer/weights.js`) is the
+same container idea as `.mtj` — magic, JSON header, raw little-endian buffers
+— with per-output-row int8 and lazy dequantisation. `viewer/gguf.js` reads
+GGUF as the open-weight world actually publishes it, **including the ternary
+(1.58-bit) builds** that make a 4B model a ~1 GB download instead of an 8 GB
+one; its TQ1_0/TQ2_0 unpacking is checked byte-for-byte against the `gguf`
+package's own dequantiser, since a block layout that is *almost* right yields
+a model that runs and quietly predicts nonsense.
+
+`viewer/scene.js` then builds the scene — joint PCA, KDE, terrain, draping —
+matching the Python modules numerically, the way `bvh.js` matches `bvh.py`.
+`viewer/ops-webgpu.js` supplies WGSL kernels behind the same `ops` contract
+the CPU reference implements, so there is one forward pass and the GPU is an
+accelerator rather than a second source of truth.
+
+**What is not verified:** the WebGPU kernels' arithmetic needs a GPU, which
+CI does not have. `viewer/tests/parity.html` runs both backends over
+identical weights in a real browser and reports the largest disagreement —
+until that has been run and passed, treat the WebGPU path as unverified. CI
+checks the shaders' bindings against the code that binds them, which catches
+the one-side-edited failure, not the maths. Still missing before the live
+viewer is end to end: BPE **encode** in JS (a GGUF carries its own tokenizer
+and `gguf.js` exposes it — the algorithm is unwritten) and the capture UI.
 
 ### Interaction layer
 
@@ -633,15 +691,37 @@ auto-interp labels as leads). Written agent-first, because sessions here start
 cold and the alternative is asserting from memory. Every claim in it is either
 dated with a command to re-check or marked secondary and cited.
 
+[`docs/validity.md`](docs/validity.md) is its companion: the inferential
+contract — what a Mottled artifact licenses you to claim, the known limits
+of each measurement (including the tool's own, like the i.i.d. density
+bootstrap understating uncertainty on dependent states), and the controls a
+research-grade claim needs on top.
+
 ## What this is — and is not
 
-Mottled visualizes the **geometry of latent dynamics** — where a run's hidden
-states travel and pile up — and measures how much of that geometry survives
-the projection. It is deliberately *not* a proof of mechanism:
+Mottled visualizes the **geometry of a run's latent trajectories** — where
+hidden states travel and pile up — and measures how much of that geometry
+survives the projection. The boundary, in one sentence: *Mottled visualizes
+and quantitatively summarizes representation-space behavior under declared
+analysis choices; it generates mechanistic hypotheses that require
+full-dimensional, controlled, and causally targeted validation.* The full
+inferential contract — what each artifact licenses you to claim, and the
+controls a research-grade claim needs on top — is
+**[docs/validity.md](docs/validity.md)**. The short form:
 
-- A basin shows states **accumulating**, not a circuit **computing**. Attention
+- A basin shows states **accumulating**, not a circuit **computing** — it is
+  a *state concentration region* under the chosen projection and density
+  estimator, and a pattern that only exists in the projection is a pattern
+  about the projection. Attention
   flow and the intervention divergence/faithfulness readouts are *measurements*
-  of what happened, not identified causes.
+  of what happened, not identified causes; a successful steer shows
+  **sufficiency under the tested conditions**, not the mechanism that
+  normally produces the behavior.
+- Logit-lens predictions and entropies are **readout diagnostics** — what
+  the output head would say if pointed at an intermediate state — not
+  evidence the model has "decided" at that layer. Nearest-token lists are
+  **representation-space neighbors**; whether they are *semantic* neighbors
+  is a hypothesis the display does not test.
 - Feature **names** come from Neuronpedia's auto-interp explanations, written
   by a language model reading each feature's top activations. They are
   descriptions of what a feature *correlates with*, not of what it computes,
@@ -662,7 +742,15 @@ the projection. It is deliberately *not* a proof of mechanism:
   a random dictionary (decorative), and now measures as such.
 - Every scene states its **projection fidelity** inline and flags the states
   whose neighborhoods did not survive the flattening, so a low-fidelity picture
-  can't be mistaken for solid structure.
+  can't be mistaken for solid structure. An average fidelity score still does
+  not validate the one salient feature you are looking at — a claim about a
+  specific ridge or basin needs the robustness envelope in
+  [docs/validity.md](docs/validity.md): other seeds, other methods, and
+  agreement with full-dimensional measures.
+- The knobs that make Mottled a good exploratory instrument — projections,
+  estimators, bandwidths, prompts, magnitudes — are researcher degrees of
+  freedom. A picture found by turning them is a hypothesis; confirming it
+  takes held-out prompts and a criterion fixed before looking.
 
 For **verified causal claims** — circuit discovery, path patching, activation
 patching at scale — reach for a dedicated tool
@@ -705,7 +793,10 @@ research tool.
 - **Next** — desktop shell, volumetric field rendering for ensembles, SAE
   feature flows across layers, feature field in the web viewer, richer
   scene management (pin/hide runs, saved scenes), diffusion / recording
-  producers.
+  producers; an **analysis-manifest export** (the full parameterization —
+  projection, estimator, bandwidth, seeds, model and SAE artifact hashes —
+  as one citable, timestamped record), so the reproducibility norms in
+  [docs/validity.md](docs/validity.md) have an affordance, not just advice.
 
 ## License
 

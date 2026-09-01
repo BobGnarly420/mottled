@@ -2,6 +2,89 @@
 
 ## Unreleased
 
+### The synthetic backend is gone
+`models/synthetic.py` generated plausible-looking trajectories analytically.
+It made the whole stack runnable without torch, and it was also the reason
+much of the suite was testing the pipeline against numbers no transformer
+produces. With the browser able to run a real model, it has no remaining job.
+
+- **Deleted**, along with its dispatch in `capture`, `serve`, `ui`,
+  `pipeline` and `intervene`. `MODEL_CHOICES` and every default now name a
+  real model (`gpt2`, as the smallest honest one).
+- **The suite runs on tiny locally-built Llamas** (`tests/tiny.py`) — real
+  hooks, real logit lens, real attention, an exactly reconciling residual
+  decomposition — with a word-level tokenizer so a "token" still means what
+  the assertions assume. Offline, and no slower in practice.
+- Two assertions turned out to have been testing the *fixture*, and are now
+  honest about it: `entropy_collapse > 0` held only because the synthetic
+  logits sharpened with depth by construction (it now pins the metric's
+  definition instead), and `identified().all()` in the CKA alignment held
+  only because synthetic took large steps between layers — in a small model
+  consecutive layers genuinely cannot be resolved, which is precisely what
+  `identified()` exists to report.
+- `scene-abc.mtj` and `single.mtj` — the viewer's and the site's default
+  scenes — were synthetic. They are regenerated as real GPT-2 captures, so
+  every bundled sample is now a real model.
+- `render._continuation_text` decided how to join decode tokens from the
+  backend *name*; it now decides from the pieces, since the distinction is
+  the tokenizer's and either kind can come from any backend.
+
+### Capture in the browser: the viewer runs the model
+Until now the web viewer only *drew* scenes — producing one needed Python,
+so the live demo could ship pre-baked samples or nothing. The forward pass,
+the scene pipeline and the weights now all exist client-side, which makes
+the hosted viewer a place you can run a real open-weight model rather than a
+gallery of captures someone else made.
+
+- **`viewer/model.js`** — an instrumented Llama/Qwen3-family forward pass
+  (RMSNorm, rotary, grouped-query attention, SwiGLU, optional Qwen3 q/k
+  norms). No chat runtime exposes per-layer activations, so the pass is
+  implemented rather than borrowed: it records `hidden[0]` as the embedding
+  stream and `hidden[l+1] = hidden[l] + attn[l] + mlp[l]`, the layout
+  `capture.py` already produces. Pinned against HuggingFace's own outputs on
+  locally-built models — per-layer states, logits including argmax, the exact
+  decomposition, and causality, across GQA/MHA/tied-embedding configurations.
+- **`viewer/scene.js`** — the Python scene pipeline (projection → density →
+  terrain → drape) ported, since an in-browser producer has no server to ask.
+  Dual/Gram PCA, so cost scales with the number of states rather than the
+  model's width, and component signs follow scikit-learn's `svd_flip` so a
+  browser-built scene is not a mirrored one. Conformance-tested against the
+  Python modules, the way `bvh.js` is against `bvh.py`.
+- **`viewer/ops-webgpu.js`** — four WGSL kernels behind the same `ops`
+  contract the CPU reference implements, so there is one forward pass and the
+  GPU path is an accelerator, never a second source of truth. `forward()` is
+  async and awaits each op; awaiting a plain value is a no-op, so the CPU path
+  is unchanged. **The kernels' arithmetic is not verified by CI** — that needs
+  a GPU. `viewer/tests/parity.html` runs both backends over identical weights
+  in a real browser and reports the largest disagreement; until it has been
+  run, the WebGPU path is unverified and the page says so. What CI does check
+  is that each shader's bindings and entry point match what `dispatch()`
+  supplies, which is the failure mode where one side is edited alone.
+- **`.mwt` weights** (`mweights.py` + `viewer/weights.js` +
+  `mottled export-weights`) — a container shaped like `.mtj`, with per-output-
+  row int8 by default and lazy dequantisation. Qwen3-0.6B lands at ~598 MB.
+- **`viewer/gguf.js`** — reads GGUF as published, including the ternary
+  (1.58-bit) builds that make a 4B model a ~1 GB download instead of 8 GB.
+  F32/F16/Q8_0/TQ1_0/TQ2_0; any other ggml type throws by name rather than
+  mis-reading bytes. Checked against the `gguf` package's own dequantiser
+  byte-exactly, plus a test of the defining ternary property so a shared
+  misconception could not pass silently.
+
+Three bugs measurement caught that review would not have:
+- A tied model still lists `lm_head.weight` in its state dict, sharing storage
+  with the embedding table — writing both shipped the same matrix twice
+  (~156 MB on Qwen3-0.6B).
+- Keeping the embedding table at f32 "because Mottled reads neighbours out of
+  it" cost 622 MB at Qwen3's vocab width, making the small model a *larger*
+  download than the 4B one. It is quantised now, with a test that the
+  neighbour ranking the inspector shows survives it.
+- The `.mwt` data section was unaligned, so a reader taking a typed-array view
+  worked or threw depending on how many bytes the JSON happened to occupy.
+
+Not yet done, so the live viewer is not end-to-end: BPE **encode** in JS (a
+GGUF carries its own tokenizer and `gguf.js` exposes it; the algorithm is
+unwritten), and the viewer UI that drives capture.
+
 ### Layer-wise persistence profile for injected directions
 `divergence()` says where a branch separates; `component_shares` says who
 writes each layer. The new instrument combines them: is an injected effect
@@ -22,6 +105,20 @@ writes each layer. The new instrument combines them: is an injected effect
   drop-and-return in the effect can be read against the block that might
   have rebuilt it. Attached by `run_intervention` for directional steers
   whenever the baseline carries the residual decomposition.
+### The inferential contract (docs/validity.md)
+The tool's central research-validity risk — an attractive within-run
+visualization mistaken for evidence of a model mechanism — now has a
+dedicated answer instead of scattered caveats.
+- **`docs/validity.md`**: what each Mottled artifact licenses you to claim,
+  from the projection robustness envelope through the SAE claim gates to
+  researcher degrees of freedom — including the tool's own known limits
+  (the i.i.d. density bootstrap understates uncertainty on dependent
+  states; the honest upgrades are named and marked unimplemented).
+- **Framing tightened to match**: a basin is a *state concentration region*
+  under the chosen projection and estimator; "semantic manifold" is gone
+  from README and site; neighbors are labeled *representation-space*
+  neighbors everywhere; the explorer and README's "What this is — and is
+  not" open with the one-sentence boundary and link the contract.
 
 ### Features with names (roadmap M2)
 An SAE's features are indices until something explains them, and an unnamed

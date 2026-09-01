@@ -12,8 +12,7 @@ from dataclasses import asdict, dataclass, field
 DEFAULT_PROMPT = "The capital of France is"
 
 # Model families the transformers backend has been exercised against share
-# the Llama-style module layout (Qwen / Llama / Mistral / Gemma).  "synthetic"
-# is a dependency-free backend used for tests, demos and UI development.
+# the Llama-style module layout (Qwen / Llama / Mistral / Gemma).
 # Verified end-to-end (capture + logit lens + attention + exact residual
 # decomposition). Qwen2.5-1.5B is the default *modern* reference: GQA, RoPE,
 # SwiGLU, RMSNorm, 29 layers x 1536 — nothing like GPT-2's 2019 design, and
@@ -24,13 +23,12 @@ DEFAULT_PROMPT = "The capital of France is"
 # which is what M2's real-feature work depends on — not because it is the
 # ceiling.
 MODEL_CHOICES = [
-    "synthetic",
+    "gpt2",
     "Qwen/Qwen2.5-0.5B-Instruct",
     "Qwen/Qwen2.5-1.5B-Instruct",
     "meta-llama/Llama-3.2-1B",      # gated: needs an accepted licence
     "mistralai/Mistral-7B-v0.3",
     "google/gemma-2-2b",            # gated: needs an accepted licence
-    "gpt2",
 ]
 
 PROJECTION_CHOICES = ["pca", "umap"]
@@ -41,7 +39,7 @@ TRAJECTORY_MODES = ["all_tokens", "token", "mean", "cls"]
 @dataclass
 class MarbleConfig:
     # model / capture
-    model: str = "synthetic"
+    model: str = "gpt2"
     device: str = "auto"          # "auto" | "cpu" | "cuda" | "mps"
     dtype: str = "float32"
     keep_logits: bool = True      # keep full logit-lens logits (float16)

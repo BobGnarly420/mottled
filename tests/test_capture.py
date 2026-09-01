@@ -10,6 +10,7 @@ transformers = pytest.importorskip("transformers")
 
 from capture import HookCapture, capture, logit_lens  # noqa: E402
 from models.families import resolve_family  # noqa: E402
+import tiny as synthetic
 
 VOCAB_SIZE = 128
 PROMPT = "the capital of france is"
@@ -89,14 +90,14 @@ def test_logit_lens_final_layer_matches_model(tiny_llama):
     assert torch.allclose(lens[-1], out.logits[0].float(), atol=1e-4)
 
 
-def test_synthetic_backend_shapes():
-    traj = capture("synthetic", PROMPT, top_k=5)
+def test_tiny_backend_shapes():
+    traj = synthetic.capture(PROMPT, top_k=5)
     traj.validate()
     assert traj.n_tokens == len(PROMPT.split())
     assert traj.n_layers > 1
     assert traj.entropy is not None and np.isfinite(traj.entropy).all()
     # deterministic per prompt
-    again = capture("synthetic", PROMPT, top_k=5)
+    again = synthetic.capture(PROMPT, top_k=5)
     assert np.array_equal(traj.hidden, again.hidden)
 
 

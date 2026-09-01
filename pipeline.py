@@ -34,7 +34,7 @@ def run_pipeline(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) -> 
     """Execute the full Mottled pipeline and return every artifact.
 
     `model`/`tokenizer` may be pre-loaded objects (the UI caches them); when
-    omitted, `cfg.model` is loaded by name ("synthetic" needs no loading).
+    omitted, `cfg.model` is loaded by name.
     """
     disk = cache_mod.DiskCache(cfg.cache_dir) if cfg.use_cache else None
     key = cache_mod.make_key("pipeline-v6", prompt, cfg.model, cfg.projection,
@@ -272,7 +272,7 @@ def attach_features(result: dict, sae, source: str | None = None,
 def attach_inspector(result: dict, n_neighbors: int = 5) -> dict:
     """Precompute the inspector layers a scene file cannot recover on its own.
 
-    The explorer can show semantic neighbors and the attention/MLP split
+    The explorer can show representation-space neighbors and the attention/MLP split
     because it still holds the embedding matrix (V x D) and the residual
     components (2 x (L-1) x T x D) in memory. A scene file carries neither —
     they are orders of magnitude larger than everything else in it — so the
@@ -336,7 +336,7 @@ def run_model_scene(cfg: MarbleConfig, prompt: str, models: list,
     coordinate system, so joint projection, the terrain, and every viewer
     work unchanged.
 
-    `models` are names (or "synthetic"); `loaded` optionally maps a name to a
+    `models` are hub names; `loaded` optionally maps a name to a
     preloaded (model, tokenizer) pair. The result carries the usual scene
     keys plus `model_names`, `shared_vocab`, and `model_comparisons` (each
     model measured against the first).

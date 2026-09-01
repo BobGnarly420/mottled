@@ -5,7 +5,7 @@ import pytest
 
 import metrics as M
 import sae as S
-from models import synthetic
+import tiny as synthetic
 
 PROMPT = "the capital of france is"
 
@@ -317,8 +317,8 @@ def test_render_feature_field_modes():
     from config import MarbleConfig
     from ui import render_feature_field, run_pipeline
 
-    cfg = MarbleConfig(model="synthetic", use_cache=False)
-    result = run_pipeline(cfg, PROMPT)
+    cfg = MarbleConfig(model="tiny", use_cache=False)
+    result = run_pipeline(cfg, PROMPT, **synthetic.mt())
     traj = result["traj"]
     assert hasattr(result["projector"], "inverse_transform")
     sae = S.demo_sae(traj.dim, 64)
@@ -344,7 +344,7 @@ def test_streamlit_app_feature_field():
     at = app_test(default_timeout=120)
     at.run()
     at.text_area(key="prompt").set_value(PROMPT)
-    at.selectbox(key="model").select("synthetic")
+    at.selectbox(key="model").select("gpt2")
     at.checkbox(key="sae_field").check()
     at.button(key="run").click()
     at.run()
@@ -355,7 +355,7 @@ def test_streamlit_app_feature_field():
 
 
 # ----------------------------------------------- residual decomposition
-def test_synthetic_components_sum_to_updates():
+def test_tiny_components_sum_to_updates():
     traj = synthetic.capture(PROMPT, capture_components=True)
     traj.validate()
     comps = traj.components
@@ -434,8 +434,8 @@ def test_pipeline_and_overlay_render():
     from config import MarbleConfig
     from ui import render, run_pipeline
 
-    cfg = MarbleConfig(model="synthetic", use_cache=False)
-    result = run_pipeline(cfg, PROMPT)
+    cfg = MarbleConfig(model="tiny", use_cache=False)
+    result = run_pipeline(cfg, PROMPT, **synthetic.mt())
     traj = result["traj"]
     assert traj.components is not None  # capture_components defaults on
 
@@ -460,7 +460,7 @@ def test_streamlit_app_sae_overlay():
     at = app_test(default_timeout=120)
     at.run()
     at.text_area(key="prompt").set_value(PROMPT)
-    at.selectbox(key="model").select("synthetic")
+    at.selectbox(key="model").select("gpt2")
     at.checkbox(key="sae_overlay").check()
     at.button(key="run").click()
     at.run()

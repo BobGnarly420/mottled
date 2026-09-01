@@ -752,7 +752,7 @@ function setPickInfo(pick, pinned) {
   }
   if (run.inspector) {
     // Nearest vocabulary tokens to this hidden state (cosine in embedding
-    // space, nearest first) — the explorer's "nearest semantic neighbors",
+    // space, nearest first) — the explorer's representation-space neighbors,
     // resolved at export because the (V, D) embedding matrix dwarfs the
     // scene. Bars echo the top-k rows but read as similarity, not
     // probability, so they are drawn in a muted accent.
@@ -961,7 +961,17 @@ window.addEventListener("drop", (e) => {
   e.preventDefault();
   dragDepth = 0; ui.dropShade.hidden = true;
   const f = e.dataTransfer.files && e.dataTransfer.files[0];
-  if (f) loadBlob(f, f.name);
+  if (!f) return;
+  // Weights and scenes both arrive by drop. Dispatch on the name rather than
+  // trying a scene parse first: a 600 MB model failing as "corrupt scene" is
+  // a confusing way to learn you dropped the right file in the right place.
+  if (/\.(mwt|gguf)$/i.test(f.name)) {
+    f.arrayBuffer()
+      .then((buf) => useModelBuffer(buf, f.name))
+      .catch((err) => setModelStatus(`could not read ${f.name}: ${err.message}`, true));
+  } else {
+    loadBlob(f, f.name);
+  }
 });
 
 // ---------------------------------------------------------------- loading
@@ -988,6 +998,118 @@ async function loadURL(url, quiet) {
     return false;
   }
 }
+
+// ------------------------------------------------- in-browser capture
+// The viewer can run the model itself: weights (.mwt or .gguf) are loaded
+// into the page, the prompt is tokenized here, and the forward pass, the
+// projection and the terrain are all computed client-side. The result is the
+// same object MTJ.loadScene produces, so nothing below setScene knows the
+// difference between a captured scene and a loaded file.
+const local = { weights: null, ops: null, name: null };
+
+function setModelStatus(text, isError) {
+  const el = document.getElementById("modelStatus");
+  el.textContent = text;
+  el.classList.toggle("err", !!isError);
+}
+
+/* Prefer WebGPU, fall back to the CPU reference. The CPU path is the one
+ * pinned against HuggingFace, so falling back is a slowdown, never a
+ * correctness change -- but it is slow enough on a real model to be worth
+ * saying out loud rather than letting the user wonder. */
+async function chooseOps() {
+  if (typeof MottledOpsWebGPU === "undefined") return { ops: null, note: "cpu" };
+  try {
+    return { ops: await MottledOpsWebGPU.create(), note: "webgpu" };
+  } catch (err) {
+    console.warn("WebGPU unavailable, using the CPU reference:", err.message);
+    return { ops: null, note: "cpu (no WebGPU)" };
+  }
+}
+
+async function useModelBuffer(buf, name) {
+  const isGGUF = new DataView(buf).getUint32(0, true) === 0x46554747;
+  local.weights = isGGUF ? MottledGGUF.open(buf) : MottledWeights.open(buf);
+  local.name = name;
+  const { ops, note } = await chooseOps();
+  local.ops = ops;
+
+  const c = local.weights.config;
+  const hasTok = !!local.weights.tokenizer;
+  setModelStatus(
+    `${name} — ${c.numLayers}x${c.hiddenSize}, vocab ${c.vocabSize}, ${note}` +
+    (hasTok ? "" : " — no tokenizer: prompts cannot be encoded"), !hasTok);
+
+  document.getElementById("capture-row").hidden = false;
+  document.getElementById("captureModel").textContent = `model: ${name}`;
+  document.getElementById("captureBtn").disabled = !hasTok;
+}
+
+async function loadModelURL(url) {
+  const btn = document.getElementById("modelBtn");
+  btn.disabled = true;
+  try {
+    setModelStatus(`fetching ${url}…`);
+    // One download; `useModelBuffer` picks the reader from the magic. These
+    // files run to hundreds of megabytes, so fetching twice to decide the
+    // format is not an option.
+    const buf = await MottledWeights.fetchBuffer(url, (got, total) => {
+      const mb = (got / 1e6).toFixed(0);
+      setModelStatus(total
+        ? `downloading ${url} — ${mb} / ${(total / 1e6).toFixed(0)} MB ` +
+          `(${((got / total) * 100).toFixed(0)}%)`
+        : `downloading ${url} — ${mb} MB`);
+    });
+    await useModelBuffer(buf, url.split("/").pop());
+  } catch (err) {
+    setModelStatus(`could not load ${url}: ${err.message}`, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function captureLocally(prompts) {
+  const btn = document.getElementById("captureBtn");
+  btn.disabled = true;
+  const label = btn.textContent;
+  try {
+    const scene = await MottledCapture.capture(local.weights, prompts, {
+      ops: local.ops,
+      modelName: local.name,
+      onProgress: (phase, a, b, run) => {
+        btn.textContent = phase === "readout"
+          ? `Readout ${a}/${b}` : phase === "forward"
+          ? `Forward ${a + 1}/${b}` : "Building scene";
+        // Let the button actually repaint between layers.
+        return new Promise((r) => setTimeout(r, 0));
+      },
+    });
+    setScene(scene);
+  } catch (err) {
+    showMessage(`capture failed: ${err.message}`, true);
+    console.warn(err);
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
+}
+
+(function wireLocalCapture() {
+  const btn = document.getElementById("modelBtn");
+  const input = document.getElementById("modelUrl");
+  btn.addEventListener("click", () => {
+    const url = input.value.trim();
+    if (url) loadModelURL(url);
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") btn.click();
+  });
+  document.getElementById("captureBtn").addEventListener("click", () => {
+    if (!local.weights) return;   // the server path binds its own handler
+    const prompts = document.getElementById("capturePrompts").value
+      .split("\n").map((s) => s.trim()).filter(Boolean);
+    if (prompts.length) captureLocally(prompts);
+  });
+})();
 
 // Capture backend (serve.py) discovery: when /api/health answers, the
 // browser can generate new scenes directly instead of only loading files.

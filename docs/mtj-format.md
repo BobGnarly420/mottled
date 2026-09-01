@@ -1,7 +1,7 @@
 # The `.mtj` format — Mottled Trajectory interchange, version 1
 
 `StateTrajectory` is the center of Mottled: producers (transformer capture,
-synthetic generator, future Mamba / diffusion / neuroscience recorders) emit
+the browser's own forward pass, future diffusion / neuroscience recorders) emit
 one, and viewers (the Streamlit app, the web viewer, notebooks) consume one.
 `.mtj` is the stable on-disk form of that abstraction, designed to be
 trivially parseable from any language — a JSON manifest plus raw

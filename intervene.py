@@ -17,8 +17,8 @@ Supported edits (transformer backend):
 
 All are applied by write-hooks during a single forward pass (`capture._run`),
 so the model resumes from the edited residual and every downstream layer sees
-the consequence.  Interventions require a real (torch) model; the synthetic
-backend is analytic and not resumable.
+the consequence.  Interventions require a torch model: the forward pass has
+to be resumable from an edited state.
 
 Fork semantics: `intervene(...)` returns a branch; `baseline` (an unperturbed
 capture) plus one or more branches are what the UI overlays and diffs.
@@ -135,11 +135,8 @@ def intervene(
 
     Returns a StateTrajectory whose `meta["interventions"]` records the edits
     and `meta["counterfactual"]` is True.  Requires a torch model (a HF
-    instance with `tokenizer`, or a hub name); "synthetic" is not resumable.
+    instance with `tokenizer`, or a hub name).
     """
-    if isinstance(model, str) and model == "synthetic":
-        raise ValueError("the synthetic backend is analytic and not resumable; "
-                         "interventions require a torch model")
     if not interventions:
         raise ValueError("no interventions given; use capture() for a baseline pass")
 
@@ -246,7 +243,7 @@ def direction_from_contrast(pos, neg, layer: int, token: int = -1,
     that do vs. don't exhibit a behavior). The direction is the difference of
     the groups' mean hidden state at `(layer, token)` — the classic
     activation-steering construction. Backend-agnostic: it reads only
-    `hidden`, so it works on synthetic runs too.
+    `hidden`, so it works on any producer's runs.
     """
     pos_t, neg_t = _as_trajectories(pos), _as_trajectories(neg)
 
@@ -485,7 +482,7 @@ def persistence_profile(model, prompt: str, direction: np.ndarray,
     control shift toward `target`) at *each* layer from `inject_layer` to the
     final one, pairing every layer with the baseline pass's attention/MLP
     write shares from `metrics.component_shares`. Requires a torch model
-    (inherited from `intervene`; the synthetic backend is not resumable).
+    (inherited from `intervene`: the forward pass must be resumable).
 
     `baseline` is captured (with `capture_components=True`) if not supplied;
     a supplied baseline must carry the residual decomposition. `branch` — the

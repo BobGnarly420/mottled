@@ -7,7 +7,7 @@ divergence profiles (`metrics.branch_divergence` is the pointwise seed).
 
 Everything here is a *measurement* over trajectories — nothing touches
 transformer internals, so any backend that produces a StateTrajectory
-(transformers, synthetic, future substrates) is comparable, and every
+(transformers, closed-model logprobs, future substrates) is comparable, and every
 distance works in any coordinate space: full hidden space or projected
 coordinates.  The two runs must come from the same substrate (same layer
 count and hidden dimension) for states to be commensurable.
