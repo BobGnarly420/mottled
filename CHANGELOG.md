@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Layer-wise persistence profile for injected directions
+`divergence()` says where a branch separates; `component_shares` says who
+writes each layer. The new instrument combines them: is an injected effect
+*carried* by the residual stream, or *rebuilt* by later layers?
+- `intervene.persistence_profile(model, prompt, direction, inject_layer,
+  target, tokenizer)` applies one directional steer plus the norm-matched
+  random control (the `faithfulness()` construction, unchanged) and reads
+  the effect toward the target at **every** layer from the injection down,
+  pairing each with the baseline's attention/MLP write shares from
+  `metrics.component_shares`. The final record *is* `faithfulness()`'s
+  scoring — `target_logit_shift` gained a `layer` argument (default: final,
+  as before) so the profile generalizes the old readout instead of
+  reimplementing it. Same framing as `Divergence`: a measurement of what
+  happened downstream, not a claimed cause.
+- The explorer gains an **Injection persistence** panel next to the
+  intervention divergence: `render.render_persistence` charts the effect by
+  layer with the MLP write-share overlaid on a secondary axis, so a
+  drop-and-return in the effect can be read against the block that might
+  have rebuilt it. Attached by `run_intervention` for directional steers
+  whenever the baseline carries the residual decomposition.
+
 ### Features with names (roadmap M2)
 An SAE's features are indices until something explains them, and an unnamed
 feature overlay is a colour with no meaning.
