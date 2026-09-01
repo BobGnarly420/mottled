@@ -12,3 +12,9 @@ transformers>=4.44
 umap-learn>=0.5
 faiss-cpu>=1.7
 pytest>=7.4
+# Reference quantiser for the GGUF conformance tests: viewer/gguf.js is
+# checked against this package's own dequantiser rather than against a
+# reading of the spec. Without it those tests skip, and the ternary block
+# layouts go unverified — which is the whole point of having them.
+# Pure Python over numpy/pyyaml/requests/tqdm; it adds nothing heavy.
+gguf>=0.10
