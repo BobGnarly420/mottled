@@ -6,8 +6,9 @@ layer 0), then applies the logit lens (final norm + LM head) to every
 captured state to obtain per-layer, per-token logits / entropy / top-k.
 
 The result is a StateTrajectory — the only thing downstream modules see.
-Transformers are just one backend; `model="synthetic"` routes to the
-dependency-free generator in models/synthetic.py.
+Transformers are one backend among several; any producer that emits a
+StateTrajectory (models/logprobs.py, models/hooked.py, Mamba) plugs in the
+same way.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import numpy as np
 
 from trajectory import StateTrajectory
 
-try:  # torch/transformers are optional: the synthetic backend needs neither.
+try:  # torch/transformers are optional: not every producer needs them.
     import torch
 
     HAS_TORCH = True
@@ -26,7 +27,9 @@ except ImportError:  # pragma: no cover
 
 def _require_torch():
     if not HAS_TORCH:
-        raise ImportError("torch is required for transformer capture; use model='synthetic' otherwise")
+        raise ImportError(
+            "torch is required for transformer capture: "
+            'pip install "mottled[models]"')
 
 
 def resolve_device(device: str = "auto") -> str:
@@ -218,8 +221,8 @@ def capture(
 ) -> StateTrajectory:
     """Run a forward pass and capture the residual stream at every layer.
 
-    `model` may be a HF model instance (with `tokenizer` supplied), a HF hub
-    name, or the string "synthetic".  Returns hidden[layer][token][dimension]
+    `model` may be a HF model instance (with `tokenizer` supplied) or a HF hub
+    name.  Returns hidden[layer][token][dimension]
     wrapped in a StateTrajectory with logit-lens statistics attached.
 
     `capture_components=True` also records each block's attention and MLP
@@ -227,13 +230,6 @@ def capture(
     `capture_attention=True` records each block's head-averaged attention
     pattern (L-1, T, T) in `StateTrajectory.attention`.
     """
-    if isinstance(model, str) and model == "synthetic":
-        from models import synthetic
-
-        return synthetic.capture(prompt, top_k=top_k, keep_logits=keep_logits,
-                                 capture_components=capture_components,
-                                 capture_attention=capture_attention)
-
     _require_torch()
     return _run(model, prompt, tokenizer=tokenizer, top_k=top_k, device=device,
                 dtype=dtype, keep_logits=keep_logits,
@@ -275,15 +271,6 @@ def generate_and_capture(
     per step (no KV cache) — transparent and exact, sized for the short
     continuations Mottled visualizes, not for bulk generation.
     """
-    if isinstance(model, str) and model == "synthetic":
-        from models import synthetic
-
-        return synthetic.generate_and_capture(
-            prompt, max_new_tokens=max_new_tokens, temperature=temperature,
-            seed=seed, top_k=top_k, keep_logits=keep_logits,
-            capture_components=capture_components,
-            capture_attention=capture_attention)
-
     _require_torch()
     if isinstance(model, str):
         model, tokenizer = load_model(model, device=device, dtype=dtype)

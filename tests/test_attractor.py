@@ -5,7 +5,7 @@ import numpy as np
 import attractor as A
 import density as D
 import projection as P
-from models import synthetic
+import tiny as synthetic
 
 PROMPT = "the capital of france is"
 
@@ -117,8 +117,8 @@ def test_render_flags_low_fidelity_states_on_the_scene():
     from projection import ProjectionQuality
     from ui import render, run_pipeline
 
-    cfg = MarbleConfig(model="synthetic", use_cache=False)
-    result = run_pipeline(cfg, PROMPT)
+    cfg = MarbleConfig(model="tiny", use_cache=False)
+    result = run_pipeline(cfg, PROMPT, **synthetic.mt())
     traj = result["traj"]
     shape = (traj.n_layers, traj.n_tokens)
 
@@ -190,8 +190,8 @@ def test_render_pins_the_basin_annotation():
     from config import MarbleConfig
     from ui import render, run_pipeline
 
-    cfg = MarbleConfig(model="synthetic", use_cache=False)
-    result = run_pipeline(cfg, PROMPT)
+    cfg = MarbleConfig(model="tiny", use_cache=False)
+    result = run_pipeline(cfg, PROMPT, **synthetic.mt())
     r = A.analyze(result["traj"], result["coords"], result["landscape"])
     fig = render(result["traj"], result["mesh"], result["trajectories"],
                  result["fine_paths"], basin=r)

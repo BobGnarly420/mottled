@@ -34,7 +34,7 @@ def run_pipeline(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) -> 
     """Execute the full Mottled pipeline and return every artifact.
 
     `model`/`tokenizer` may be pre-loaded objects (the UI caches them); when
-    omitted, `cfg.model` is loaded by name ("synthetic" needs no loading).
+    omitted, `cfg.model` is loaded by name.
     """
     disk = cache_mod.DiskCache(cfg.cache_dir) if cfg.use_cache else None
     key = cache_mod.make_key("pipeline-v6", prompt, cfg.model, cfg.projection,
@@ -336,7 +336,7 @@ def run_model_scene(cfg: MarbleConfig, prompt: str, models: list,
     coordinate system, so joint projection, the terrain, and every viewer
     work unchanged.
 
-    `models` are names (or "synthetic"); `loaded` optionally maps a name to a
+    `models` are hub names; `loaded` optionally maps a name to a
     preloaded (model, tokenizer) pair. The result carries the usual scene
     keys plus `model_names`, `shared_vocab`, and `model_comparisons` (each
     model measured against the first).

@@ -5,7 +5,7 @@ import pytest
 
 import compare as C
 from config import MarbleConfig
-from models import synthetic
+import tiny as synthetic
 from projection import project, project_joint
 from ui import render, run_compare
 
@@ -146,13 +146,13 @@ def test_compare_requires_commensurable_runs():
 # ------------------------------------------------------------------ pipeline
 @pytest.fixture(scope="module")
 def cfg(tmp_path_factory):
-    return MarbleConfig(model="synthetic", use_cache=True,
+    return MarbleConfig(model="tiny", use_cache=True,
                         cache_dir=str(tmp_path_factory.mktemp("cache")))
 
 
 @pytest.fixture(scope="module")
 def result(cfg):
-    return run_compare(cfg, PROMPT_A, PROMPT_B)
+    return run_compare(cfg, PROMPT_A, PROMPT_B, **synthetic.mt())
 
 
 def test_compare_pipeline_artifacts(cfg, result):
@@ -170,7 +170,7 @@ def test_compare_pipeline_artifacts(cfg, result):
 
 
 def test_compare_pipeline_cache_roundtrip(cfg, result):
-    again = run_compare(cfg, PROMPT_A, PROMPT_B)
+    again = run_compare(cfg, PROMPT_A, PROMPT_B, **synthetic.mt())
     assert np.array_equal(again["coords"], result["coords"])
     assert np.array_equal(again["coords_b"], result["coords_b"])
 
@@ -203,7 +203,7 @@ def test_streamlit_app_compare_mode():
     at.run()
     at.text_area(key="prompt").set_value(PROMPT_A)
     at.text_area(key="prompt_b").set_value(PROMPT_B)
-    at.selectbox(key="model").select("synthetic")
+    at.selectbox(key="model").select("gpt2")
     at.button(key="run").click()
     at.run()
     assert not at.exception

@@ -115,8 +115,8 @@ The honest upgrades, in order of strength:
 - A **prompt ensemble** drawn from a declared corpus and distribution, so
   the terrain estimates something beyond the run that built it.
 - **Null comparisons** that preserve sequence length and layer structure:
-  matched random prompts, shuffled token assignments, synthetic
-  random-walk controls (the synthetic backend is a ready null generator).
+  matched random prompts, shuffled token assignments, or synthetic
+  random-walk controls generated to match the run's shape.
 - A **pre-specified operational criterion** for calling something a basin —
   threshold, null distribution, effect size — declared before looking.
 

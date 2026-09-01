@@ -36,9 +36,13 @@ def _continuation_text(meta: dict) -> str:
     """Human-readable decoded continuation from meta["generation"]."""
     steps = meta.get("generation", {}).get("steps", [])
     toks = [str(s.get("token", "")) for s in steps]
-    # synthetic tokens are bare words; BPE/SentencePiece pieces carry their
-    # own leading spaces after _clean_token
-    joined = " ".join(toks) if meta.get("backend") == "synthetic" else "".join(toks)
+    # Subword pieces carry their own leading space after _clean_token, so they
+    # concatenate; word-level tokenizers emit bare words that need one put
+    # back. Decided from the pieces themselves rather than from the backend
+    # name: the distinction is the tokenizer's, and one backend can be driven
+    # with either kind.
+    bare = all(tok and not tok[:1].isspace() for tok in toks)
+    joined = " ".join(toks) if bare and len(toks) > 1 else "".join(toks)
     return joined.strip()
 
 

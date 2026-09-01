@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from config import MarbleConfig
-from models import synthetic
+import tiny as synthetic
 from ui import render, run_compare, run_intervention, run_scene
 
 PROMPTS = ["the capital of france is",
@@ -13,7 +13,7 @@ PROMPTS = ["the capital of france is",
 
 
 # ------------------------------------------------------------ attention
-def test_synthetic_attention_is_causal_stochastic():
+def test_tiny_attention_is_causal_stochastic():
     traj = synthetic.capture(PROMPTS[0], capture_attention=True)
     traj.validate()
     L, T, _ = traj.hidden.shape
@@ -65,13 +65,13 @@ def test_torch_attention_capture_matches_reference():
 # ------------------------------------------------------------------ scenes
 @pytest.fixture(scope="module")
 def cfg(tmp_path_factory):
-    return MarbleConfig(model="synthetic", use_cache=True,
+    return MarbleConfig(model="tiny", use_cache=True,
                         cache_dir=str(tmp_path_factory.mktemp("cache")))
 
 
 @pytest.fixture(scope="module")
 def scene(cfg):
-    return run_scene(cfg, PROMPTS)
+    return run_scene(cfg, PROMPTS, **synthetic.mt())
 
 
 def test_scene_artifacts(cfg, scene):
@@ -92,9 +92,9 @@ def test_scene_artifacts(cfg, scene):
 
 
 def test_scene_cache_roundtrip_and_compare_alias(cfg, scene):
-    again = run_scene(cfg, PROMPTS)
+    again = run_scene(cfg, PROMPTS, **synthetic.mt())
     assert np.array_equal(again["coords_list"][2], scene["coords_list"][2])
-    pair = run_compare(cfg, PROMPTS[0], PROMPTS[1])
+    pair = run_compare(cfg, PROMPTS[0], PROMPTS[1], **synthetic.mt())
     assert pair["traj_b"] is pair["trajs"][1]
     assert pair["comparison"] is pair["comparisons"][0]
     assert pair["prompt_b"] == PROMPTS[1]
@@ -102,7 +102,7 @@ def test_scene_cache_roundtrip_and_compare_alias(cfg, scene):
 
 def test_scene_requires_prompts(cfg):
     with pytest.raises(ValueError):
-        run_scene(cfg, [])
+        run_scene(cfg, [], **synthetic.mt())
 
 
 def test_render_scene_runs(cfg, scene):
@@ -125,7 +125,7 @@ def test_render_scene_runs(cfg, scene):
 
 
 def test_render_attention_flow(cfg):
-    result = run_scene(cfg, [PROMPTS[0]])
+    result = run_scene(cfg, [PROMPTS[0]], **synthetic.mt())
     traj = result["traj"]
     assert traj.attention is not None  # cfg.capture_attention defaults on
 
@@ -181,7 +181,7 @@ def test_streamlit_app_scene_mode():
     at.run()
     at.text_area(key="prompt").set_value(PROMPTS[0])
     at.text_area(key="prompt_b").set_value(PROMPTS[1] + "\n" + PROMPTS[2])
-    at.selectbox(key="model").select("synthetic")
+    at.selectbox(key="model").select("gpt2")
     at.checkbox(key="attention_flow").check()
     at.button(key="run").click()
     at.run()

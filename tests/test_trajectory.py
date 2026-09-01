@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from models import synthetic
+import tiny as synthetic
 from trajectory import StateTrajectory, densify, extract
 
 

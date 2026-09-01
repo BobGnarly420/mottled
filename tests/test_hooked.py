@@ -11,7 +11,7 @@ from models.hooked import _to_trajectory
 
 
 def test_to_trajectory_assembles_and_flows_through_the_stack():
-    from models import synthetic
+    import tiny as synthetic
     from projection import project
 
     base = synthetic.capture("the capital of france is")

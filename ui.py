@@ -239,9 +239,7 @@ def main() -> None:
         cfg = MarbleConfig(model=model_name, projection=proj_name, density=dens_name,
                            top_k=top_k, trajectory_mode=mode, invert_terrain=invert,
                            generate_tokens=gen_tokens, generate_temperature=gen_temp)
-        model = tokenizer = None
-        if model_name != "synthetic":
-            model, tokenizer = load_model_cached(model_name)
+        model, tokenizer = load_model_cached(model_name)
         overlays = [p.strip() for p in prompt_b.splitlines() if p.strip()]
         others = [m.strip() for m in extra_models.split(",") if m.strip()]
         with st.spinner("Capturing forward pass…"):
@@ -249,8 +247,7 @@ def main() -> None:
                 names = [model_name] + others
                 loaded = {model_name: (model, tokenizer)} if model is not None else {}
                 for name in others:
-                    if name != "synthetic":
-                        loaded[name] = load_model_cached(name)
+                    loaded[name] = load_model_cached(name)
                 st.session_state["result"] = run_model_scene(cfg, prompt, names,
                                                              loaded=loaded)
             elif overlays:
@@ -384,42 +381,38 @@ def main() -> None:
                                 "or any .mtj consumer — see docs/mtj-format.md.")
 
         with st.expander("Intervention (perturb & replay)", expanded=False):
-            if cfg.model == "synthetic":
-                st.caption("The synthetic backend is analytic and not resumable; "
-                           "interventions need a torch model.")
-            else:
-                iv_layer = st.slider("Edit layer", 0, traj.n_layers - 1,
-                                     traj.n_layers - 1, key="iv_layer")
-                iv_kind = st.selectbox("Edit", ["push toward token", "inject noise",
-                                                "freeze block"], key="iv_kind")
-                iv_target = ""
-                if iv_kind == "push toward token":
-                    iv_target = st.text_input("Target token", "Berlin", key="iv_target")
-                iv_scale = st.slider("Strength", 0.0, 100.0, 30.0, key="iv_scale")
-                if st.button("Run intervention", key="iv_run"):
-                    from intervene import (FreezeLayer, InjectNoise, Perturb,
-                                           direction_from_token)
+            iv_layer = st.slider("Edit layer", 0, traj.n_layers - 1,
+                                 traj.n_layers - 1, key="iv_layer")
+            iv_kind = st.selectbox("Edit", ["push toward token", "inject noise",
+                                            "freeze block"], key="iv_kind")
+            iv_target = ""
+            if iv_kind == "push toward token":
+                iv_target = st.text_input("Target token", "Berlin", key="iv_target")
+            iv_scale = st.slider("Strength", 0.0, 100.0, 30.0, key="iv_scale")
+            if st.button("Run intervention", key="iv_run"):
+                from intervene import (FreezeLayer, InjectNoise, Perturb,
+                                       direction_from_token)
 
-                    model, tokenizer = load_model_cached(cfg.model)
-                    target_id = None
-                    if iv_kind == "push toward token":
-                        ids = tokenizer(iv_target, add_special_tokens=False)["input_ids"]
-                        if not ids:
-                            st.warning("target token is empty")
-                            st.stop()
-                        target_id = int(ids[0])
-                        # data-derived: the target token's own embedding axis
-                        direction = direction_from_token(traj, target_id)
-                        edits = [Perturb(iv_layer, iv_scale * direction, token=-1)]
-                    elif iv_kind == "inject noise":
-                        edits = [InjectNoise(iv_layer, iv_scale, token=-1)]
-                    else:
-                        edits = [FreezeLayer(min(iv_layer, traj.n_layers - 2))]
-                    with st.spinner("Replaying under intervention…"):
-                        st.session_state["result"] = run_intervention(
-                            cfg, result["prompt"], edits, model, tokenizer,
-                            target_id=target_id)
-                    st.rerun()
+                model, tokenizer = load_model_cached(cfg.model)
+                target_id = None
+                if iv_kind == "push toward token":
+                    ids = tokenizer(iv_target, add_special_tokens=False)["input_ids"]
+                    if not ids:
+                        st.warning("target token is empty")
+                        st.stop()
+                    target_id = int(ids[0])
+                    # data-derived: the target token's own embedding axis
+                    direction = direction_from_token(traj, target_id)
+                    edits = [Perturb(iv_layer, iv_scale * direction, token=-1)]
+                elif iv_kind == "inject noise":
+                    edits = [InjectNoise(iv_layer, iv_scale, token=-1)]
+                else:
+                    edits = [FreezeLayer(min(iv_layer, traj.n_layers - 2))]
+                with st.spinner("Replaying under intervention…"):
+                    st.session_state["result"] = run_intervention(
+                        cfg, result["prompt"], edits, model, tokenizer,
+                        target_id=target_id)
+                st.rerun()
 
     @st.cache_resource(show_spinner=False)
     def _neighbor_cache(key: str):  # one TokenNeighbors per capture

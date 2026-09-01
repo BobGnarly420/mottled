@@ -16,7 +16,7 @@ PROMPT_B = "the capital of germany is"
 
 @pytest.fixture(scope="module")
 def base_url():
-    server = make_server(port=0, model="synthetic")
+    server = make_server(port=0, model="gpt2")
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     yield f"http://127.0.0.1:{server.server_address[1]}"
@@ -35,7 +35,7 @@ def _post(url: str, payload: dict):
 def test_health(base_url):
     with urllib.request.urlopen(f"{base_url}/api/health") as res:
         body = json.loads(res.read())
-    assert body == {"ok": True, "model": "synthetic"}
+    assert body == {"ok": True, "model": "gpt2"}
 
 
 def test_scene_capture_roundtrip(base_url):

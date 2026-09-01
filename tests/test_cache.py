@@ -4,9 +4,9 @@ from cache import DiskCache, make_key
 
 
 def test_key_stability_and_sensitivity():
-    a = make_key("prompt", model="synthetic", k=5)
-    assert a == make_key("prompt", model="synthetic", k=5)
-    assert a != make_key("prompt", model="synthetic", k=6)
+    a = make_key("prompt", model="tiny", k=5)
+    assert a == make_key("prompt", model="tiny", k=5)
+    assert a != make_key("prompt", model="tiny", k=6)
     assert len(a) == 32
 
 

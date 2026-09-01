@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### The synthetic backend is gone
+`models/synthetic.py` generated plausible-looking trajectories analytically.
+It made the whole stack runnable without torch, and it was also the reason
+much of the suite was testing the pipeline against numbers no transformer
+produces. With the browser able to run a real model, it has no remaining job.
+
+- **Deleted**, along with its dispatch in `capture`, `serve`, `ui`,
+  `pipeline` and `intervene`. `MODEL_CHOICES` and every default now name a
+  real model (`gpt2`, as the smallest honest one).
+- **The suite runs on tiny locally-built Llamas** (`tests/tiny.py`) — real
+  hooks, real logit lens, real attention, an exactly reconciling residual
+  decomposition — with a word-level tokenizer so a "token" still means what
+  the assertions assume. Offline, and no slower in practice.
+- Two assertions turned out to have been testing the *fixture*, and are now
+  honest about it: `entropy_collapse > 0` held only because the synthetic
+  logits sharpened with depth by construction (it now pins the metric's
+  definition instead), and `identified().all()` in the CKA alignment held
+  only because synthetic took large steps between layers — in a small model
+  consecutive layers genuinely cannot be resolved, which is precisely what
+  `identified()` exists to report.
+- `scene-abc.mtj` and `single.mtj` — the viewer's and the site's default
+  scenes — were synthetic. They are regenerated as real GPT-2 captures, so
+  every bundled sample is now a real model.
+- `render._continuation_text` decided how to join decode tokens from the
+  backend *name*; it now decides from the pieces, since the distinction is
+  the tokenizer's and either kind can come from any backend.
+
 ### Capture in the browser: the viewer runs the model
 Until now the web viewer only *drew* scenes — producing one needed Python,
 so the live demo could ship pre-baked samples or nothing. The forward pass,

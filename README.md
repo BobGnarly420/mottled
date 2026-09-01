@@ -27,8 +27,9 @@ layer scrubber and the token inspector](docs/images/explorer.png)
 final token's predictions and representation-space neighbors.*
 
 **Live demo:** [bobgnarly420.github.io/mottled](https://bobgnarly420.github.io/mottled/) —
-landing page plus the web viewer with bundled sample scenes (synthetic and
-real GPT-2), no install required.
+landing page plus the web viewer with bundled sample scenes (real GPT-2 and
+Qwen captures), no install required — and, with a model loaded in the page,
+live capture in the browser.
 
 ## Quickstart
 
@@ -47,10 +48,11 @@ Enter a prompt (e.g. `The capital of France is`), pick a model, press
 terrain, representation-space neighbors, entropy evolution, and a layer
 scrubber.
 
-The default `synthetic` backend needs no model download (or even torch) —
-it generates deterministic, realistic trajectories so you can explore the
-tool instantly. Select a HuggingFace model (Qwen / Llama / Mistral / Gemma /
-GPT-2) for real captures.
+Every capture is a real model. `gpt2` is the default because it is the
+smallest honest one; select any of Qwen / Llama / Mistral / Gemma from the
+sidebar. The web viewer can also run a model **in the browser** — see
+[Capture in the browser](#capture-in-the-browser) — so the hosted demo is a
+live instrument rather than a gallery of pre-baked captures.
 
 ### Self-portrait
 
@@ -173,7 +175,7 @@ Mamba (state-space)   ─┼─►  StateTrajectory  ─► .mtj  ───┼�
 TransformerLens       ─┤    (in memory)      (on disk)   ├─ Jupyter (render() is a
 API logprobs          ─┤                                 │  plain Plotly figure)
   (degraded)          ─┤                                 └─ future: desktop app
-synthetic generator   ─┘
+in-browser (WebGPU)   ─┘
 future: diffusion, neuro recordings
 ```
 
@@ -185,8 +187,8 @@ dependencies. Full-fidelity trajectory files round-trip a capture; compact
 trajectories, terrain, inspector stats) so a viewer only has to draw.
 
 Transformers are one producer (`models/families.py` resolves
-Qwen/Llama/Mistral/Gemma/GPT-2/NeoX layouts structurally); the synthetic
-generator (`models/synthetic.py`) is another; **Mamba** — a state-space
+Qwen/Llama/Mistral/Gemma/GPT-2/NeoX layouts structurally); the browser's own
+forward pass (`viewer/model.js`) is another; **Mamba** — a state-space
 model with no attention at all — is the proof the abstraction is not
 transformer-shaped: its `backbone.layers` layout resolves structurally and
 block capture + logit lens work unchanged (captures that don't apply, like
@@ -262,8 +264,8 @@ Edits: `Perturb` (push a state — the grab gesture), `SetState`, `InjectNoise`
 (seeded), `FreezeLayer` (skip a block's update). Multiple interventions compose
 in one pass. `divergence(baseline, branch)` measures where a branch separates
 (state-space profile + the layer the top-1 prediction flips) — a measurement,
-not a claimed cause. Interventions require a torch model; the synthetic backend
-is analytic and not resumable.
+not a claimed cause. Interventions require a torch model: the forward pass has
+to be resumable from an edited state.
 
 Steering directions come from **data, not magic numbers**:
 `direction_from_token(traj, id)` is a token's own (un)embedding axis and
@@ -301,8 +303,8 @@ In the UI, fill in **Prompt B** and run: both trajectories are drawn on a
 single terrain built from the union of states (B dashed), with the comparison
 metrics and the per-layer A–B distance in the inspector.
 `ui.run_compare(cfg, prompt_a, prompt_b)` is the programmatic entry point.
-Everything is backend-agnostic — a synthetic run and the comparison stack work
-without torch; the runs only need the same layer count and hidden dimension.
+Everything is backend-agnostic — the comparison stack never touches a model,
+only trajectories; the runs need the same layer count and hidden dimension.
 
 ### SAE features & residual decomposition
 
@@ -312,8 +314,7 @@ additive writes to the residual stream.  For pre-norm architectures
 (Llama-style, GPT-2, NeoX) the decomposition is exact:
 `hidden[l+1] = hidden[l] + attn[l] + mlp[l]` (pinned by tests).
 `metrics.component_shares` turns it into a per-layer attention-vs-MLP
-balance, and the UI plots it in the inspector.  The synthetic backend emits
-an analogous exact decomposition, so the whole path works without torch.
+balance, and the UI plots it in the inspector.
 
 `sae.py` applies sparse autoencoders to trajectories — it never trains them.
 An SAE is four plain numpy arrays (`w_enc`, `b_enc`, `w_dec`, `b_dec`).
@@ -423,7 +424,7 @@ attention pattern (`StateTrajectory.attention`, `(L-1, T, T)`; the eager
 attention path is forced so the matrix actually materialises).  The renderer
 can draw **attention flow** — edges from each token's state to the states it
 reads from at the selected layer — and the inspector lists the top attended
-tokens.  The synthetic backend generates a causal, deterministic analog.
+tokens.
 
 `ui.run_intervention(cfg, prompt, edits, model, tokenizer)` is interactive
 patching: the baseline and a perturb-and-replay branch (`intervene.py`)

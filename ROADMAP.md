@@ -14,7 +14,7 @@ The invariants that get us there are already in place and are not negotiable:
    new producer or a new consumer; none may couple the two.
 2. **Honesty is load-bearing.** Every new surface carries the fidelity /
    uncertainty machinery from day one — a lossy picture must say where it lies.
-3. **The synthetic backend keeps pace.** Every capability works without torch,
+3. **The browser keeps pace.** Every capability works client-side,
    so the whole pipeline stays instantly explorable and offline-testable.
 
 ## Milestones
@@ -126,7 +126,7 @@ tests) before the next started, and that stays the rule.
 ## Model coverage
 
 Verified end to end: **Qwen2.5-1.5B-Instruct** (29 x 1536, GQA / RoPE /
-SwiGLU / RMSNorm) and GPT-2 / DistilGPT-2 / Pythia-70m, plus the synthetic
+SwiGLU / RMSNorm) and GPT-2 / DistilGPT-2 / Pythia-70m, plus the in-browser
 backend. The residual decomposition reconciles exactly on all of them, so
 "model-agnostic" is measured rather than claimed.
 

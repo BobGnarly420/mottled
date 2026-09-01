@@ -26,13 +26,13 @@ def main(argv: list[str] | None = None) -> int:
 
     p_serve = sub.add_parser("serve", help="serve the web viewer + capture API")
     p_serve.add_argument("--port", type=int, default=8000)
-    p_serve.add_argument("--model", default="synthetic",
-                         help="model for /api captures (default: synthetic)")
+    p_serve.add_argument("--model", default="gpt2",
+                         help="model for /api captures (default: gpt2)")
 
     p_export = sub.add_parser("export", help="capture prompts and write a .mtj scene")
     p_export.add_argument("prompts", nargs="+", help="one or more prompts")
     p_export.add_argument("-o", "--output", default="scene.mtj")
-    p_export.add_argument("--model", default="synthetic")
+    p_export.add_argument("--model", default="gpt2")
     p_export.add_argument("--generate", type=int, default=0, metavar="N",
                           help="decode N tokens per prompt before capturing "
                                "(the decode axis; default 0 = prompt only)")

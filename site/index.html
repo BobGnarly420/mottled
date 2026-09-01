@@ -105,7 +105,7 @@
       <div class="diagram-head">Producers</div>
       <div class="node">transformers capture<span class="node-meta">hooks on every block</span></div>
       <div class="node">Mamba<span class="node-meta">state-space &mdash; no attention at all</span></div>
-      <div class="node">synthetic generator<span class="node-meta">deterministic, no torch</span></div>
+      <div class="node">in-browser forward pass<span class="node-meta">WebGPU, no server</span></div>
       <div class="node node-future">future: diffusion &middot; recordings</div>
     </div>
     <div class="diagram-flow" aria-hidden="true"><span>&rarr;</span></div>
@@ -133,7 +133,7 @@
       <div class="panel-bar"><span class="panel-label">Explorer</span><span class="panel-meta">Python 3</span></div>
       <pre><code>pip install -r requirements.txt
 streamlit run ui.py</code></pre>
-      <p class="code-note">The default synthetic backend needs no model download. Select a HuggingFace model for real captures.</p>
+      <p class="code-note">Every capture is a real model; <code>gpt2</code> is the default because it is the smallest honest one. The web viewer can also run a model in the browser.</p>
     </div>
     <div class="code-panel">
       <div class="panel-bar"><span class="panel-label">Web viewer</span><span class="panel-meta">any static server</span></div>

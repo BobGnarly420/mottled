@@ -22,6 +22,7 @@ from intervene import (  # noqa: E402
     divergence,
     intervene,
 )
+import tiny as synthetic  # noqa: E402
 
 VOCAB_SIZE = 128
 PROMPT = "the capital of france is"
@@ -142,8 +143,6 @@ def test_meta_records_counterfactual(tiny):
 
 
 def test_guards():
-    with pytest.raises(ValueError, match="synthetic"):
-        intervene("synthetic", PROMPT, [Perturb(0, np.zeros(4, np.float32))])
     # empty interventions is a mistake -> use capture()
     torch.manual_seed(0)
     cfg = transformers.LlamaConfig(vocab_size=16, hidden_size=8, intermediate_size=16,
@@ -234,7 +233,6 @@ def test_persistence_profile_gpt2_early_injection_is_legible():
 def test_direction_from_contrast_is_normalized_diff_of_means():
     """Backend-agnostic: a diff-of-means direction from synthetic runs."""
     from intervene import direction_from_contrast
-    from models import synthetic
 
     a = synthetic.capture("the capital of france is")
     b = synthetic.capture("the capital of germany is")
