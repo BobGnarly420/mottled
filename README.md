@@ -226,7 +226,12 @@ density, terrain, metrics, comparison, every viewer) works unchanged.
 | `crossmodel.py` | Comparison *across* models: readout space (the shared vocabulary as a shared coordinate system), depth-normalised divergence, and CKA layer alignment that reports whether it is identified |
 | `sae.py` | Sparse-autoencoder features: apply (never train) an SAE to every captured state; demo dictionary + npz interchange |
 | `statefile.py` | `.mtj` interchange: save/load full StateTrajectories and viewer-ready scene bundles ([format spec](docs/mtj-format.md)) |
+| `mweights.py` | `.mwt` export: a model's weights in a form the browser can fetch (per-output-row int8 by default) |
 | `viewer/` | Self-contained WebGL viewer for `.mtj` scenes — no build step, no dependencies |
+| `viewer/model.js` | Instrumented Llama/Qwen3-family forward pass in the browser — records the residual stream after every block (pinned against HF) |
+| `viewer/scene.js` | The scene pipeline (projection → density → terrain → drape) in JS, so a scene can be built with no server |
+| `viewer/weights.js` / `viewer/gguf.js` | Weight readers: `.mwt`, and GGUF including the ternary (1.58-bit) builds |
+| `viewer/ops-webgpu.js` | WebGPU kernels behind the same `ops` contract the CPU reference implements |
 | `serve.py` | Optional stdlib capture backend: serves the viewer + a JSON API so the browser can generate scenes |
 | `cli.py` | `mottled` console commands: explorer (default), `serve`, `export` |
 | `site/` | Static landing page (deployed with the viewer to GitHub Pages) |
@@ -466,6 +471,51 @@ zero build step; producers in other languages only need to follow
 form — type prompts, press Capture, and the scene is generated server-side
 and streamed back as `.mtj`. On plain static hosting (GitHub Pages) the
 form simply never appears.
+
+### Capture in the browser
+
+The web viewer used to only *draw* scenes — building one needed Python, so
+the hosted demo could show captures somebody else had made and nothing else.
+The forward pass, the scene pipeline and the weights now all exist
+client-side, so the page can run a real open-weight model itself.
+
+The hard part is not inference, it is **instrumentation**: Mottled needs the
+residual stream after every block, and no chat-oriented runtime exposes that.
+So `viewer/model.js` implements the forward pass rather than borrowing one —
+Llama/Qwen3 family (RMSNorm, rotary, grouped-query attention, SwiGLU, with
+Qwen3's per-head q/k norms optional) — recording `hidden[0]` as the embedding
+stream and `hidden[l+1] = hidden[l] + attn[l] + mlp[l]`, the same layout
+`capture.py` produces. It is pinned against HuggingFace's own outputs on
+locally-built models (`tests/test_model_conformance.py`), because a
+reimplementation is only worth having if it is *the same computation*.
+
+```bash
+mottled export-weights Qwen/Qwen3-0.6B -o qwen3-0.6b.mwt   # ~598 MB at q8
+```
+
+Weights arrive two ways. `.mwt` (`mweights.py` → `viewer/weights.js`) is the
+same container idea as `.mtj` — magic, JSON header, raw little-endian buffers
+— with per-output-row int8 and lazy dequantisation. `viewer/gguf.js` reads
+GGUF as the open-weight world actually publishes it, **including the ternary
+(1.58-bit) builds** that make a 4B model a ~1 GB download instead of an 8 GB
+one; its TQ1_0/TQ2_0 unpacking is checked byte-for-byte against the `gguf`
+package's own dequantiser, since a block layout that is *almost* right yields
+a model that runs and quietly predicts nonsense.
+
+`viewer/scene.js` then builds the scene — joint PCA, KDE, terrain, draping —
+matching the Python modules numerically, the way `bvh.js` matches `bvh.py`.
+`viewer/ops-webgpu.js` supplies WGSL kernels behind the same `ops` contract
+the CPU reference implements, so there is one forward pass and the GPU is an
+accelerator rather than a second source of truth.
+
+**What is not verified:** the WebGPU kernels' arithmetic needs a GPU, which
+CI does not have. `viewer/tests/parity.html` runs both backends over
+identical weights in a real browser and reports the largest disagreement —
+until that has been run and passed, treat the WebGPU path as unverified. CI
+checks the shaders' bindings against the code that binds them, which catches
+the one-side-edited failure, not the maths. Still missing before the live
+viewer is end to end: BPE **encode** in JS (a GGUF carries its own tokenizer
+and `gguf.js` exposes it — the algorithm is unwritten) and the capture UI.
 
 ### Interaction layer
 
