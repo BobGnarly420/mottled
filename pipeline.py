@@ -387,9 +387,13 @@ def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
     When `target_id` is given for a single directional steer, also attaches a
     `Faithfulness` readout: the run measures a norm-matched *random* control so
     the UI can say how much of the effect is the steering direction rather than
-    the perturbation's raw size.
+    the perturbation's raw size. When the baseline additionally carries the
+    residual decomposition (`cfg.capture_components`), a `PersistenceProfile`
+    is attached too — the same faithfulness effect read at every layer from
+    the edit down, paired with the attention/MLP write shares.
     """
-    from intervene import divergence, intervene, score_against_control
+    from intervene import (divergence, intervene, persistence_profile,
+                           score_against_control)
 
     baseline = _capture_with(cfg, prompt, model=model, tokenizer=tokenizer)
     branch = intervene(model, prompt, interventions, tokenizer=tokenizer,
@@ -411,5 +415,13 @@ def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
             model, prompt, baseline, branch, iv.vector, iv.layer, int(target_id),
             token=tok, tokenizer=tokenizer, seed=cfg.seed, device=cfg.device,
             dtype=cfg.dtype, top_k=cfg.top_k)
+        if (baseline.components is not None
+                and {"attn", "mlp"} <= set(baseline.components)):
+            result["persistence"] = persistence_profile(
+                model, prompt, iv.vector, iv.layer, int(target_id),
+                tokenizer=tokenizer, token=tok,
+                scale=float(np.linalg.norm(iv.vector)),
+                baseline=baseline, branch=branch, seed=cfg.seed,
+                device=cfg.device, dtype=cfg.dtype, top_k=cfg.top_k)
     return result
 

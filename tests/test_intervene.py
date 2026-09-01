@@ -204,6 +204,32 @@ def test_perturbation_flips_prediction_gpt2():
     assert dv.readout_changed is not None        # and we can locate where
 
 
+@pytest.mark.network
+def test_persistence_profile_gpt2_early_injection_is_legible():
+    """Criterion 2: injecting the ' Berlin' direction early into the
+    France->Berlin sample and profiling downstream yields a real curve —
+    finite, layer-dependent structure, not flat noise."""
+    from capture import load_model
+    from intervene import direction_from_token, persistence_profile
+
+    model, tok = load_model("gpt2")
+    prompt = "The capital of France is"
+    base = capture(model, prompt, tokenizer=tok, top_k=5, capture_components=True)
+
+    target_id = int(tok(" Berlin")["input_ids"][0])
+    direction = direction_from_token(base, target_id)
+    prof = persistence_profile(model, prompt, direction, 2, target_id,
+                               tokenizer=tok, scale=30.0, baseline=base)
+
+    effects = prof.effect_sizes
+    assert list(prof.layers) == list(range(2, base.n_layers))
+    assert np.isfinite(effects).all()
+    assert float(np.ptp(effects)) > 0.5          # the curve moves, layer to layer
+    assert float(np.abs(effects).max()) > 1.0    # and the steer is not a no-op
+    # shares are a real decomposition at every profiled layer
+    assert np.isfinite(prof.mlp_shares).all()
+
+
 # ------------------------------------------------ data-derived steering (1b)
 def test_direction_from_contrast_is_normalized_diff_of_means():
     """Backend-agnostic: a diff-of-means direction from synthetic runs."""
@@ -259,6 +285,126 @@ def test_faithfulness_prefers_the_targeted_direction():
     assert fth.effect > 0
     assert fth.steer_hits_target                 # steering made target top-1
     assert fth.target == target
+
+
+# ------------------------------------------------------- persistence profile
+def _tied_tiny():
+    torch.manual_seed(0)
+    cfg = transformers.LlamaConfig(
+        vocab_size=VOCAB_SIZE, hidden_size=32, intermediate_size=64,
+        num_hidden_layers=4, num_attention_heads=4, num_key_value_heads=2,
+        max_position_embeddings=64, tie_word_embeddings=True,
+    )
+    return transformers.LlamaForCausalLM(cfg).eval()
+
+
+def test_persistence_profile_generalizes_faithfulness():
+    """The success criterion: the profile's record at the layer where
+    `faithfulness()` reads out reproduces `faithfulness()`'s effect exactly —
+    the new function strictly generalizes the old one, it does not
+    reimplement it. Injecting at the final layer (the canonical faithfulness
+    setup) makes that record `profile[inject_layer]` itself."""
+    from intervene import direction_from_token, faithfulness, persistence_profile
+
+    model = _tied_tiny()
+    tok = DummyTokenizer()
+    base = capture(model, PROMPT, tokenizer=tok, top_k=3, capture_components=True)
+    target = 7
+    direction = direction_from_token(base, target)
+    last = base.n_layers - 1
+
+    fth = faithfulness(model, PROMPT, layer=last, direction=direction,
+                       target=target, scale=50.0, tokenizer=tok, baseline=base)
+    prof = persistence_profile(model, PROMPT, direction, last, target,
+                               tokenizer=tok, scale=50.0, baseline=base)
+    assert np.isclose(prof[last].effect_size, fth.effect, atol=1e-6)
+    assert np.isclose(prof[last].steer_shift, fth.steer_shift, atol=1e-6)
+    assert np.isclose(prof[last].control_shift, fth.control_shift, atol=1e-6)
+
+    # injecting earlier, the final-layer record is still faithfulness exactly
+    fth1 = faithfulness(model, PROMPT, layer=1, direction=direction,
+                        target=target, scale=50.0, tokenizer=tok, baseline=base)
+    prof1 = persistence_profile(model, PROMPT, direction, 1, target,
+                                tokenizer=tok, scale=50.0, baseline=base)
+    assert np.isclose(prof1[-1].effect_size, fth1.effect, atol=1e-6)
+
+
+def test_persistence_profile_records_and_shares():
+    from intervene import direction_from_token, persistence_profile
+
+    model = _tied_tiny()
+    tok = DummyTokenizer()
+    base = capture(model, PROMPT, tokenizer=tok, top_k=3, capture_components=True)
+    target = 7
+    direction = direction_from_token(base, target)
+
+    prof = persistence_profile(model, PROMPT, direction, 1, target,
+                               tokenizer=tok, scale=50.0, baseline=base)
+    # one record per layer from the injection to the end, indexed absolutely
+    assert list(prof.layers) == list(range(1, base.n_layers))
+    assert len(prof) == base.n_layers - 1
+    assert prof[1] is prof.records[0] and prof[-1] is prof.records[-1]
+    with pytest.raises(IndexError):
+        prof[0]                                    # precedes the injection
+
+    # write shares come from the baseline decomposition: valid, complementary
+    from metrics import component_shares
+    shares = component_shares(base, token=-1)
+    for r in prof.records:
+        assert np.isclose(r.attn_share + r.mlp_share, 1.0, atol=1e-6)
+        assert np.isclose(r.mlp_share, shares[r.layer - 1, 1], atol=1e-6)
+    assert prof.target == target and prof.inject_layer == 1
+    assert np.isclose(prof.scale, 50.0, atol=1e-3)
+
+    # injecting at layer 0: the embedding state has no block writing into it
+    prof0 = persistence_profile(model, PROMPT, direction, 0, target,
+                                tokenizer=tok, scale=50.0, baseline=base)
+    assert np.isnan(prof0[0].mlp_share) and np.isnan(prof0[0].attn_share)
+    assert np.isfinite(prof0.effect_sizes).all()
+
+
+def test_persistence_profile_requires_components():
+    from intervene import direction_from_token, persistence_profile
+
+    model = _tied_tiny()
+    tok = DummyTokenizer()
+    base = capture(model, PROMPT, tokenizer=tok, top_k=3)   # no decomposition
+    direction = direction_from_token(base, 7)
+    with pytest.raises(ValueError, match="capture_components"):
+        persistence_profile(model, PROMPT, direction, 1, 7,
+                            tokenizer=tok, baseline=base)
+
+
+def test_run_intervention_attaches_persistence():
+    """The UI pipeline surfaces the profile for a directional steer when the
+    baseline carries the residual decomposition, and the panel's figure
+    renders from it."""
+    from config import MarbleConfig
+    from intervene import Perturb, direction_from_token
+    from render import render_persistence
+    from ui import run_intervention
+
+    model = _tied_tiny()
+    tok = DummyTokenizer()
+    base = capture(model, PROMPT, tokenizer=tok, top_k=3)
+    target = 7
+    direction = direction_from_token(base, target)
+
+    cfg = MarbleConfig(model="tiny", use_cache=False,
+                       capture_components=True, capture_attention=False)
+    edits = [Perturb(base.n_layers - 1, 50.0 * direction, token=-1)]
+    result = run_intervention(cfg, PROMPT, edits, model, tok, target_id=target)
+
+    prof = result["persistence"]
+    assert prof.inject_layer == base.n_layers - 1
+    # the profile's final record and the faithfulness readout are the same
+    # measurement (deltas differ only by float renormalization)
+    assert np.isclose(prof[-1].effect_size, result["faithfulness"].effect, atol=1e-3)
+
+    fig = render_persistence(prof)
+    names = [tr.name for tr in fig.data]
+    assert names == ["effect size", "mlp share"]
+    assert fig.data[1].yaxis == "y2"                # mlp share on its own axis
 
 
 def test_run_intervention_attaches_faithfulness():

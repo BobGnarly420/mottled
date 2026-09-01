@@ -54,13 +54,14 @@ from render import (  # noqa: F401
     field_rgb,
     render,
     render_feature_field,
+    render_persistence,
 )
 
 __all__ = [
     "run_pipeline", "run_scene", "run_compare", "run_intervention",
     "run_model_scene", "attach_features", "attach_inspector",
     "degraded_note",
-    "render", "render_feature_field", "field_rgb",
+    "render", "render_feature_field", "render_persistence", "field_rgb",
     "main",
 ]
 
@@ -687,6 +688,19 @@ def main() -> None:
                     st.caption("A large *effect* means the steering direction, not "
                                "just the perturbation's size, moved the model. This "
                                "is a measured counterfactual, not an isolated circuit.")
+
+        if (prof := result.get("persistence")) is not None:
+            with st.expander("Injection persistence", expanded=True):
+                st.plotly_chart(render_persistence(prof), use_container_width=True,
+                                key="persistence")
+                st.caption("The faithfulness effect (steer minus norm-matched "
+                           "random control) read at every layer from the edit "
+                           "down, with the baseline's MLP write-share overlaid. "
+                           "A smooth decay or hold says the residual stream "
+                           "carried the effect; a drop that returns alongside an "
+                           "MLP spike says a later block rewrote it. Like the "
+                           "divergence readout, this is a measurement of what "
+                           "happened downstream — not a claimed cause.")
 
         if result.get("comparisons") and len(result["comparisons"]) > 1:
             with st.expander("Scene comparisons (vs A)", expanded=True):
