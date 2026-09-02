@@ -8,7 +8,8 @@
 #       --extra-index-url https://download.pytorch.org/whl/cpu
 #
 # For a plain install prefer `pip install mottled[models]` (see pyproject.toml
-# for supported version floors). The synthetic backend needs only the core five.
+# for supported version floors). The core five cover analysis and the viewers;
+# capture needs the models extra.
 
 # --- core (always required) ---
 numpy==2.4.6
