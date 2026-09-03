@@ -18,20 +18,39 @@
     <input id="fileInput" type="file" accept=".mtj" hidden>
     <span class="dim hint">or drag a .mtj anywhere</span>
   </div>
-  <div id="model-row">
-    <input id="modelUrl" type="text" spellcheck="false"
-      placeholder="model URL (.mwt or .gguf) — or drop one in">
-    <div id="model-actions">
-      <button id="modelBtn">Load model</button>
-      <span id="modelStatus" class="dim hint mono"></span>
-    </div>
-  </div>
-  <div id="capture-row" hidden>
-    <textarea id="capturePrompts" rows="2"
-      placeholder="one prompt per line"></textarea>
-    <div id="capture-actions">
-      <button id="captureBtn">Capture</button>
-      <span id="captureModel" class="dim hint mono"></span>
+  <div id="live">
+    <button id="liveToggle" class="linkish">Run a model in this page &rsaquo;</button>
+
+    <div id="live-panel" hidden>
+      <div class="live-head">
+        <span>model</span>
+        <span id="gpuBadge" class="badge" title="compute backend"></span>
+      </div>
+      <div id="model-list"></div>
+
+      <details id="model-custom">
+        <summary>Load your own</summary>
+        <input id="modelUrl" type="text" spellcheck="false"
+          placeholder="URL to a .gguf or .mwt — or drop the file anywhere">
+        <button id="modelBtn">Load</button>
+      </details>
+
+      <div id="model-progress" hidden>
+        <div class="bar"><div id="model-bar"></div></div>
+        <div id="modelStatus" class="dim hint mono"></div>
+      </div>
+
+      <div id="capture-row" hidden>
+        <div class="live-head"><span>prompt</span>
+          <span id="captureModel" class="dim hint mono"></span></div>
+        <textarea id="capturePrompts" rows="2"
+          placeholder="one prompt per line — two lines compares them"></textarea>
+        <div id="examples"></div>
+        <div id="capture-actions">
+          <button id="captureBtn">Capture</button>
+          <span id="captureHint" class="dim hint"></span>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -64,6 +83,7 @@
 
 <script src="mtj.js"></script>
 <script src="bvh.js"></script>
+<script src="models.js"></script>
 <script src="scene.js"></script>
 <script src="model.js"></script>
 <script src="tokenizer.js"></script>

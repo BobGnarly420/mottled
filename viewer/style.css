@@ -54,16 +54,60 @@ button:active { transform: translateY(1px); }
   color: var(--color-fg-1); border: 1px solid var(--color-border);
   border-radius: var(--radius-sm); padding: 5px 8px; font: inherit; }
 #capture-row textarea:focus { outline: none; border-color: var(--color-accent); }
-#capture-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-#model-row { margin-top: 10px; border-top: 1px solid var(--color-border);
-             padding-top: 10px; }
-#model-row input { width: 100%; background: var(--color-surface-1);
-                   color: var(--color-text); border: 1px solid var(--color-border);
-                   padding: 5px 7px; font: inherit; font-size: 12px; }
-#model-row input:focus { outline: none; border-color: var(--color-accent); }
-#model-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-#modelStatus { flex: 1; overflow: hidden; text-overflow: ellipsis;
+/* ---- run a model in the page ---------------------------------------- */
+#live { margin-top: 10px; border-top: 1px solid var(--color-border);
+        padding-top: 10px; }
+.linkish { background: none; border: 0; color: var(--color-accent);
+           padding: 0; font: inherit; font-size: 12px; cursor: pointer; }
+.linkish:hover { text-decoration: underline; }
+#live-panel { margin-top: 8px; }
+.live-head { display: flex; justify-content: space-between; align-items: center;
+             font-size: 11px; color: var(--color-fg-2);
+             text-transform: lowercase; letter-spacing: .04em;
+             margin: 10px 0 5px; }
+.badge { font-size: 10px; padding: 1px 6px; border: 1px solid var(--color-border);
+         color: var(--color-fg-2); font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace; }
+.badge.gpu { color: var(--color-accent); border-color: var(--color-accent); }
+
+/* model cards. Named -card because the viewer already uses `.model` for the
+   per-run model label in the runs panel; sharing the name would style those. */
+.model-card { display: block; width: 100%; text-align: left; cursor: pointer;
+         background: var(--color-surface-1); color: var(--color-fg-1);
+         border: 1px solid var(--color-border); padding: 7px 9px;
+         margin-bottom: 5px; font: inherit; font-size: 12px; }
+.model-card:hover:not(:disabled) { border-color: var(--color-accent); }
+.model-card:disabled { opacity: .5; cursor: default; }
+.model-card.active { border-color: var(--color-accent); }
+.model-card .row1 { display: flex; justify-content: space-between; gap: 8px; }
+.model-card .nm { font-weight: 500; }
+.model-card .sz { font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 11px;
+             color: var(--color-fg-2); white-space: nowrap; }
+.model-card .row2 { font-size: 11px; color: var(--color-fg-2); margin-top: 2px; }
+.model-card .ready { color: var(--color-accent); }
+
+#model-custom { margin-top: 6px; font-size: 11px; color: var(--color-fg-2); }
+#model-custom summary { cursor: pointer; }
+#model-custom input { width: 100%; margin-top: 5px; background: var(--color-surface-1);
+                      color: var(--color-fg-1); border: 1px solid var(--color-border);
+                      padding: 5px 7px; font: inherit; font-size: 12px; }
+#model-custom input:focus { outline: none; border-color: var(--color-accent); }
+#model-custom button { margin-top: 5px; }
+
+#model-progress { margin-top: 8px; }
+.bar { height: 3px; background: var(--color-surface-0); overflow: hidden; }
+#model-bar { height: 100%; width: 0; background: var(--color-accent);
+             transition: width .2s linear; }
+#modelStatus { margin-top: 5px; overflow: hidden; text-overflow: ellipsis;
                white-space: nowrap; }
+#modelStatus.err { color: var(--color-loss); white-space: normal; }
+
+#examples { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.example { background: none; border: 1px solid var(--color-border);
+           color: var(--color-fg-2); padding: 2px 7px; font: inherit;
+           font-size: 11px; cursor: pointer; }
+.example:hover { border-color: var(--color-accent); color: var(--color-fg-1); }
+#capture-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+#captureHint { flex: 1; }
 
 #runs-panel { top: 12px; right: 12px; min-width: 220px; max-width: 320px; }
 .panel-head { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;

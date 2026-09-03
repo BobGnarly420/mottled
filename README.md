@@ -490,6 +490,30 @@ stream and `hidden[l+1] = hidden[l] + attn[l] + mlp[l]`, the same layout
 locally-built models (`tests/test_model_conformance.py`), because a
 reimplementation is only worth having if it is *the same computation*.
 
+**On the hosted viewer** there is nothing to install and nothing to paste:
+open *Run a model in this page*, pick one, and capture. The picker lists a
+handful of verified models with their real download size shown *before* the
+download starts, and a model you have already fetched is served from the
+browser's cache — so the second visit starts in under a second rather than
+re-downloading a few hundred megabytes.
+
+| model | size | architecture |
+|---|---|---|
+| SmolLM2 360M | 386 MB | llama |
+| Qwen3 0.6B | 639 MB | qwen3 — GQA + per-head q/k norms |
+| Qwen2.5 0.5B | 675 MB | qwen2 — attention bias |
+
+Each was checked before being listed: the host sends usable CORS headers, the
+file's ggml types are ones `gguf.js` implements, it embeds its own tokenizer,
+and — the one that matters — `gguf.js` can place *every* tensor in it. An
+architecture carrying weights this stack cannot apply (Qwen2's attention
+biases were exactly that case) is **refused at load** rather than run: a model
+that loads and silently skips a weight produces a trajectory of a model that
+does not exist, which is worse than an error.
+
+To run a model that is not in the list, drop its `.gguf` on the page or paste
+a URL under *Load your own*. To ship your own weights:
+
 ```bash
 mottled export-weights Qwen/Qwen3-0.6B -o qwen3-0.6b.mwt   # ~598 MB at q8
 ```

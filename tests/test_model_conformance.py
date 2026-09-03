@@ -48,6 +48,77 @@ def _tiny_model(n_kv_heads=2, tie=False, seed=0):
     return model, cfg
 
 
+def _tiny_qwen2(seed=0):
+    """Qwen2 puts a bias on q/k/v. Llama and Qwen3 do not.
+
+    This is the architecture that catches a forward pass which ignores biases:
+    it runs, and every state is wrong by exactly the bias.
+    """
+    torch.manual_seed(seed)
+    cfg = transformers.Qwen2Config(
+        vocab_size=48, hidden_size=32, intermediate_size=64,
+        num_hidden_layers=2, num_attention_heads=4, num_key_value_heads=2,
+        max_position_embeddings=64, rms_norm_eps=1e-6,
+        tie_word_embeddings=False,
+    )
+    model = transformers.Qwen2ForCausalLM(cfg).eval()
+    with torch.no_grad():
+        for name, p_ in model.named_parameters():
+            if "layernorm" in name or name.endswith("norm.weight"):
+                p_.add_(torch.randn_like(p_) * 0.1)
+            # A zero bias would let a forward pass that ignores biases pass.
+            if name.endswith(".bias"):
+                p_.add_(torch.randn_like(p_) * 0.5)
+    return model, cfg
+
+
+def _export_qwen2(model, cfg):
+    sd = model.state_dict()
+    w = {"embed_tokens": sd["model.embed_tokens.weight"],
+         "norm": sd["model.norm.weight"],
+         "lm_head": sd["lm_head.weight"]}
+    for l in range(cfg.num_hidden_layers):
+        src, dst = f"model.layers.{l}.", f"layers.{l}."
+        for a, b in [("self_attn.q_proj", "q_proj"), ("self_attn.k_proj", "k_proj"),
+                     ("self_attn.v_proj", "v_proj"), ("self_attn.o_proj", "o_proj"),
+                     ("mlp.gate_proj", "gate_proj"), ("mlp.up_proj", "up_proj"),
+                     ("mlp.down_proj", "down_proj"),
+                     ("input_layernorm", "input_layernorm"),
+                     ("post_attention_layernorm", "post_attention_layernorm")]:
+            w[dst + b] = sd[src + a + ".weight"]
+        for a, b in [("self_attn.q_proj", "q_bias"), ("self_attn.k_proj", "k_bias"),
+                     ("self_attn.v_proj", "v_bias")]:
+            key = src + a + ".bias"
+            if key in sd:
+                w[dst + b] = sd[key]
+    return {k: v.detach().float().numpy().ravel().tolist() for k, v in w.items()}
+
+
+def test_attention_bias_is_applied():
+    """Qwen2-style attention biases must reach the states.
+
+    Without addBias this test fails on every layer -- which is the point:
+    ignoring a bias that exists is silent, and only a reference comparison
+    catches it.
+    """
+    model, cfg = _tiny_qwen2()
+    tokens = [3, 17, 42, 8]
+
+    with torch.no_grad():
+        ref = model(torch.tensor([tokens]), output_hidden_states=True)
+
+    js = _run_js({"weights": _export_qwen2(model, cfg), "tokens": tokens,
+                  "config": _js_config(cfg)})
+
+    T, D, L = len(tokens), cfg.hidden_size, cfg.num_hidden_layers
+    got = np.asarray(js["hidden"], dtype=np.float64).reshape(L + 1, T, D)
+    for layer in range(L):
+        want = ref.hidden_states[layer][0].numpy()
+        assert np.allclose(got[layer], want, atol=2e-4), (
+            f"layer {layer} max |Δ| = {np.abs(got[layer] - want).max():.3e} "
+            "(attention bias not applied?)")
+
+
 def _export(model, cfg):
     """HF parameter names -> the flat names viewer/model.js asks for."""
     sd = model.state_dict()
