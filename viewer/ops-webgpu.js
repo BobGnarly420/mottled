@@ -13,7 +13,9 @@
  * Precision note: WebGPU shaders are f32, and the accumulation order in a
  * tiled matmul differs from the CPU loop's, so parity is checked to a
  * tolerance rather than bit-exactly — the same standard applied to any
- * GPU/CPU comparison.
+ * GPU/CPU comparison. That parity check (`tests/parity.html`) has been run on
+ * real hardware and passed. It cannot run in CI, which has no GPU, so it is
+ * the manual step that must be repeated after changing a kernel here.
  *
  * UMD: `window.MottledOpsWebGPU` in the browser, `module.exports` under Node
  * (where it exports the shader sources so they can be parsed and checked

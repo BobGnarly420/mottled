@@ -533,14 +533,15 @@ matching the Python modules numerically, the way `bvh.js` matches `bvh.py`.
 the CPU reference implements, so there is one forward pass and the GPU is an
 accelerator rather than a second source of truth.
 
-**What is not verified:** the WebGPU kernels' arithmetic needs a GPU, which
-CI does not have. `viewer/tests/parity.html` runs both backends over
-identical weights in a real browser and reports the largest disagreement —
-until that has been run and passed, treat the WebGPU path as unverified. CI
-checks the shaders' bindings against the code that binds them, which catches
-the one-side-edited failure, not the maths. Still missing before the live
-viewer is end to end: BPE **encode** in JS (a GGUF carries its own tokenizer
-and `gguf.js` exposes it — the algorithm is unwritten) and the capture UI.
+**On verifying the GPU path.** The kernels' arithmetic cannot be checked by
+CI, which has no GPU — so it is checked by hand:
+`viewer/tests/parity.html` runs both backends over identical weights in a
+real browser and reports the largest disagreement. It has been run on real
+hardware and passed, which is what promotes WebGPU from "written" to
+"verified". CI covers the rest: that each shader's bindings and entry point
+match the code that binds them, which catches the failure where one side is
+edited alone. **Re-run the parity page after changing a kernel** — that check
+is manual by necessity, so nothing else will catch a regression in it.
 
 ### Interaction layer
 

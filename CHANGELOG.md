@@ -54,12 +54,14 @@ gallery of captures someone else made.
   contract the CPU reference implements, so there is one forward pass and the
   GPU path is an accelerator, never a second source of truth. `forward()` is
   async and awaits each op; awaiting a plain value is a no-op, so the CPU path
-  is unchanged. **The kernels' arithmetic is not verified by CI** — that needs
-  a GPU. `viewer/tests/parity.html` runs both backends over identical weights
-  in a real browser and reports the largest disagreement; until it has been
-  run, the WebGPU path is unverified and the page says so. What CI does check
-  is that each shader's bindings and entry point match what `dispatch()`
-  supplies, which is the failure mode where one side is edited alone.
+  is unchanged. **The kernels' arithmetic cannot be verified by CI** — that
+  needs a GPU. `viewer/tests/parity.html` runs both backends over identical
+  weights in a real browser and reports the largest disagreement; it has been
+  run on real hardware and passed, and since nothing in CI can catch an
+  arithmetic regression there, it is the manual step to repeat after changing
+  a kernel. What CI does check is that each shader's bindings and entry point
+  match what `dispatch()` supplies — the failure mode where one side is
+  edited alone.
 - **`.mwt` weights** (`mweights.py` + `viewer/weights.js` +
   `mottled export-weights`) — a container shaped like `.mtj`, with per-output-
   row int8 by default and lazy dequantisation. Qwen3-0.6B lands at ~598 MB.
@@ -81,9 +83,9 @@ Three bugs measurement caught that review would not have:
 - The `.mwt` data section was unaligned, so a reader taking a typed-array view
   worked or threw depending on how many bytes the JSON happened to occupy.
 
-Not yet done, so the live viewer is not end-to-end: BPE **encode** in JS (a
-GGUF carries its own tokenizer and `gguf.js` exposes it; the algorithm is
-unwritten), and the viewer UI that drives capture.
+Both remaining gaps closed in the same cycle: BPE **encode**
+(`viewer/tokenizer.js`, checked against the real Qwen3 tokenizer) and the
+capture UI (the model picker below). The live viewer is end to end.
 
 ### Layer-wise persistence profile for injected directions
 `divergence()` says where a branch separates; `component_shares` says who

@@ -23,8 +23,9 @@
   backend. The WebGPU kernels cannot be executed in a headless CI container, so
   this page is where they get verified: it runs one forward pass through both
   backends over identical weights and reports the largest disagreement.
-  Open it on a machine with a GPU. Until it has been run and passed, treat the
-  WebGPU path as unverified.
+  It has been run on real hardware and passed. Since CI cannot run it, this
+  page is the only thing that catches an arithmetic regression in a kernel —
+  so run it again after changing one.
 </p>
 <button id="run">Run parity check</button>
 <div id="out"></div>

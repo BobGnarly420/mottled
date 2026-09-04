@@ -21,11 +21,12 @@ const GPU = require("../ops-webgpu.js");
  *    grammar. (The shaders were validated against `wgsl_reflect` when
  *    written; the structural check is what survives into CI.)
  *
- * 3. NOT checked: that the GPU kernels compute the right answers. That needs
- *    a GPU. `parity.html` in this directory runs the CPU and WebGPU backends
- *    over identical inputs in a real browser and reports the largest
- *    disagreement — until that has been run on a machine with a GPU, the
- *    WebGPU path is unverified, and it says so.
+ * 3. NOT checked here: that the GPU kernels compute the right answers. That
+ *    needs a GPU, which CI does not have. `parity.html` in this directory is
+ *    where it is checked — both backends over identical inputs in a real
+ *    browser — and it has been run and passed. Because that check is manual
+ *    by necessity, re-run it after touching a kernel: nothing in CI will
+ *    catch an arithmetic regression there.
  */
 
 const near = (a, b, eps = 1e-6) =>
