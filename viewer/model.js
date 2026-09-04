@@ -116,6 +116,20 @@
     return out;
   }
 
+  /* Add a per-output bias in place, when the architecture has one.
+   *
+   * Llama and Qwen3 have no attention bias and pass null here; Qwen2 does.
+   * Silently skipping a bias that exists is the dangerous case -- the model
+   * still runs and every state is wrong -- so the loader refuses an
+   * architecture whose bias tensors it cannot see, and this applies the ones
+   * it can. */
+  function addBias(x, bias, rows, cols) {
+    if (!bias) return x;
+    for (let r = 0; r < rows; r++)
+      for (let c = 0; c < cols; c++) x[r * cols + c] += bias[c];
+    return x;
+  }
+
   // ---- attention ------------------------------------------------------
 
   /* Causal grouped-query attention. Query heads are mapped onto key/value
@@ -193,9 +207,12 @@
 
       // --- attention block
       let x = await ops.rmsNorm(h, weights.get(p + "input_layernorm"), T, D, eps);
-      let q = await ops.matmul(x, weights.get(p + "q_proj"), T, D, nH * headDim);
-      let k = await ops.matmul(x, weights.get(p + "k_proj"), T, D, nKv * headDim);
-      const v = await ops.matmul(x, weights.get(p + "v_proj"), T, D, nKv * headDim);
+      let q = addBias(await ops.matmul(x, weights.get(p + "q_proj"), T, D, nH * headDim),
+                      weights.get(p + "q_bias", true), T, nH * headDim);
+      let k = addBias(await ops.matmul(x, weights.get(p + "k_proj"), T, D, nKv * headDim),
+                      weights.get(p + "k_bias", true), T, nKv * headDim);
+      const v = addBias(await ops.matmul(x, weights.get(p + "v_proj"), T, D, nKv * headDim),
+                        weights.get(p + "v_bias", true), T, nKv * headDim);
 
       // Qwen3 normalises each head before the rotation; Llama has no such
       // weights and the step is simply absent.
@@ -208,7 +225,9 @@
       k = applyRope(k, nKv, T, headDim, cos, sin);
 
       const ctx = attention(q, k, v, T, nH, nKv, headDim);
-      const attnOut = await ops.matmul(ctx, weights.get(p + "o_proj"), T, nH * headDim, D);
+      const attnOut = addBias(
+        await ops.matmul(ctx, weights.get(p + "o_proj"), T, nH * headDim, D),
+        weights.get(p + "o_bias", true), T, D);
 
       if (components) components.attn.set(attnOut, l * T * D);
       h = await ops.add(h, attnOut);
@@ -251,5 +270,5 @@
     return await ops.matmul(normed, head, T, D, config.vocabSize);
   }
 
-  return { forward, logitLens, cpuOps, ropeTable, applyRope, attention };
+  return { forward, logitLens, cpuOps, ropeTable, applyRope, attention, addBias };
 });

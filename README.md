@@ -490,6 +490,30 @@ stream and `hidden[l+1] = hidden[l] + attn[l] + mlp[l]`, the same layout
 locally-built models (`tests/test_model_conformance.py`), because a
 reimplementation is only worth having if it is *the same computation*.
 
+**On the hosted viewer** there is nothing to install and nothing to paste:
+open *Run a model in this page*, pick one, and capture. The picker lists a
+handful of verified models with their real download size shown *before* the
+download starts, and a model you have already fetched is served from the
+browser's cache — so the second visit starts in under a second rather than
+re-downloading a few hundred megabytes.
+
+| model | size | architecture |
+|---|---|---|
+| SmolLM2 360M | 386 MB | llama |
+| Qwen3 0.6B | 639 MB | qwen3 — GQA + per-head q/k norms |
+| Qwen2.5 0.5B | 675 MB | qwen2 — attention bias |
+
+Each was checked before being listed: the host sends usable CORS headers, the
+file's ggml types are ones `gguf.js` implements, it embeds its own tokenizer,
+and — the one that matters — `gguf.js` can place *every* tensor in it. An
+architecture carrying weights this stack cannot apply (Qwen2's attention
+biases were exactly that case) is **refused at load** rather than run: a model
+that loads and silently skips a weight produces a trajectory of a model that
+does not exist, which is worse than an error.
+
+To run a model that is not in the list, drop its `.gguf` on the page or paste
+a URL under *Load your own*. To ship your own weights:
+
 ```bash
 mottled export-weights Qwen/Qwen3-0.6B -o qwen3-0.6b.mwt   # ~598 MB at q8
 ```
@@ -509,14 +533,15 @@ matching the Python modules numerically, the way `bvh.js` matches `bvh.py`.
 the CPU reference implements, so there is one forward pass and the GPU is an
 accelerator rather than a second source of truth.
 
-**What is not verified:** the WebGPU kernels' arithmetic needs a GPU, which
-CI does not have. `viewer/tests/parity.html` runs both backends over
-identical weights in a real browser and reports the largest disagreement —
-until that has been run and passed, treat the WebGPU path as unverified. CI
-checks the shaders' bindings against the code that binds them, which catches
-the one-side-edited failure, not the maths. Still missing before the live
-viewer is end to end: BPE **encode** in JS (a GGUF carries its own tokenizer
-and `gguf.js` exposes it — the algorithm is unwritten) and the capture UI.
+**On verifying the GPU path.** The kernels' arithmetic cannot be checked by
+CI, which has no GPU — so it is checked by hand:
+`viewer/tests/parity.html` runs both backends over identical weights in a
+real browser and reports the largest disagreement. It has been run on real
+hardware and passed, which is what promotes WebGPU from "written" to
+"verified". CI covers the rest: that each shader's bindings and entry point
+match the code that binds them, which catches the failure where one side is
+edited alone. **Re-run the parity page after changing a kernel** — that check
+is manual by necessity, so nothing else will catch a regression in it.
 
 ### Interaction layer
 

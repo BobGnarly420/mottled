@@ -292,3 +292,96 @@ def test_forward_pass_runs_on_a_ternary_gguf(tmp_path):
     # The states must actually move; an all-zero dequant would still satisfy
     # the decomposition above.
     assert np.abs(hidden[1] - hidden[0]).max() > 1e-6
+
+
+def test_unplaceable_tensors_are_refused(tmp_path):
+    """An architecture this reader does not fully implement must not load.
+
+    Qwen2-style attention biases are the real case: a reader that maps only
+    the weight tensors loads the file happily, the forward pass skips every
+    bias, and the trajectory drawn is of a model that does not exist. A
+    refusal naming the tensors is strictly better than a picture that looks
+    right, so `open` refuses on any tensor it cannot place.
+    """
+    rng = np.random.default_rng(9)
+    small = lambda *s: (rng.normal(size=s) * 0.05).astype(np.float32)
+
+    tensors = {
+        "token_embd.weight": (small(32, 64), QT.F32),
+        "output_norm.weight": (small(64), QT.F32),
+        "blk.0.attn_q.weight": (small(64, 64), QT.F32),
+        "blk.0.attn_k.weight": (small(64, 64), QT.F32),
+        "blk.0.attn_v.weight": (small(64, 64), QT.F32),
+        "blk.0.attn_output.weight": (small(64, 64), QT.F32),
+        "blk.0.ffn_gate.weight": (small(128, 64), QT.F32),
+        "blk.0.ffn_up.weight": (small(128, 64), QT.F32),
+        "blk.0.ffn_down.weight": (small(64, 128), QT.F32),
+        "blk.0.attn_norm.weight": (small(64), QT.F32),
+        "blk.0.ffn_norm.weight": (small(64), QT.F32),
+        # Something this reader has no place for.
+        "blk.0.attn_gate_experts.weight": (small(64, 64), QT.F32),
+    }
+    meta = {"qwen3.block_count": 1, "qwen3.embedding_length": 64,
+            "qwen3.attention.head_count": 4, "qwen3.attention.head_count_kv": 4,
+            "qwen3.feed_forward_length": 128, "qwen3.attention.key_length": 16}
+    path = tmp_path / "exotic.gguf"
+    _write_gguf(path, tensors, meta)
+
+    script = """
+    const fs = require("fs");
+    const G = require(process.argv[1]);
+    const buf = fs.readFileSync(process.argv[2]);
+    G.open(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+    """
+    proc = subprocess.run(["node", "-e", script, str(GGUF_JS), str(path)],
+                          capture_output=True, text=True)
+    assert proc.returncode != 0, "an unplaceable tensor must refuse, not load"
+    assert "cannot place" in proc.stderr
+    assert "attn_gate_experts" in proc.stderr
+
+
+def test_attention_bias_tensors_are_placed(tmp_path):
+    """Qwen2-style biases map to the names the forward pass reads."""
+    rng = np.random.default_rng(10)
+    small = lambda *s: (rng.normal(size=s) * 0.05).astype(np.float32)
+
+    tensors = {
+        "token_embd.weight": (small(32, 64), QT.F32),
+        "output_norm.weight": (small(64), QT.F32),
+        "blk.0.attn_q.weight": (small(64, 64), QT.F32),
+        "blk.0.attn_q.bias": (small(64), QT.F32),
+        "blk.0.attn_k.weight": (small(64, 64), QT.F32),
+        "blk.0.attn_k.bias": (small(64), QT.F32),
+        "blk.0.attn_v.weight": (small(64, 64), QT.F32),
+        "blk.0.attn_v.bias": (small(64), QT.F32),
+        "blk.0.attn_output.weight": (small(64, 64), QT.F32),
+        "blk.0.ffn_gate.weight": (small(128, 64), QT.F32),
+        "blk.0.ffn_up.weight": (small(128, 64), QT.F32),
+        "blk.0.ffn_down.weight": (small(64, 128), QT.F32),
+        "blk.0.attn_norm.weight": (small(64), QT.F32),
+        "blk.0.ffn_norm.weight": (small(64), QT.F32),
+    }
+    meta = {"qwen2.block_count": 1, "qwen2.embedding_length": 64,
+            "qwen2.attention.head_count": 4, "qwen2.attention.head_count_kv": 4,
+            "qwen2.feed_forward_length": 128, "qwen2.attention.key_length": 16}
+    path = tmp_path / "biased.gguf"
+    _write_gguf(path, tensors, meta, arch="qwen2")
+
+    script = """
+    const fs = require("fs");
+    const G = require(process.argv[1]);
+    const buf = fs.readFileSync(process.argv[2]);
+    const m = G.open(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+    process.stdout.write(JSON.stringify({
+      hasQBias: m.get("layers.0.q_bias", true) !== null,
+      hasOBias: m.get("layers.0.o_bias", true) !== null,
+      names: m.names.filter(n => n.endsWith("_bias")).sort(),
+    }));
+    """
+    proc = subprocess.run(["node", "-e", script, str(GGUF_JS), str(path)],
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    out = json.loads(proc.stdout)
+    assert out["hasQBias"] is True
+    assert out["hasOBias"] is False        # absent in this file, optional
+    assert out["names"] == ["layers.0.k_bias", "layers.0.q_bias", "layers.0.v_bias"]

@@ -249,10 +249,22 @@
     "attn_q_norm": "q_norm", "attn_k_norm": "k_norm",
   };
 
+  /* Suffixes carrying weights the forward pass must apply if they exist.
+   * A GGUF holding one this reader cannot place is an architecture it does
+   * not actually implement, and loading it anyway produces a model that runs
+   * and is wrong everywhere -- so `open` refuses instead. */
+  const BIAS_MAP = {
+    "attn_q": "q_bias", "attn_k": "k_bias", "attn_v": "v_bias",
+    "attn_output": "o_bias", "ffn_gate": "gate_bias", "ffn_up": "up_bias",
+    "ffn_down": "down_bias",
+  };
+
   function mapName(gguf) {
     if (NAME_MAP[gguf]) return NAME_MAP[gguf];
     const m = /^blk\.(\d+)\.(.+)\.weight$/.exec(gguf);
     if (m && BLOCK_MAP[m[2]]) return `layers.${m[1]}.${BLOCK_MAP[m[2]]}`;
+    const b = /^blk\.(\d+)\.(.+)\.bias$/.exec(gguf);
+    if (b && BIAS_MAP[b[2]]) return `layers.${b[1]}.${BIAS_MAP[b[2]]}`;
     return null;
   }
 
@@ -287,9 +299,32 @@
     const { meta, tensors, dataStart } = parse(buffer);
     const config = configFrom(meta);
     const byName = new Map();
+    const unplaced = [];
     for (const info of Object.values(tensors)) {
       const mapped = mapName(info.name);
       if (mapped) byName.set(mapped, info);
+      else unplaced.push(info.name);
+    }
+
+    /* Refuse a file holding weights this reader cannot place.
+     *
+     * The failure this prevents is the quiet one: an architecture with, say,
+     * per-head attention biases loads without complaint, every forward pass
+     * skips them, and the trajectory drawn is of a model that does not exist.
+     * A refusal naming the tensors is strictly better than a picture that
+     * looks right. `rope_freqs` is precomputed rotary data this implementation
+     * derives itself, so it is expected and not a gap.
+     */
+    const ignorable = /(^rope_freqs\.weight$|\.rope_freqs\.weight$)/;
+    const blocking = unplaced.filter((n) => !ignorable.test(n));
+    if (blocking.length) {
+      const shown = blocking.slice(0, 4).join(", ");
+      throw new Error(
+        `GGUF: this file holds ${blocking.length} tensor(s) this reader cannot ` +
+        `place (${shown}${blocking.length > 4 ? ", …" : ""}). That means the ` +
+        `architecture "${config.architecture}" is not fully implemented here, ` +
+        `and loading it would produce a model that runs and is wrong. ` +
+        `Refusing rather than mis-reading.`);
     }
     const cache = new Map();
 
