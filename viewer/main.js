@@ -908,13 +908,60 @@ ui.fileInput.addEventListener("change", () => {
 });
 
 // camera controls
+//
+// Pointer events rather than mouse events, so a finger and a mouse take the
+// same path. What touch needs beyond that is a second finger: there is no
+// wheel to zoom with and no right button to pan with, so two pointers do
+// both — the distance between them zooms, their midpoint pans. (The canvas
+// also sets `touch-action: none`; without it the browser claims the drag as
+// a page scroll and the pointer stream stops mid-gesture.)
 let drag = null;
+const touches = new Map();   // active pointers, for pinch/two-finger pan
+let pinch = null;
+
+const pinchState = () => {
+  const [a, b] = [...touches.values()];
+  return {
+    dist: Math.hypot(a.x - b.x, a.y - b.y),
+    cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2,
+  };
+};
+
+function zoomBy(factor) {
+  const d = state.diag || 10;
+  state.cam.dist = Math.min(d * 12, Math.max(d * 0.03, state.cam.dist * factor));
+}
+
 canvas.addEventListener("pointerdown", (e) => {
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (touches.size === 2) {
+    // Second finger down: this gesture is a pinch, not an orbit. Drop the
+    // orbit in progress so the view does not lurch as the fingers settle.
+    drag = null;
+    pinch = pinchState();
+    return;
+  }
+  if (touches.size > 2) return;
   drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, moved: false,
            pan: e.button === 2 || e.shiftKey };
   canvas.setPointerCapture(e.pointerId);
 });
 canvas.addEventListener("pointermove", (e) => {
+  if (touches.has(e.pointerId)) touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+  if (pinch && touches.size === 2) {
+    const now = pinchState();
+    if (now.dist > 0 && pinch.dist > 0) zoomBy(pinch.dist / now.dist);
+    const c = state.cam, k = c.dist * 0.0012;
+    const dx = now.cx - pinch.cx, dy = now.cy - pinch.cy;
+    const st = Math.sin(c.theta), ct = Math.cos(c.theta);
+    const sp = Math.sin(c.phi), cp = Math.cos(c.phi);
+    const right = [-st, ct, 0], up = [-sp * ct, -sp * st, cp];
+    for (let d = 0; d < 3; d++) c.target[d] += (-dx * right[d] + dy * up[d]) * k;
+    pinch = now;
+    return;
+  }
+
   state.mouse = [e.clientX, e.clientY];
   if (!drag) return;
   // past a few pixels this is an orbit/pan, not a click — so it can't pin
@@ -937,19 +984,31 @@ canvas.addEventListener("pointermove", (e) => {
 // than reusing the last frame's hover so a move-then-click lands where the
 // cursor actually is.
 canvas.addEventListener("pointerup", (e) => {
+  touches.delete(e.pointerId);
+  if (touches.size < 2) pinch = null;
   const click = drag && !drag.moved && !drag.pan && e.button === 0;
   drag = null;
   if (click && state.scene) state.pinned = hoverPick(currentMVP());
 });
-canvas.addEventListener("pointerleave", () => { state.mouse = null; });
+// A cancelled pointer (the browser taking over, a call arriving) must clear
+// the same state an up would, or the next touch starts mid-gesture.
+canvas.addEventListener("pointercancel", (e) => {
+  touches.delete(e.pointerId);
+  if (touches.size < 2) pinch = null;
+  drag = null;
+});
+canvas.addEventListener("pointerleave", (e) => {
+  touches.delete(e.pointerId);
+  if (touches.size < 2) pinch = null;
+  state.mouse = null;
+});
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && state.pinned) { state.pinned = null; e.preventDefault(); }
 });
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 canvas.addEventListener("wheel", (e) => {
   e.preventDefault();
-  const d = state.diag || 10;
-  state.cam.dist = Math.min(d * 12, Math.max(d * 0.03, state.cam.dist * Math.exp(e.deltaY * 0.0012)));
+  zoomBy(Math.exp(e.deltaY * 0.0012));
 }, { passive: false });
 
 // drag & drop

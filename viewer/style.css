@@ -25,7 +25,12 @@ html, body { height: 100%; overflow: hidden; background: var(--color-base);
 .mono { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
 .dim { color: var(--color-fg-2); }
 
-#gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+/* touch-action: none is load-bearing, not defensive. Without it the browser
+   interprets a drag on the canvas as a page scroll or zoom, swallows the
+   gesture and stops delivering pointermove — so orbiting simply does not work
+   on a phone, with no error to explain why. */
+#gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block;
+  touch-action: none; }
 
 #hud-top, #runs-panel, #info-panel, #hud-bottom {
   position: fixed; background: var(--color-panel);
@@ -183,6 +188,64 @@ button:active { transform: translateY(1px); }
 
 @media (prefers-reduced-motion: reduce) {
   button, select { transition: none; }
+}
+
+/* ---- small screens ---------------------------------------------------
+   The desktop layout parks four fixed panels in the corners of a large
+   viewport. On a phone they overlap each other and bury the scene they are
+   meant to describe, so the arrangement changes rather than merely shrinking:
+   the top panel spans the width and caps its height (scrolling internally,
+   since the model list plus prompt box is taller than a phone), the runs
+   panel moves to the bottom above the scrubber, and the hover inspector is
+   dropped — it tracks a cursor, and a finger is its own cursor. */
+@media (max-width: 720px) {
+  #hud-top {
+    top: 8px; left: 8px; right: 8px; max-width: none;
+    max-height: 46vh; overflow-y: auto; padding: 10px;
+    -webkit-overflow-scrolling: touch;
+  }
+  #title { font-size: 13px; }
+
+  #runs-panel {
+    top: auto; bottom: 56px; left: 8px; right: 8px;
+    min-width: 0; max-width: none; max-height: 28vh; overflow-y: auto;
+    padding: 10px;
+  }
+  #runs-list .prompt, #runs-list .gen-summary,
+  #runs-list .feat-summary { max-width: none; }
+
+  /* Hover has no meaning on touch: there is no pointer position until a
+     finger is down, and by then it is a drag. Tapping still pins, and the
+     pinned readout uses this same panel. */
+  #info-panel { display: none; }
+
+  #hud-bottom {
+    left: 8px; right: 8px; bottom: 8px; padding: 8px 10px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  #layerSlider { flex: 1; min-width: 0; }
+
+  /* Touch targets. 4px of padding is a comfortable mouse target and a
+     frustrating thumb one; 44px is the smallest both Apple and Google call
+     reliable, so it is a floor rather than a suggestion. */
+  button, select { padding: 8px 12px; min-height: 44px; }
+  .example { padding: 6px 10px; min-height: 36px; }
+  .model-card { padding: 10px; min-height: 44px; }
+  /* The entry point into the whole live panel: a bare text link on desktop,
+     but it has to be thumb-sized here. */
+  .linkish { padding: 10px 0; min-height: 44px; display: inline-block; }
+  #model-custom summary { padding: 8px 0; }
+  #capture-row textarea { font-size: 16px; }  /* < 16px makes iOS zoom on focus */
+  #model-custom input { font-size: 16px; }
+  #layerSlider { height: 28px; }
+}
+
+/* Very narrow: the scene is the point, so give it more room by letting the
+   top panel collapse to just its controls. */
+@media (max-width: 420px) {
+  #hud-top { max-height: 40vh; }
+  #runs-panel { max-height: 22vh; }
+  #meta { font-size: 11px; }
 }
 
 /* which model produced a run — the scene-level meta describes run 0 only,
