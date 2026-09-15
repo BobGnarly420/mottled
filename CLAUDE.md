@@ -137,13 +137,21 @@ reason a value is what it is. Match that density rather than annotating syntax.
 
 ## Workflow
 
-Enable auto-merge on pull requests by default; merge without it only when
-there's a specific reason not to (unexplained red or flaky CI, a merge conflict
-where both sides changed the same logic, a genuinely pending human review, or a
-change that reaches outside the repo — a release, a publish, a Pages deploy that
-can't be verified first).
+Land pull requests as soon as CI is green rather than leaving them open for
+their own sake. Hold only for a specific reason: unexplained red or flaky CI, a
+merge conflict where both sides changed the same logic, a genuinely pending
+human review, or a change that reaches outside the repo — a release, a publish,
+a Pages deploy that can't be verified first.
 
-Note that GitHub only accepts auto-merge while checks are still pending; once
-CI is green it refuses the request as redundant and the PR has to be merged
-directly. Enabling it right after the push, while CI runs, is what makes it
-fire on its own.
+Auto-merge is the intent, but the `enable_pr_auto_merge` tool available in
+Claude Code sessions refuses this repo's PRs in *both* directions, so in
+practice there is no window for it:
+
+- while the one CI check is still running it reports the PR `unstable`, worded
+  as "required checks are failing" even though nothing has failed;
+- once that check passes it reports the PR already `clean` and says to merge
+  directly.
+
+So squash-merge directly once CI goes green. (Observed on #33 and #34. GitHub's
+own auto-merge does accept a pending PR — this is a limitation of the tool, not
+of the repository, and it may stop being true.)
