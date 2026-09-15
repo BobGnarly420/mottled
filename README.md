@@ -31,6 +31,15 @@ landing page plus the web viewer with bundled sample scenes (real GPT-2 and
 Qwen captures), no install required — and, with a model loaded in the page,
 live capture in the browser.
 
+![The web viewer scrubbing three GPT-2 runs from layer 0 to layer 12 across the
+shared density terrain](docs/images/viewer-scrub.gif)
+*The WebGL viewer on `samples/scene-abc.mtj`. Three GPT-2 prompts — the
+capitals of France, Germany and Italy — over one density terrain, swept from
+layer 0 to 12. The marbles start apart and end in the same high-density
+region; the amber overlay is the density standard error, marking where the
+terrain is estimated from too few points to trust. What that does and does not
+license you to conclude is [docs/validity.md](docs/validity.md).*
+
 ## Quickstart
 
 ```bash
@@ -456,10 +465,9 @@ python -m http.server            # from the repo root
 # → http://localhost:8000/viewer/   (drag a .mtj in, or ?file=samples/scene-abc.mtj)
 ```
 
-![The WebGL web viewer rendering the committed three-run sample scene](docs/images/viewer.png)
-*The dependency-free WebGL viewer on `samples/scene-abc.mtj`: three runs on
+That is the viewer [animated at the top of this file](#-mottled): three runs on
 one terrain, per-run visibility toggles, the comparison table, and the layer
-scrubber.*
+scrubber.
 
 The Streamlit app has an **Export scene (.mtj)** button for whatever is
 currently on screen. The viewer is plain WebGL2 with zero dependencies and
