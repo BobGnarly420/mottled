@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Scenes carry their own methods section
+`docs/validity.md` asks anyone publishing on Mottled output to version-lock
+the model, tokenizer, library versions, precision, seeds and SAE artifact
+hashes. That was a norm with nothing behind it: the knobs lived in a
+`MarbleConfig` the user had to transcribe by hand, the environment facts lived
+nowhere, and a shared `.mtj` could not say what produced it (#29).
+
+- **`provenance.py`** — `record()` collects the full parameterization: schema
+  and UTC timestamp, Mottled's version, every `MarbleConfig` field, the
+  prompts, one model identity *per run* (id, hub commit, backend, family,
+  device, dtype), and the environment (Python, platform, and the versions of
+  the nine libraries that can actually move a number in a scene — not a `pip
+  freeze`). `sae_digest` hashes a dictionary's weights rather than the file
+  they arrived in, so the same SAE hashes the same from the hub, an `.npz` or
+  a SAELens object.
+- **`pipeline.attach_manifest`** puts the record on a result the way
+  `attach_inspector` and `attach_features` do; `statefile` writes it under the
+  additive manifest key `analysis` in both `.mtj` kinds. The explorer's
+  **Export scene** button and `mottled export` attach it always.
+- **`mottled export-manifest scene.mtj`** prints it as citable JSON, and
+  `mottled export --manifest PATH` writes it beside the scene.
+- **Capture now reports what it ran**: `meta` carries the hub commit the
+  weights resolved to, plus the resolved device and dtype — the config can say
+  `device="auto"`, only the capture knows where the model actually ran.
+- The record states the parameterization a reproduction attempt needs; it is
+  not evidence that the run reproduces, and `docs/validity.md` says so.
+
 ### The synthetic backend is gone
 `models/synthetic.py` generated plausible-looking trajectories analytically.
 It made the whole stack runnable without torch, and it was also the reason

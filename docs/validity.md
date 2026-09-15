@@ -261,8 +261,12 @@ public claim built on Mottled output:
 - Use prompt-level effect sizes and confidence intervals; a screenshot is
   an illustration, not evidence.
 - Version-lock model weights, tokenizer, library versions, GPU precision,
-  seeds, and SAE artifact hashes (`meta` and the `.mtj` manifest carry
-  much of this; carry the rest yourself).
+  seeds, and SAE artifact hashes. Every exported scene carries this as its
+  `analysis` record — the config, the environment, the resolved device and
+  dtype, the hub commit the weights came from, and a content hash of the
+  dictionary — and `mottled export-manifest scene.mtj` prints it as citable
+  JSON for a methods section. What the record cannot know, say yourself:
+  it reports the parameterization, not that the run reproduces.
 
 ## Where this leaves the project
 

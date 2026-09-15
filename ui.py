@@ -40,6 +40,7 @@ from pipeline import (  # noqa: F401
     _capture_with,
     attach_features,
     attach_inspector,
+    attach_manifest,
     degraded_note,
     run_compare,
     run_intervention,
@@ -59,7 +60,7 @@ from render import (  # noqa: F401
 
 __all__ = [
     "run_pipeline", "run_scene", "run_compare", "run_intervention",
-    "run_model_scene", "attach_features", "attach_inspector",
+    "run_model_scene", "attach_features", "attach_inspector", "attach_manifest",
     "degraded_note",
     "render", "render_feature_field", "render_persistence", "field_rgb",
     "main",
@@ -367,11 +368,17 @@ def main() -> None:
         # inspector layers (neighbors, attn/MLP share) so the shareable
         # viewer is not the lesser surface
         attach_inspector(result, n_neighbors=cfg.n_neighbors)
+        sae_record = {}
         if acts is not None and sae_source is not None:
             # trained dictionary active: export its feature layer + measured
             # fit with the scene (demo features are decorative — not exported)
             attach_features(result, active_sae,
                             source=sae_source[0], hook=sae_source[1])
+            sae_record = {"sae": active_sae, "sae_source": sae_source[0],
+                          "sae_hook": sae_source[1]}
+        # the analysis record: an exported scene states its own
+        # parameterization rather than relying on the user's notes
+        attach_manifest(result, cfg, **sae_record)
         _buf = _io.BytesIO()
         statefile_mod.save_scene(result, _buf)
         st.download_button("Export scene (.mtj)", data=_buf.getvalue(),

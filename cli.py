@@ -3,6 +3,7 @@
     mottled                    # Streamlit explorer (default)
     mottled serve              # stdlib web server: viewer + capture API
     mottled export PROMPT ...  # capture prompts -> scene.mtj on stdout/file
+    mottled export-manifest S  # print the analysis record a .mtj carries
 """
 
 from __future__ import annotations
@@ -38,11 +39,23 @@ def main(argv: list[str] | None = None) -> int:
                                "(the decode axis; default 0 = prompt only)")
     p_export.add_argument("--temperature", type=float, default=0.0,
                           help="decode temperature (0 = greedy, seeded above 0)")
+    p_export.add_argument("--manifest", default=None, metavar="PATH",
+                          help="also write the analysis record as standalone "
+                               "JSON, for a methods section or a "
+                               "pre-registration (the scene always embeds it)")
     p_export.add_argument("--models", default=None, metavar="A,B",
                           help="compare several models on ONE prompt instead of "
                                "several prompts on one model. The scene is built "
                                "in readout space (the vocabulary the models share), "
                                "since they share no hidden space.")
+
+    p_manifest = sub.add_parser(
+        "export-manifest",
+        help="print the analysis record embedded in a .mtj (config, "
+             "environment, model and SAE identity)")
+    p_manifest.add_argument("scene", help="a .mtj file")
+    p_manifest.add_argument("-o", "--output", default=None,
+                            help="default: stdout")
 
     p_weights = sub.add_parser(
         "export-weights",
@@ -57,6 +70,26 @@ def main(argv: list[str] | None = None) -> int:
                            help="omit the id->piece table used to label states")
 
     args = parser.parse_args(argv)
+
+    if args.command == "export-manifest":
+        import json
+
+        import statefile
+
+        manifest, _ = statefile.read_container(args.scene)
+        record = manifest.get("analysis")
+        if record is None:
+            print(f"{args.scene}: no analysis record — written either before "
+                  "provenance export existed or by another producer",
+                  file=sys.stderr)
+            return 1
+        text = json.dumps(record, indent=2, ensure_ascii=False)
+        if args.output:
+            Path(args.output).write_text(text + "\n")
+            print(f"wrote {args.output}", file=sys.stderr)
+        else:
+            print(text)
+        return 0
 
     if args.command == "export-weights":
         import mweights
@@ -94,27 +127,41 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "export":
         import statefile
         from config import MarbleConfig
-        from pipeline import attach_inspector
+        from pipeline import attach_inspector, attach_manifest
         from ui import run_scene
 
         cfg = MarbleConfig(model=args.model, use_cache=False,
                            generate_tokens=args.generate,
                            generate_temperature=args.temperature)
+
+        def _write(result):
+            """Every exported scene carries its own analysis record."""
+            attach_manifest(attach_inspector(result), cfg)
+            statefile.save_scene(result, args.output)
+            if args.manifest:
+                import json
+
+                Path(args.manifest).write_text(
+                    json.dumps(result["analysis"], indent=2,
+                               ensure_ascii=False) + "\n")
+
         if args.models:
             from pipeline import run_model_scene
 
             names = [m.strip() for m in args.models.split(",") if m.strip()]
             result = run_model_scene(cfg, args.prompts[0], names)
-            statefile.save_scene(attach_inspector(result), args.output)
+            _write(result)
             print(f"wrote {args.output}: {len(names)} models on "
                   f"{result['shared_vocab']} shared vocabulary entries")
             for name, cmp in zip(names[1:], result["model_comparisons"]):
                 print(f"  {names[0]} vs {name}: final JS "
                       f"{cmp.final_divergence:.4f}, top-1 {cmp.top_a!r} vs {cmp.top_b!r}")
+            if args.manifest:
+                print(f"wrote {args.manifest}")
             return 0
-        statefile.save_scene(attach_inspector(run_scene(cfg, args.prompts)),
-                             args.output)
-        print(f"wrote {args.output}")
+        _write(run_scene(cfg, args.prompts))
+        print(f"wrote {args.output}"
+              + (f" and {args.manifest}" if args.manifest else ""))
         return 0
 
     from streamlit.web import cli as st_cli

@@ -21,6 +21,7 @@ import cache as cache_mod
 import compare as compare_mod
 import density as density_mod
 import projection as projection_mod
+import provenance as provenance_mod
 import sae as sae_mod
 import terrain as terrain_mod
 import trajectory as trajectory_mod
@@ -321,6 +322,27 @@ def attach_inspector(result: dict, n_neighbors: int = 5) -> dict:
 
         out.append(entry)
     result["inspector_list"] = out
+    return result
+
+
+def attach_manifest(result: dict, cfg: MarbleConfig, sae=None,
+                    sae_source: str | None = None,
+                    sae_hook: str | None = None) -> dict:
+    """Attach the analysis record — the scene's own methods section.
+
+    `docs/validity.md` asks a user publishing on Mottled output to version-lock
+    the model, tokenizer, library versions, precision, seeds and SAE artifact
+    hashes. This puts all of it in the file instead of in the user's notes:
+    `provenance.record` over the config that drove the run and the metas of the
+    trajectories it produced. Mutates and returns `result` (adds "analysis");
+    `statefile.save_scene` carries it into the `.mtj` additively.
+    """
+    result["analysis"] = provenance_mod.record(
+        cfg,
+        prompts=result.get("prompts") or [result.get("prompt", "")],
+        trajs=result.get("trajs") or [result["traj"]],
+        sae=sae, sae_source=sae_source, sae_hook=sae_hook,
+    )
     return result
 
 

@@ -106,11 +106,13 @@ def read_container(path_or_fh) -> tuple[dict, dict[str, np.ndarray]]:
 
 # ------------------------------------------------------------- trajectory IO
 def save(traj: StateTrajectory, path_or_fh, include_logits: bool = True,
-         include_embeddings: bool = True) -> None:
+         include_embeddings: bool = True, analysis: dict | None = None) -> None:
     """Serialize one StateTrajectory at full fidelity (kind: "trajectory").
 
     `include_logits` / `include_embeddings` drop the two largest optional
-    arrays for smaller files; everything else always round-trips.
+    arrays for smaller files; everything else always round-trips. `analysis`
+    is an analysis record (`provenance.record`) to carry with the file — the
+    archival counterpart of what `save_scene` writes for a shared scene.
     """
     w = _Writer()
     w.add("hidden", traj.hidden.astype(np.float32))
@@ -138,6 +140,8 @@ def save(traj: StateTrajectory, path_or_fh, include_logits: bool = True,
     if traj.topk is not None:
         manifest["topk"] = [[[[tok, float(p)] for tok, p in state] for state in layer]
                             for layer in traj.topk]
+    if analysis:
+        manifest["analysis"] = _jsonable(analysis)
     _write(path_or_fh, manifest, w)
 
 
@@ -266,6 +270,11 @@ def save_scene(result: dict, path_or_fh) -> None:
         "terrain": terrain_refs,
         "runs": runs,
     }
+    if result.get("analysis"):
+        # the analysis record (pipeline.attach_manifest): config, environment,
+        # model and dictionary identity, so a scene that outlives the session
+        # that made it can still say what it is — additive, old readers ignore it
+        manifest["analysis"] = _jsonable(result["analysis"])
     if result.get("comparisons"):
         manifest["comparisons"] = [
             {"label": chr(65 + i), "hausdorff": float(c.hausdorff),
