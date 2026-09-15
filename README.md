@@ -48,6 +48,7 @@ mottled                      # the Streamlit explorer
 mottled serve --model gpt2   # web viewer + in-browser capture API
 mottled export "The capital of France is" -o scene.mtj
 mottled export "The residual stream" --generate 8 -o decode.mtj   # + continuation
+mottled export-manifest scene.mtj            # what produced it, as citable JSON
 ```
 
 (Or from a clone: `pip install -r requirements.txt && streamlit run ui.py`.)
@@ -468,6 +469,21 @@ python -m http.server            # from the repo root
 That is the viewer [animated at the top of this file](#-mottled): three runs on
 one terrain, per-run visibility toggles, the comparison table, and the layer
 scrubber.
+
+Every exported scene carries an **analysis record**: the config, the prompts,
+the environment (Python, platform, the library versions that can move a
+number), the resolved device and dtype, the hub commit the weights came from,
+and a content hash of any SAE that was applied. `docs/validity.md` asks a user
+publishing on Mottled output to version-lock exactly that list, so the file
+states it rather than the user's notes having to.
+
+```bash
+mottled export "The capital of France is" -o scene.mtj --manifest methods.json
+mottled export-manifest scene.mtj          # or read it back out of any scene
+```
+
+It records the parameterization a reproduction needs — not evidence that the
+run reproduces.
 
 The Streamlit app has an **Export scene (.mtj)** button for whatever is
 currently on screen. The viewer is plain WebGL2 with zero dependencies and

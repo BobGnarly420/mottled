@@ -386,6 +386,13 @@ def _run(model, prompt, tokenizer=None, top_k=5, device="auto", dtype="float32",
         "model": getattr(getattr(model, "config", None), "name_or_path", type(model).__name__),
         "prompt": prompt,
         "family": cap.adapter.name,
+        # what a reproduction has to match beyond the name: the exact weights
+        # (the hub commit they resolved to — absent for a local path or a model
+        # built in-process) and the arithmetic they ran in.  provenance.record
+        # reads these; nothing else in the pipeline does.
+        "revision": getattr(config, "_commit_hash", None),
+        "device": str(model_device),
+        "dtype": str(next(model.parameters()).dtype).removeprefix("torch."),
     }
     if extra_meta:
         meta.update(extra_meta)
