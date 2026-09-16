@@ -258,6 +258,7 @@ density, terrain, metrics, comparison, every viewer) works unchanged.
 | `crossmodel.py` | Comparison *across* models: readout space (the shared vocabulary as a shared coordinate system), depth-normalised divergence, and CKA layer alignment that reports whether it is identified |
 | `models/external.py` | Ingest residual states captured outside Mottled (NNsight, vLLM, your own hooks) → `StateTrajectory` |
 | `models/hooked.py` | TransformerLens producer: run a `HookedTransformer`, or ingest an `ActivationCache` you already have |
+| `parity.py` | `mottled parity`: Mottled's capture vs HuggingFace / TransformerLens / NNsight on a model matrix, as an inspectable report |
 | `provenance.py` | The analysis record: config, environment, model and SAE identity, carried in the `.mtj` as its own methods section |
 | `sae.py` | Sparse-autoencoder features: apply (never train) an SAE to every captured state; demo dictionary + npz interchange |
 | `statefile.py` | `.mtj` interchange: save/load full StateTrajectories and viewer-ready scene bundles ([format spec](docs/mtj-format.md)) |
@@ -698,6 +699,38 @@ attention-pattern capture on locally-built Llama/GPT-2 models, multi-prompt
 scene assembly, the intervention pipeline, and headless runs of the actual
 Streamlit app — single-prompt, A/B, N-prompt scene, and SAE overlay —
 (`streamlit.testing.v1.AppTest`).
+
+### The parity report: don't take this README's word for it
+
+Those tests prove the pipeline is self-consistent. That is not the question a
+reader of a paper built on Mottled has. Theirs is whether the residual stream
+in the picture is the one the model actually computed, and until now the only
+answer was this file's assurance that it is.
+
+```bash
+mottled parity                              # the default matrix, printed
+mottled parity --models gpt2 -o parity.json --markdown parity.md
+```
+
+It runs one prompt through Mottled and through the implementations a reviewer
+already trusts, and reports the largest disagreement as a number:
+
+- **States** — the per-block capture against HuggingFace's own
+  `output_hidden_states`. Same tensors read two ways, so anything above float
+  noise is a bug, not a tolerance.
+- **Readout** — the deepest logit-lens output against the model's actual
+  `logits`. Not circular: if the lens at the last layer cannot reproduce what
+  the model itself predicts, every shallower readout in the explorer is
+  measuring something other than what it claims to.
+- **NNsight** — states from a trace, ingested through `models/external.py`,
+  against the ones `capture()` hooks (needs the `nnsight` extra).
+- **TransformerLens** — only against `from_pretrained_no_processing`. TL's
+  default folds layer-norms and centers writing weights, which moves the
+  residual stream *on purpose*; comparing against a processed model would
+  report a deliberate difference as an error, so the harness declines to.
+
+The command exits non-zero if any comparison exceeds tolerance, so it can gate
+a release. A skipped row is never counted as a passed one.
 
 ### Comparing models, not just prompts
 

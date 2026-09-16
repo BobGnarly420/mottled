@@ -36,6 +36,11 @@ faiss = ["faiss-cpu>=1.7"]
 # Ecosystem interop (optional): TransformerLens producer, SAELens conversion.
 tlens = ["transformer-lens>=1.14"]
 sae = ["sae-lens>=3.0"]
+# NNsight producer + the `mottled parity` cell that checks it. Optional and
+# not in requirements.txt: it pulls ~28 packages (ipython, socketio,
+# accelerate, pydantic), which is a lot of CI for one comparison — unlike
+# `gguf`, which is there precisely because it is light.
+nnsight = ["nnsight>=0.4"]
 dev = ["pytest>=7.4"]
 
 [project.urls]
@@ -49,6 +54,7 @@ mottled-convert-sae = "convert_sae:main"
 [tool.setuptools]
 py-modules = ["bvh", "cache", "capture", "cli", "compare", "config", "convert_sae",
               "crossmodel", "density", "design_tokens", "intervene", "metrics",
-              "neighbors", "pipeline", "projection", "provenance", "render",
-              "sae", "serve", "statefile", "terrain", "trajectory", "ui"]
+              "neighbors", "parity", "pipeline", "projection", "provenance",
+              "render", "sae", "serve", "statefile", "terrain", "trajectory",
+              "ui"]
 packages = ["models"]
