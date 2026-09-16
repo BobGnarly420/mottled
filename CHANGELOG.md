@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### Mottled does not have to own the forward pass
+Every producer so far ran the model itself. That is the wrong shape for a
+researcher who already has the states — an NNsight trace with `.save()` on
+each layer, a vLLM or custom-loop hook, a `run_with_cache` already sitting in
+a notebook. Re-running the model to look at a pass you already ran is the
+expensive half of the work, and at frontier scale it may not be possible.
+
+- **`models/external.py`** — `from_hidden_states(hidden, tokens, model,
+  tokenizer)` accepts whatever the capture left behind: an `(L, T, D)` array,
+  a per-layer list of `(T, D)` or `(1, T, D)`, numpy or torch, bfloat16, and
+  NNsight's saved proxies (`.value` is unwrapped). The model is used only for
+  the readout — final norm, LM head, embedding table, resolved structurally by
+  `models/families.py` — so every layout `capture.py` supports works here too.
+  A ragged stack and a token-count mismatch are named errors rather than a
+  silently wrong picture.
+- **`models/hooked.from_cache`** builds a trajectory from a TransformerLens
+  `ActivationCache` you already ran; `from_hooked_transformer` is now that plus
+  the forward pass. `residual_stack` is separated out, so the layer convention
+  (layer 0 = `resid_pre` 0, then each `resid_post`) is testable without the
+  library installed.
+- Both fill the `meta` keys `provenance.record` reads, so a scene built from an
+  external capture records real facts instead of nulls.
+- The contract pinned by `tests/test_external.py` is not that these produce *a*
+  trajectory but that they produce the *same* one: ingesting the states
+  `capture()` recorded reproduces its logits, entropy, top-k and neighbors.
+  An adapter that near-misses the readout does not crash — it gives every basin
+  and top-k downstream a different question to answer.
+
 ### Scenes carry their own methods section
 `docs/validity.md` asks anyone publishing on Mottled output to version-lock
 the model, tokenizer, library versions, precision, seeds and SAE artifact
