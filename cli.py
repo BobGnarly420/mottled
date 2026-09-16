@@ -5,6 +5,7 @@
     mottled export PROMPT ...  # capture prompts -> scene.mtj on stdout/file
     mottled export-manifest S  # print the analysis record a .mtj carries
     mottled parity             # compare captures against the reference libraries
+    mottled smoke              # does this install actually work?
 """
 
 from __future__ import annotations
@@ -71,6 +72,10 @@ def main(argv: list[str] | None = None) -> int:
     p_parity.add_argument("--markdown", default=None, metavar="PATH",
                           help="write the table as markdown")
 
+    sub.add_parser("smoke",
+                   help="check that this install works: flat API, viewer "
+                        "assets, .mtj round-trip, analysis record")
+
     p_weights = sub.add_parser(
         "export-weights",
         help="write a model as .mwt so the web viewer can run it in-browser")
@@ -104,6 +109,11 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(text)
         return 0
+
+    if args.command == "smoke":
+        import smoke
+
+        return smoke.main()
 
     if args.command == "parity":
         import parity

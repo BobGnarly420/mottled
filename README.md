@@ -49,6 +49,7 @@ mottled serve --model gpt2   # web viewer + in-browser capture API
 mottled export "The capital of France is" -o scene.mtj
 mottled export "The residual stream" --generate 8 -o decode.mtj   # + continuation
 mottled export-manifest scene.mtj            # what produced it, as citable JSON
+mottled smoke                                # check this install actually works
 ```
 
 (Or from a clone: `pip install -r requirements.txt && streamlit run ui.py`.)
@@ -258,6 +259,7 @@ density, terrain, metrics, comparison, every viewer) works unchanged.
 | `crossmodel.py` | Comparison *across* models: readout space (the shared vocabulary as a shared coordinate system), depth-normalised divergence, and CKA layer alignment that reports whether it is identified |
 | `models/external.py` | Ingest residual states captured outside Mottled (NNsight, vLLM, your own hooks) → `StateTrajectory` |
 | `models/hooked.py` | TransformerLens producer: run a `HookedTransformer`, or ingest an `ActivationCache` you already have |
+| `smoke.py` | `mottled smoke`: does this *install* work — flat API, viewer assets, `.mtj` round-trip, analysis record. The check the test suite cannot make, because it runs in a checkout |
 | `parity.py` | `mottled parity`: Mottled's capture vs HuggingFace / TransformerLens / NNsight on a model matrix, as an inspectable report |
 | `provenance.py` | The analysis record: config, environment, model and SAE identity, carried in the `.mtj` as its own methods section |
 | `sae.py` | Sparse-autoencoder features: apply (never train) an SAE to every captured state; demo dictionary + npz interchange |
