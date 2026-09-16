@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### A pip install was broken, and every test passed
+Preparing a release meant building one, and the wheel turned out not to
+contain the tool. The suite runs in a checkout, where every file is present
+because git put it there; none of it could see this.
+
+- **`attractor` and `mweights` were absent from `py-modules`.** A
+  pip-installed Mottled could not `import ui` at all — the explorer, the
+  documented flat API and `mottled serve` were broken for anyone who installed
+  rather than cloned, across 0.1.0 and 0.2.0.
+- **`viewer/` was not packaged.** `serve.py` resolves its static root next to
+  itself, so `mottled serve` answered 404 for the very URL it printed. The
+  viewer and its sample scenes now ship as package data, `viewer.samples`
+  declared explicitly rather than glob-included — setuptools warns that the
+  ambiguous form may stop shipping, which is how a bundled sample disappears
+  two versions from now.
+- **`mottled smoke`** (`smoke.py`) is the check the suite cannot make: run
+  against an *installed* package it imports the flat API, resolves every asset
+  the viewer page asks for, reads a bundled scene, round-trips a `.mtj` and
+  builds an analysis record. Seconds, no network, no weights — a core install
+  with none of the extras must pass it. A missing `torch` is reported, not
+  failed: analysis and both viewers work without it.
+- **`tests/test_packaging.py`** pins the configuration in CI: every top-level
+  module is declared and imports, console scripts point at modules that ship,
+  and every asset `index.html` references matches a package-data pattern.
+- **`RELEASING.md`** — the pre-tag checklist (including that the parity matrix
+  must actually have been run) and what a version number promises about the
+  `.mtj` format, the flat API, the analysis-record schema and `MarbleConfig`.
+
 ### A shared scene says what it is and how much to trust it
 The explorer has always put the caveats beside its figure: projection fidelity
 inline, ✕ markers on low-fidelity states, the validity contract under the

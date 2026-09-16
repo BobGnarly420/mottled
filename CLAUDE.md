@@ -32,6 +32,7 @@ mottled serve --model gpt2           # stdlib server: viewer + capture API
 mottled export "a prompt" -o s.mtj   # capture -> scene file
 mottled export-manifest s.mtj        # the analysis record the scene carries
 mottled parity                       # capture vs HF/TransformerLens/NNsight
+mottled smoke                        # does this install work? (see RELEASING.md)
 mottled export-weights gpt2          # write .mwt for in-browser inference
 python -m http.server                # viewer alone at /viewer/ (static, no API)
 ```

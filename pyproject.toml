@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mottled"
-version = "0.2.0"
+version = "0.3.0"
 description = "Interactive latent trajectory explorer for transformer forward passes"
 readme = "README.md"
 license = "Apache-2.0"
@@ -52,9 +52,24 @@ mottled = "cli:main"
 mottled-convert-sae = "convert_sae:main"
 
 [tool.setuptools]
-py-modules = ["bvh", "cache", "capture", "cli", "compare", "config", "convert_sae",
-              "crossmodel", "density", "design_tokens", "intervene", "metrics",
-              "neighbors", "parity", "pipeline", "projection", "provenance",
-              "render", "sae", "serve", "statefile", "terrain", "trajectory",
-              "ui"]
-packages = ["models"]
+# Every top-level module, checked against the tree by tests/test_packaging.py:
+# `attractor` and `mweights` were missing here, which left a pip-installed
+# Mottled unable to `import ui` at all — the explorer, the flat API and
+# `mottled serve` all failed on an install that looked fine in a clone.
+py-modules = ["attractor", "bvh", "cache", "capture", "cli", "compare",
+              "config", "convert_sae", "crossmodel", "density", "design_tokens",
+              "intervene", "metrics", "mweights", "neighbors", "parity",
+              "pipeline", "projection", "provenance", "render", "sae", "serve",
+              "smoke", "statefile", "terrain", "trajectory", "ui"]
+# `viewer` ships as package data, not just as repo content: serve.py resolves
+# its static root next to itself, so without this a pip-installed `mottled
+# serve` answers 404 for the very URL it prints. The samples come along
+# because the viewer's default scenes are `?file=samples/...`.
+# `viewer.samples` is listed too: setuptools recognises it as a package and
+# warns that a glob-only include is ambiguous — which is how a bundled sample
+# quietly stops shipping two setuptools versions from now.
+packages = ["models", "viewer", "viewer.samples"]
+
+[tool.setuptools.package-data]
+viewer = ["*.js", "*.html", "*.css"]
+"viewer.samples" = ["*.mtj"]
