@@ -265,6 +265,7 @@ density, terrain, metrics, comparison, every viewer) works unchanged.
 | `mweights.py` | `.mwt` export: a model's weights in a form the browser can fetch (per-output-row int8 by default) |
 | `viewer/` | Self-contained WebGL viewer for `.mtj` scenes — no build step, no dependencies |
 | `viewer/model.js` | Instrumented Llama/Qwen3-family forward pass in the browser — records the residual stream after every block (pinned against HF) |
+| `viewer/reading.js` | What a scene is, how much of it survived the projection, and what produced it — the explorer's caveats on the surface scenes are shared on |
 | `viewer/scene.js` | The scene pipeline (projection → density → terrain → drape) in JS, so a scene can be built with no server |
 | `viewer/weights.js` / `viewer/gguf.js` | Weight readers: `.mwt`, and GGUF including the ternary (1.58-bit) builds |
 | `viewer/ops-webgpu.js` | WebGPU kernels behind the same `ops` contract the CPU reference implements |
@@ -508,6 +509,14 @@ mottled export-manifest scene.mtj          # or read it back out of any scene
 
 It records the parameterization a reproduction needs — not evidence that the
 run reproduces.
+
+The viewer shows a **Reading this scene** panel with the same caveats the
+explorer puts beside its figure — the scene's projection fidelity, whether the
+density carries an uncertainty field (and that it is a *lower* bound), what the
+terrain and the readouts do and do not mean, and, from the analysis record,
+what produced it. It is collapsed by default: a reader who opens a scene
+someone sent them can ask what they are looking at without having to leave for
+`docs/validity.md`.
 
 The Streamlit app has an **Export scene (.mtj)** button for whatever is
 currently on screen. The viewer is plain WebGL2 with zero dependencies and

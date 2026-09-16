@@ -13,6 +13,7 @@
   --color-accent: #4B7CF3;
   --color-accent-subtle: rgba(75, 124, 243, 0.08);
   --color-loss: #E05050;
+  --color-amber: #D4934A;
   --color-live: #00CCA8;
   --radius-xs: 2px;
   --radius-sm: 3px;
@@ -32,7 +33,7 @@ html, body { height: 100%; overflow: hidden; background: var(--color-base);
 #gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block;
   touch-action: none; }
 
-#hud-top, #runs-panel, #info-panel, #hud-bottom {
+#hud-top, #runs-panel, #info-panel, #reading-panel, #hud-bottom {
   position: fixed; background: var(--color-panel);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-xs); padding: 12px 14px;
@@ -252,3 +253,23 @@ button:active { transform: translateY(1px); }
    so a cross-model scene needs this per run */
 #runs-list .model { display: block; font-size: 10px; color: var(--color-accent);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* "Reading this scene": the caveats the explorer shows beside its figure,
+   on the surface a scene is actually shared on. Bottom-right so it never
+   covers the pick panel (bottom-left) or the loader (top-left). */
+#reading-panel {
+  right: 12px; bottom: 64px; max-width: 320px; max-height: 52vh;
+  overflow-y: auto; font-size: 11px; line-height: 1.5;
+  color: var(--color-fg-2);
+}
+#reading-panel > summary {
+  cursor: pointer; color: var(--color-fg-1); font-size: 12px;
+  font-weight: 600; letter-spacing: -0.01em;
+}
+#reading-panel[open] > summary { margin-bottom: 8px; }
+#reading-body p { margin: 0 0 8px; }
+#reading-body p:last-child { margin-bottom: 0; }
+#reading-body b { color: var(--color-fg-1); font-weight: 600; }
+.reading-fidelity { color: var(--color-fg-1); }
+.reading-fidelity.warn { color: var(--color-amber); }
+.reading-prov { border-top: 1px solid var(--color-border); padding-top: 8px; }

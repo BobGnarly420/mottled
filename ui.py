@@ -18,6 +18,7 @@ import attractor as attractor_mod
 import cache as cache_mod
 import compare as compare_mod
 import metrics as metrics_mod
+import projection as projection_mod
 import sae as sae_mod
 import statefile as statefile_mod
 from config import (
@@ -444,18 +445,20 @@ def main() -> None:
 
     quality = result.get("quality")
     with col_viz:
-        low_fidelity = 0.5  # one threshold drives both the prose and the ✕ markers
+        # the threshold drives the prose, the ✕ markers, and the viewer's panel
+        low_fidelity = projection_mod.LOW_FIDELITY
         if (degraded := degraded_note(traj.meta)) is not None:
             st.warning(degraded)
         if quality is not None:
             ev = (f"keeps **{quality.explained_variance:.0%}** of the variance · "
                   if quality.explained_variance is not None else "")
-            low = float((np.asarray(quality.preservation) < low_fidelity).mean())
+            fidelity = projection_mod.fidelity_summary(quality.preservation)
             st.markdown(
                 f"**Projection fidelity** — {ev}mean neighborhood preservation "
-                f"**{quality.preservation.mean():.2f}** (k={quality.k}). "
-                f"**{low:.0%}** of states are low-fidelity — flagged ✕ on the scene "
-                f"and drawn where the projection *could* put them, not where they truly are.")
+                f"**{fidelity['mean']:.2f}** (k={quality.k}). "
+                f"**{fidelity['low_fraction']:.0%}** of states are low-fidelity — "
+                f"flagged ✕ on the scene and drawn where the projection *could* "
+                f"put them, not where they truly are.")
         gen0 = traj.meta.get("generation")
         if isinstance(gen0, dict):
             st.markdown(

@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### A shared scene says what it is and how much to trust it
+The explorer has always put the caveats beside its figure: projection fidelity
+inline, ✕ markers on low-fidelity states, the validity contract under the
+scene. The viewer said none of it — and the viewer is the surface a scene is
+*shared* on, where the reader has no session, no config and no author to ask.
+An attractive picture with nothing attached is exactly the research-validity
+risk `docs/validity.md` exists to name.
+
+- **`viewer/reading.js` + a "Reading this scene" panel.** Collapsed by
+  default — it answers a question the reader has rather than standing between
+  them and the picture. It reports the scene's pooled projection fidelity
+  (amber past a quarter of states low), whether the density carries a
+  bootstrap standard error *and that the bound is a lower one*, what the
+  terrain and the readouts do and do not mean in `docs/validity.md`'s own
+  vocabulary, and — from the analysis record the `.mtj` now carries — what
+  produced it. A scene written before that record existed says so rather than
+  showing a blank.
+- Fidelity is **pooled across runs, not averaged over per-run means**: runs in
+  one scene can have different token counts, and a mean of means would weight
+  a three-token prompt like a thirty-token one.
+- **`projection.fidelity_summary` and `projection.LOW_FIDELITY`** are the one
+  home for that computation and that threshold, which previously lived inline
+  in `ui.py`. `viewer/reading.js` ports them and
+  `tests/test_reading_conformance.py` pins the pair: a scene that reported one
+  fidelity in the app and another in the browser would be two tools.
+- Models are de-duplicated in the provenance line — the record has one entry
+  per run, so a two-prompt scene on one model would otherwise read
+  "gpt2, gpt2", which counts runs rather than weights.
+- Verified in a real browser (Chromium) on a bundled sample and on a
+  record-carrying scene, not only under `node --test`.
+
 ### Don't take the README's word for it: `mottled parity`
 The test suite proves the pipeline is self-consistent. That is not the
 question a reader of a paper built on Mottled has — theirs is whether the

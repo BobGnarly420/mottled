@@ -34,6 +34,9 @@ def test_viewer_css_root_mirrors_tokens():
     assert var("color-surface-0") == T.SURFACE_0.lower()
     assert var("color-accent") == T.ACCENT.lower()
     assert var("color-fg-1") == T.FG_1.lower()
+    # the low-fidelity flag: the viewer's scene panel warns in the same amber
+    # the Plotly renderer marks low-fidelity states with
+    assert var("color-amber") == T.AMBER.lower()
 
 
 def test_renderer_consumes_the_token_source():
