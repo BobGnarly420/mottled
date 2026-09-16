@@ -185,6 +185,7 @@ Mamba (state-space)   ─┼─►  StateTrajectory  ─► .mtj  ───┼�
 TransformerLens       ─┤    (in memory)      (on disk)   ├─ Jupyter (render() is a
 API logprobs          ─┤                                 │  plain Plotly figure)
   (degraded)          ─┤                                 └─ future: desktop app
+NNsight / your hooks  ─┤
 in-browser (WebGPU)   ─┘
 future: diffusion, neuro recordings
 ```
@@ -203,6 +204,25 @@ model with no attention at all — is the proof the abstraction is not
 transformer-shaped: its `backbone.layers` layout resolves structurally and
 block capture + logit lens work unchanged (captures that don't apply, like
 attention patterns, refuse loudly instead of lying).
+
+**States you already captured** are a producer too. Mottled does not have to
+own the forward pass: `models/external.py` turns activations from anywhere —
+an NNsight trace with `.save()` on each layer, a vLLM or custom-loop hook, a
+run on a machine that is not this one — into a `StateTrajectory`, using the
+model only for the readout.
+
+```python
+from models.external import from_hidden_states
+from models.hooked import from_cache
+
+traj = from_hidden_states(saved, tokens, model, tokenizer)  # NNsight, vLLM, yours
+traj = from_cache(cache, ht_model, prompt)   # a run_with_cache you already ran
+```
+
+Re-running a model to look at a pass you already ran is the expensive half of
+the work, and at frontier scale it may not be possible at all. The readout is
+the same code path as the native capture, so the numbers match it rather than
+merely resembling it — `tests/test_external.py` pins that against `capture()`.
 
 **Closed models** are a producer too, honestly bounded: `models/logprobs.py`
 turns a hosted API's per-step top-k logprobs into a *degraded*
@@ -236,6 +256,9 @@ density, terrain, metrics, comparison, every viewer) works unchanged.
 | `intervene.py` | Causal interventions: perturb / set / noise / freeze a state via a resumable forward pass → counterfactual trajectory |
 | `compare.py` | Trajectory comparison within one model: Hausdorff, dynamic time warping, shared-prefix alignment, layerwise divergence profiles |
 | `crossmodel.py` | Comparison *across* models: readout space (the shared vocabulary as a shared coordinate system), depth-normalised divergence, and CKA layer alignment that reports whether it is identified |
+| `models/external.py` | Ingest residual states captured outside Mottled (NNsight, vLLM, your own hooks) → `StateTrajectory` |
+| `models/hooked.py` | TransformerLens producer: run a `HookedTransformer`, or ingest an `ActivationCache` you already have |
+| `provenance.py` | The analysis record: config, environment, model and SAE identity, carried in the `.mtj` as its own methods section |
 | `sae.py` | Sparse-autoencoder features: apply (never train) an SAE to every captured state; demo dictionary + npz interchange |
 | `statefile.py` | `.mtj` interchange: save/load full StateTrajectories and viewer-ready scene bundles ([format spec](docs/mtj-format.md)) |
 | `mweights.py` | `.mwt` export: a model's weights in a form the browser can fetch (per-output-row int8 by default) |
@@ -805,8 +828,14 @@ For **verified causal claims** — circuit discovery, path patching, activation
 patching at scale — reach for a dedicated tool
 ([TransformerLens](https://github.com/TransformerLensOrg/TransformerLens),
 ACDC, EAP). Mottled is the honest map you read *before* and *alongside* them,
-and it interoperates: any `HookedTransformer` is a producer via
-`models.hooked.from_hooked_transformer`.
+and it interoperates in both directions: any `HookedTransformer` is a producer
+(`models.hooked.from_hooked_transformer`), a cache you already ran is one
+(`models.hooked.from_cache`), states from NNsight or your own hooks are one
+(`models.external.from_hidden_states`), a SAELens dictionary loads directly
+(`sae.from_sae_lens`, `sae.fetch_from_hub`), and Neuronpedia supplies the
+feature explanations (`sae.NEURONPEDIA_SOURCES`). What comes back out is a
+`.mtj` with its own analysis record — portable, and citable without Mottled
+installed.
 
 ## Non-goals (MVP)
 

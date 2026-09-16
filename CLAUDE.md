@@ -44,9 +44,10 @@ being the embedding stream. Backends produce one; everything else is a pure
 function over one. **Nothing above `trajectory.py` may reach into transformer
 internals.** This is why `metrics.py`, `compare.py`, `attractor.py`,
 `neighbors.py` and `sae.py` take trajectories and never models, and it is what
-lets a browser forward pass, a TransformerLens hook (`models/hooked.py`), or a
-logprob-only backend (`models/logprobs.py`) substitute for `capture.py`
-without touching anything downstream.
+lets a browser forward pass, a TransformerLens hook (`models/hooked.py`), a
+logprob-only backend (`models/logprobs.py`), or states captured in someone
+else's process (`models/external.py`) substitute for `capture.py` without
+touching anything downstream.
 
 The pipeline is `capture -> project -> density -> terrain -> paths`, driven by
 one `MarbleConfig` (`config.py`, hashable for `cache.py`). `pipeline.py` holds
