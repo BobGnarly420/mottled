@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+### Don't take the README's word for it: `mottled parity`
+The test suite proves the pipeline is self-consistent. That is not the
+question a reader of a paper built on Mottled has — theirs is whether the
+residual stream in the picture is the one the model actually computed, and the
+only answer on offer was the README's assurance that it is.
+
+- **`parity.py` + `mottled parity`** runs one prompt through Mottled and
+  through the implementations a reviewer already trusts, and prints the
+  largest disagreement per model as a number, with `-o` for a JSON report and
+  `--markdown` for the table. Non-zero exit when anything exceeds tolerance,
+  so it can gate a release; each cell is isolated, so one gated model or one
+  missing wheel costs a row rather than the table. A skipped row is never
+  counted as a passed one.
+- Two comparisons, two different claims. **States**: the per-block capture
+  against HuggingFace's `output_hidden_states` — the same tensors read two
+  ways, so anything above float noise is a bug rather than a tolerance.
+  **Readout**: the deepest logit lens against the model's actual `logits`,
+  which is not circular — if the lens at the last layer cannot reproduce what
+  the model predicts, every shallower readout is measuring something else.
+- **NNsight** is a real cell, not a stub: `trace_with_nnsight` takes layer 0
+  from block 0's *input*, which is what `HookCapture` records and is
+  family-agnostic — the embedding module's output would differ on GPT-2, which
+  adds positional embeddings in between. Verified against a locally-built
+  model at exactly 0.0 deviation. (The states are appended in a loop, not a
+  comprehension: NNsight re-executes the trace body and a comprehension-local
+  name does not survive it.)
+- **TransformerLens** is compared only against `from_pretrained_no_processing`.
+  TL's default folds layer-norms and centers writing weights, which moves the
+  residual stream deliberately; the harness refuses the processed comparison
+  rather than publish a number that means nothing.
+- `models.families.resolve_paths` returns where a model keeps its blocks and
+  embeddings as attribute *paths*, which is what a tracing library's proxy
+  needs — it mirrors the module tree, so the module itself cannot be found by
+  identity.
+
 ### Mottled does not have to own the forward pass
 Every producer so far ran the model itself. That is the wrong shape for a
 researcher who already has the states — an NNsight trace with `.save()` on

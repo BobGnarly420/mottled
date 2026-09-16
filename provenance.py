@@ -61,7 +61,7 @@ def record(cfg, prompts=None, trajs=None, sae=None,
         # has one identity per run, and recording only run 0's would name the
         # wrong weights for every other one
         "models": [_model(m, cfg) for m in metas] or [_model({}, cfg)],
-        "environment": _environment(),
+        "environment": environment(),
     }
     if sae is not None or sae_source is not None:
         rec["sae"] = {
@@ -104,7 +104,12 @@ def _model(meta: dict, cfg) -> dict:
     }
 
 
-def _environment() -> dict:
+def environment() -> dict:
+    """Python, platform, and the versions that can move a number in a scene.
+
+    Public because `parity.py` reports the same block: a parity number is only
+    checkable against the environment that produced it.
+    """
     return {
         "python": platform.python_version(),
         "platform": platform.platform(),

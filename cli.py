@@ -4,6 +4,7 @@
     mottled serve              # stdlib web server: viewer + capture API
     mottled export PROMPT ...  # capture prompts -> scene.mtj on stdout/file
     mottled export-manifest S  # print the analysis record a .mtj carries
+    mottled parity             # compare captures against the reference libraries
 """
 
 from __future__ import annotations
@@ -57,6 +58,19 @@ def main(argv: list[str] | None = None) -> int:
     p_manifest.add_argument("-o", "--output", default=None,
                             help="default: stdout")
 
+    p_parity = sub.add_parser(
+        "parity",
+        help="check Mottled's capture against HuggingFace / TransformerLens / "
+             "NNsight on a model matrix and print the deviations")
+    p_parity.add_argument("--models", default=None, metavar="A,B",
+                          help="models to check (default: one per resolved "
+                               "layout family)")
+    p_parity.add_argument("--prompt", default=None)
+    p_parity.add_argument("-o", "--output", default=None, metavar="PATH",
+                          help="write the machine-readable JSON report")
+    p_parity.add_argument("--markdown", default=None, metavar="PATH",
+                          help="write the table as markdown")
+
     p_weights = sub.add_parser(
         "export-weights",
         help="write a model as .mwt so the web viewer can run it in-browser")
@@ -90,6 +104,22 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(text)
         return 0
+
+    if args.command == "parity":
+        import parity
+
+        models = ([m.strip() for m in args.models.split(",") if m.strip()]
+                  if args.models else None)
+        report = parity.run(models, args.prompt or parity.DEFAULT_PROMPT)
+        table = parity.format_report(report)
+        print(table)
+        if args.output:
+            Path(args.output).write_text(report.to_json() + "\n")
+        if args.markdown:
+            Path(args.markdown).write_text(table + "\n")
+        # a non-zero exit so this can gate a release: a deviation above
+        # tolerance is a claim the README should not be making
+        return 0 if report.passed else 1
 
     if args.command == "export-weights":
         import mweights
