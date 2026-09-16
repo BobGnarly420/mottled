@@ -1,0 +1,96 @@
+"""Fidelity conformance: the explorer and the viewer report one number.
+
+`projection.fidelity_summary` is the reference; `viewer/reading.js` ports it
+so a shared scene can state its own trustworthiness in a browser with no
+Python. The two must agree, or the same run has two fidelities depending on
+which surface you opened it in — and a screenshot from either says nothing
+about the other.
+
+Pinned the way `test_scene_conformance.py` pins the scene pipeline: run both
+implementations over identical data and compare numerically.
+"""
+import json
+import shutil
+import subprocess
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+import projection as P
+
+ROOT = Path(__file__).resolve().parent.parent
+READING_JS = ROOT / "viewer" / "reading.js"
+
+pytestmark = pytest.mark.skipif(shutil.which("node") is None,
+                                reason="node not available")
+
+_SCRIPT = """
+const R = require(process.argv[1]);
+let raw = "";
+process.stdin.on("data", (d) => (raw += d));
+process.stdin.on("end", () => {
+  const input = JSON.parse(raw);
+  process.stdout.write(JSON.stringify(R.fidelitySummary(input.preservation)));
+});
+"""
+
+
+def _js_summary(preservation) -> dict:
+    proc = subprocess.run(["node", "-e", _SCRIPT, str(READING_JS)],
+                          input=json.dumps({"preservation": list(preservation)}),
+                          capture_output=True, text=True, check=True)
+    return json.loads(proc.stdout)
+
+
+@pytest.mark.parametrize("values", [
+    [0.9, 0.2, 0.8, 0.1],                       # a plain mix
+    [1.0, 1.0, 1.0],                            # nothing lost
+    [0.0, 0.0],                                 # everything lost
+    [0.5, 0.4999999, 0.5000001],                # right at the threshold
+    list(np.linspace(0.0, 1.0, 101)),           # a spread across the range
+])
+def test_fidelity_summary_matches_the_python_reference(values):
+    want = P.fidelity_summary(np.asarray(values))
+    got = _js_summary(values)
+    assert got["n"] == want["n"]
+    assert got["low_fidelity"] == want["low_fidelity"]
+    assert got["mean"] == pytest.approx(want["mean"], abs=1e-12)
+    assert got["low_fraction"] == pytest.approx(want["low_fraction"], abs=1e-12)
+
+
+def test_the_threshold_has_one_home():
+    """`LOW_FIDELITY` is mirrored in the port; a drift would silently change
+    which states the two surfaces call untrustworthy."""
+    script = "const R = require(process.argv[1]); process.stdout.write(String(R.LOW_FIDELITY));"
+    proc = subprocess.run(["node", "-e", script, str(READING_JS)],
+                          capture_output=True, text=True, check=True)
+    assert float(proc.stdout) == P.LOW_FIDELITY
+
+
+def test_both_sides_refuse_an_empty_summary():
+    """Reporting 'fidelity 0.00' for a scene that carries no quality layer
+    would be a measurement nobody made."""
+    with pytest.raises(ValueError, match="no preservation values"):
+        P.fidelity_summary(np.asarray([]))
+    proc = subprocess.run(["node", "-e", _SCRIPT, str(READING_JS)],
+                          input=json.dumps({"preservation": []}),
+                          capture_output=True, text=True)
+    assert proc.returncode != 0
+    assert "no preservation values" in proc.stderr
+
+
+def test_a_real_scenes_quality_layer_summarizes_the_same_on_both_sides():
+    """End to end on a scene the pipeline actually produced, not a fixture."""
+    import tiny as synthetic
+    from config import MarbleConfig
+    from ui import run_scene
+
+    cfg = MarbleConfig(model="tiny", use_cache=False, density_bootstrap=0)
+    result = run_scene(cfg, ["the capital of france is"], **synthetic.mt())
+    preservation = result["quality_list"][0].preservation
+
+    want = P.fidelity_summary(preservation)
+    got = _js_summary(np.asarray(preservation, dtype=float).ravel())
+    assert got["mean"] == pytest.approx(want["mean"], abs=1e-9)
+    assert got["low_fraction"] == pytest.approx(want["low_fraction"], abs=1e-12)

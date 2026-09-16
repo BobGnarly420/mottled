@@ -799,6 +799,8 @@ const ui = {
   uncertaintyRow: document.getElementById("uncertainty-row"),
   uncertaintyToggle: document.getElementById("uncertaintyToggle"),
   infoPanel: document.getElementById("info-panel"),
+  readingPanel: document.getElementById("reading-panel"),
+  readingBody: document.getElementById("reading-body"),
   hudBottom: document.getElementById("hud-bottom"),
   playBtn: document.getElementById("playBtn"),
   speedSel: document.getElementById("speedSel"),
@@ -881,7 +883,56 @@ function buildUI(scene) {
   ui.uncertaintyRow.hidden = !hasSE;
   ui.uncertaintyToggle.checked = state.showUncertainty = hasSE;
   setTerrainColors(state.showUncertainty);
+
+  renderReading(scene);
 }
+
+/* The panel that makes a shared scene self-describing: how much of it
+ * survived the projection, what the terrain does and does not mean, and what
+ * produced it. Collapsed by default — it is the answer to a question the
+ * reader has, not a wall between them and the picture. */
+function renderReading(scene) {
+  const R = window.Reading;
+  if (!R) { ui.readingPanel.hidden = true; return; }
+  const summary = R.sceneSummary(scene);
+  const rows = [];
+
+  const fidelity = R.fidelityNote(summary.fidelity);
+  if (fidelity) {
+    const low = summary.fidelity.low_fraction > 0.25 ? " warn" : "";
+    rows.push(`<p class="reading-fidelity${low}">${esc(fidelity)}</p>`);
+  }
+  rows.push(`<p>${esc(R.uncertaintyNote(summary.hasUncertainty))}</p>`);
+  for (const [heading, body] of R.NOTES)
+    rows.push(`<p><b>${esc(heading)}.</b> ${esc(body)}</p>`);
+
+  const p = summary.provenance;
+  if (p) {
+    const models = p.models.map((m) =>
+      esc(m.id) + (m.revision ? ` <span class="mono dim">@${esc(m.revision.slice(0, 7))}</span>` : "")
+    ).join(", ");
+    const bits = [`${p.prompts} prompt${p.prompts === 1 ? "" : "s"}`];
+    if (p.projection) bits.push(`${esc(p.projection)} projection`);
+    if (p.density) bits.push(`${esc(p.density)} density`);
+    if (p.seed !== null) bits.push(`seed ${p.seed}`);
+    if (p.sae && p.sae.source) bits.push(`SAE ${esc(p.sae.source)}`);
+    rows.push(
+      `<p class="reading-prov"><b>What produced this.</b> ${models} · ` +
+      `${bits.join(" · ")}${p.created ? ` · ${esc(p.created)}` : ""}` +
+      `${p.mottled ? ` · mottled ${esc(p.mottled)}` : ""}. ` +
+      `This is the parameterization a reproduction needs, not evidence that ` +
+      `the run reproduces.</p>`);
+  } else {
+    rows.push('<p class="reading-prov">This scene carries no analysis record, ' +
+              'so it cannot say what produced it. Scenes exported by a current ' +
+              'Mottled do.</p>');
+  }
+
+  ui.readingBody.innerHTML = rows.join("");
+  ui.readingPanel.hidden = false;
+  ui.readingPanel.open = false;
+}
+
 const fmt = (v) => (typeof v === "number" ? v.toFixed(3) : "–");
 
 function onLayerChanged(fromSlider) {

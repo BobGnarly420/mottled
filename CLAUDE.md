@@ -77,6 +77,7 @@ side of a pair, change the other and run its test.**
 | the `gguf` package's dequantiser | `viewer/gguf.js` | `tests/test_gguf_conformance.py` |
 | HF tokenizer | `viewer/tokenizer.js` | `tests/test_tokenizer_conformance.py` (network) |
 | `design_tokens.py` | `.streamlit/config.toml`, `viewer/style.css` | `tests/test_tokens.py` |
+| `projection.fidelity_summary` | `viewer/reading.js` | `tests/test_reading_conformance.py` |
 
 `tests/test_browser_capture_e2e.py` runs the whole chain — export weights, load
 in JS, tokenize, forward pass, logit lens, joint projection, density, terrain,
