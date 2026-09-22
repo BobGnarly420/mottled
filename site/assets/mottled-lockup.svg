@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 160" role="img" aria-label="Mottled">
+  <title>Mottled</title>
+  <rect width="720" height="160" fill="#080B18"/>
+  <g transform="translate(16,16)">
+    <rect width="128" height="128" fill="#0C1020" stroke="#1E2540" stroke-width="1" rx="3"/>
+    <g fill="none" stroke="#1E2540" stroke-width="1">
+      <path d="M14 90 C 32 85, 44 74, 58 76 C 76 79, 86 68, 114 72"/>
+      <path d="M14 102 C 36 94, 50 88, 66 90 C 84 93, 96 82, 114 88"/>
+    </g>
+    <path d="M16 86 C 34 78, 46 66, 62 69 C 80 73, 92 58, 112 64"
+          fill="none" stroke="#4B7CF3" stroke-width="2" stroke-linecap="square"/>
+    <rect x="102" y="58" width="8" height="8" fill="#4B7CF3" rx="1.5"/>
+    <rect x="38" y="48" width="2" height="2" fill="#D4934A"/>
+    <rect x="72" y="42" width="2" height="2" fill="#D4934A"/>
+    <rect x="54" y="40" width="1.5" height="1.5" fill="#4B7CF3" opacity="0.6"/>
+  </g>
+  <text x="168" y="98"
+        font-family="JetBrains Mono, SF Mono, Menlo, Consolas, monospace"
+        font-size="42" font-weight="500" letter-spacing="6"
+        fill="#EDF0FA">MOTTLED</text>
+  <text x="170" y="126"
+        font-family="JetBrains Mono, SF Mono, Menlo, Consolas, monospace"
+        font-size="11" font-weight="400" letter-spacing="3.2"
+        fill="#818FB8">LATENT TRAJECTORY INSTRUMENT</text>
+</svg>
