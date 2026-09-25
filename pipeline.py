@@ -417,7 +417,11 @@ def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
     from intervene import (divergence, intervene, persistence_profile,
                            score_against_control)
 
-    baseline = _capture_with(cfg, prompt, model=model, tokenizer=tokenizer)
+    # The edit replays the prompt pass only, so the baseline has to be that
+    # same pass: with generation on it would span prompt + continuation and
+    # could not be compared state-for-state with the branch.
+    baseline = _capture_with(replace(cfg, generate_tokens=0), prompt,
+                             model=model, tokenizer=tokenizer)
     branch = intervene(model, prompt, interventions, tokenizer=tokenizer,
                        top_k=cfg.top_k, device=cfg.device, dtype=cfg.dtype,
                        keep_logits=cfg.keep_logits)

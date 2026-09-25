@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### An intervention compares like with like
+- **`run_intervention` raised whenever generation was on.** With the
+  explorer's *Generate tokens* slider above zero the baseline decoded prompt +
+  continuation, while the edit replays the prompt pass only, so `divergence`
+  rejected the pair. The baseline is now that prompt pass.
+
 ### A pip install was broken, and every test passed
 Preparing a release meant building one, and the wheel turned out not to
 contain the tool. The suite runs in a checkout, where every file is present

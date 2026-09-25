@@ -432,3 +432,19 @@ def test_run_intervention_attaches_faithfulness():
     fth = result["faithfulness"]
     assert fth.target == target
     assert fth.effect > 0                         # direction beat the control
+
+
+def test_run_intervention_with_generation_on(tiny):
+    """Generation on (the explorer's decode slider) must not break an
+    intervention: the edit replays the prompt pass, so the baseline is that
+    pass too, not prompt + continuation — which `divergence` rejects."""
+    from config import MarbleConfig
+    from ui import run_intervention
+
+    cfg = MarbleConfig(model="tiny", use_cache=False, capture_components=False,
+                       capture_attention=False, generate_tokens=2)
+    edits = [Perturb(layer=2, delta=np.full(32, 0.5, np.float32), token=-1)]
+    result = run_intervention(cfg, PROMPT, edits, tiny, DummyTokenizer())
+
+    n_prompt = len(PROMPT.split())
+    assert result["traj"].n_tokens == result["traj_b"].n_tokens == n_prompt
