@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### An intervention scene's record says what ran
+- **It claimed a decode that never happened.** The explorer attaches the
+  analysis record with its session config, so with *Generate tokens* above
+  zero an exported intervention scene recorded the sliders' `generate_tokens`
+  and `generate_temperature`, although both runs are the prompt pass only.
+  `run_intervention` now returns the config it ran under as
+  `result["config"]`, and `attach_manifest` records that one.
+- **It did not name the edits.** The record now carries `interventions`: one
+  list per run, in run order, empty for the untouched baseline. The field is
+  additive, so the schema stays `mottled-analysis/1`.
+
 ### An intervention compares like with like
 - **`run_intervention` raised whenever generation was on.** With the
   explorer's *Generate tokens* slider above zero the baseline decoded prompt +

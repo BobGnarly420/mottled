@@ -154,6 +154,30 @@ def test_explorer_export_sequence_round_trips(tmp_path):
     assert "inspector" in scene["runs"][0]
 
 
+def test_intervention_scene_records_what_ran(tmp_path):
+    """The explorer attaches the record with its session config. With the
+    decode slider up, that config asks for a continuation, but an
+    intervention runs the prompt pass only (the edit replays that pass). The
+    record has to state the config that ran, and the edits: without them it
+    describes an untouched run rather than the one drawn."""
+    from intervene import Perturb
+    from ui import run_intervention
+
+    cfg = MarbleConfig(model="tiny", use_cache=False, density_bootstrap=0,
+                       generate_tokens=3, generate_temperature=0.7)
+    edits = [Perturb(2, np.full(32, 0.5, np.float32), token=-1)]
+    result = run_intervention(cfg, PROMPT, edits, **synthetic.mt())
+    attach_manifest(result, cfg)                    # as ui.py's export does
+
+    path = tmp_path / "scene.mtj"
+    F.save_scene(result, path)
+    rec = F.load_scene(path)["analysis"]
+    assert not any("generation" in t.meta for t in result["trajs"])  # no decode
+    assert rec["config"]["generate_tokens"] == 0
+    assert rec["config"]["generate_temperature"] == 0.0
+    assert rec["interventions"] == [[], ["perturb@layer2[token -1]"]]
+
+
 def test_scene_without_a_record_is_unchanged(tmp_path):
     cfg = MarbleConfig(model="tiny", use_cache=False, density_bootstrap=0)
     buf = io.BytesIO()
