@@ -34,6 +34,35 @@ def topk_predictions(logits: np.ndarray, vocab: list[str], k: int = 5) -> list[t
     return [(vocab[i], float(p[i])) for i in idx]
 
 
+def logit_lens_rank(traj: StateTrajectory, target: int, layer: int = -1,
+                    token: int = -1) -> tuple[int, float]:
+    """Rank (1 = top) and log-probability of token `target` at one state.
+
+    Rank is 1 + the number of logits *strictly* greater than the target's,
+    so ties resolve in the target's favour: logits stored as float16 (the
+    default capture) tie often in the tail, and a rank that depended on sort
+    order would move between runs that did not change. Log-probability is
+    normalized, unlike a raw logit, so a shift of every logit at once moves
+    it not at all.
+
+    At intermediate layers this is a readout diagnostic, not the model's
+    belief (docs/validity.md). At the final layer it is the model's own head
+    — except for Gemma-2, whose final-logit softcap `capture.logit_lens`
+    does not apply: the rank is still valid there, the probability is not.
+    """
+    if traj.logits is None:
+        raise ValueError("trajectory has no logits; capture with keep_logits=True")
+    l = int(layer) % traj.n_layers
+    t = int(token) % traj.n_tokens
+    row = np.asarray(traj.logits[l, t], dtype=np.float64)
+    target = int(target)
+    if not 0 <= target < row.shape[-1]:
+        raise ValueError(f"target {target} outside the vocabulary (0..{row.shape[-1] - 1})")
+    top = row.max()
+    logprob = float(row[target] - top - np.log(np.exp(row - top).sum()))
+    return 1 + int((row > row[target]).sum()), logprob
+
+
 def kl_divergence(logits_p: np.ndarray, logits_q: np.ndarray, axis: int = -1) -> np.ndarray:
     """KL(P || Q) between two logit rows (nats)."""
     p = softmax(logits_p, axis=axis)

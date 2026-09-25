@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+### Dose–response sweeps
+`faithfulness` scores a steer at one magnitude, and one successful magnitude
+says little: a large enough push along almost any direction moves the
+readout. `docs/validity.md` listed dose-response curves as an open need.
+- **`dose.dose_sweep`** injects one direction at one layer over a signed grid
+  of doses (default 0, ±1/32 … ±2), one forward pass per dose, reading the
+  last token. Doses are relative to r_ℓ, the median residual norm at the
+  injection layer over positions t ≥ 1 (position 0's norm dwarfs the rest in
+  GPT-2- and Llama-family models), measured once from the dose-0 captures.
+  Each point stores the absolute ‖δ‖ as its primary field, as
+  `Faithfulness.scale` does. Points above dose 1 are flagged
+  `replacement_regime`.
+- **Metrics per point:** `state_distance` (‖h_α − h₀‖ / ‖h₀‖ in full hidden
+  space at every layer from the injection down), final-layer KL, target
+  log-prob and rank, entropy, the log-prob of the dose-0 top token, and
+  on-distribution checks at the injection site (cosine, norm ratio, and v's
+  component against its observed range, flagged `extrapolation` outside it).
+- **Controls on the same signed grid:** seeded random directions orthogonal
+  to v with the sign applied (`intervene._norm_matched_random` draws the same
+  direction for ±δ), label-shuffled diff-of-means directions for contrast
+  directions, and the same δ injected at the final layer for token
+  directions — with tied embeddings, part of a token steer's effect arrives
+  through the skip path by construction.
+- **`DoseSweep`** writes JSON (its own encoder: `statefile._jsonable` would
+  turn an array into a truncated string) and a tidy CSV, and carries
+  `provenance.record`, the direction's sha256 and the injection site in
+  TransformerLens terms. Evaluation prompts that also derived the direction
+  are refused, and so are multi-token targets.
+- **`metrics.logit_lens_rank`**: rank (ties counted in the target's favour,
+  since float16 logits tie often) and normalized log-probability.
+- **`capture._run(logits_dtype=...)`**: the sweep keeps float32 logits so its
+  smallest doses measure the model rather than float16 rounding. The default,
+  and every stored format, is unchanged.
+
 ### A pip install was broken, and every test passed
 Preparing a release meant building one, and the wheel turned out not to
 contain the tool. The suite runs in a checkout, where every file is present
