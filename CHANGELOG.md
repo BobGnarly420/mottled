@@ -7,6 +7,15 @@
   explorer's *Generate tokens* slider above zero the baseline decoded prompt +
   continuation, while the edit replays the prompt pass only, so `divergence`
   rejected the pair. The baseline is now that prompt pass.
+- **A no-op edit read as a separation.** Attention capture (on by default)
+  moves a pass onto the eager attention kernel, but only the baseline asked
+  for it; the branch and the faithfulness and persistence controls ran on the
+  model's default kernel (sdpa). Rounding alone gave a zero-delta edit a
+  nonzero divergence profile (~1e-8 on the tiny test model) and a separation
+  onset at layer 1. `intervene`, `score_against_control` and
+  `persistence_profile` take `capture_attention`, and `run_intervention`
+  passes the config's to each, so every pass it measures shares one kernel —
+  and the branch now carries attention patterns too.
 
 ### A pip install was broken, and every test passed
 Preparing a release meant building one, and the wheel turned out not to

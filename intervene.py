@@ -130,12 +130,16 @@ def intervene(
     device: str = "auto",
     dtype: str = "float32",
     keep_logits: bool = True,
+    capture_attention: bool = False,
 ) -> StateTrajectory:
     """Run a counterfactual forward pass under `interventions`.
 
     Returns a StateTrajectory whose `meta["interventions"]` records the edits
     and `meta["counterfactual"]` is True.  Requires a torch model (a HF
-    instance with `tokenizer`, or a hub name).
+    instance with `tokenizer`, or a hub name).  Pass the baseline's
+    `capture_attention`: it moves the pass onto the eager attention kernel,
+    and a branch on another kernel differs from its baseline by rounding
+    before any edit takes effect.
     """
     if not interventions:
         raise ValueError("no interventions given; use capture() for a baseline pass")
@@ -144,6 +148,7 @@ def intervene(
     return _run(
         model, prompt, tokenizer=tokenizer, top_k=top_k, device=device, dtype=dtype,
         keep_logits=keep_logits, state_edits=state_edits, frozen_blocks=frozen,
+        capture_attention=capture_attention,
         extra_meta={
             "counterfactual": True,
             "interventions": [iv.describe() for iv in interventions],
@@ -325,7 +330,8 @@ def score_against_control(model, prompt: str, baseline: StateTrajectory,
                           target: int, *, token: int = -1,
                           scale: float | None = None, tokenizer=None, seed: int = 0,
                           device: str = "auto", dtype: str = "float32",
-                          top_k: int = 5) -> Faithfulness:
+                          top_k: int = 5,
+                          capture_attention: bool = False) -> Faithfulness:
     """Score an already-computed steer against a norm-matched random control.
 
     Given `baseline` and the `branch` produced by applying `delta` at
@@ -334,13 +340,16 @@ def score_against_control(model, prompt: str, baseline: StateTrajectory,
     `faithfulness()` and `ui.run_intervention` — which already holds
     `baseline`/`branch` and must not pay for a second branch forward pass —
     construct the control the same way. `scale` records the steer magnitude and
-    defaults to ``||delta||``.
+    defaults to ``||delta||``. `capture_attention` is the one `baseline` was
+    captured with, so the control runs on the same attention kernel (see
+    `intervene`).
     """
     delta = np.asarray(delta, dtype=np.float32)
     r = _norm_matched_random(delta, seed)
     control = intervene(model, prompt, [Perturb(layer, r, token=token)],
                         tokenizer=tokenizer, top_k=top_k, device=device,
-                        dtype=dtype, keep_logits=True)
+                        dtype=dtype, keep_logits=True,
+                        capture_attention=capture_attention)
 
     steer_shift = target_logit_shift(baseline, branch, target, token)
     control_shift = target_logit_shift(baseline, control, target, token)
@@ -473,7 +482,8 @@ def persistence_profile(model, prompt: str, direction: np.ndarray,
                         branch: StateTrajectory | None = None,
                         seed: int = 0, device: str = "auto",
                         dtype: str = "float32",
-                        top_k: int = 5) -> PersistenceProfile:
+                        top_k: int = 5,
+                        capture_attention: bool = False) -> PersistenceProfile:
     """Trace an injected direction's effect through every downstream layer.
 
     Applies `scale * unit(direction)` as a `Perturb` at `(inject_layer,
@@ -488,7 +498,8 @@ def persistence_profile(model, prompt: str, direction: np.ndarray,
     a supplied baseline must carry the residual decomposition. `branch` — the
     already-computed steer at these exact settings — can be passed by callers
     that hold one (`pipeline.run_intervention`) to skip a forward pass, as
-    with `score_against_control`.
+    with `score_against_control`. `capture_attention` applies to every pass
+    run here and must match a supplied baseline's (see `intervene`).
     """
     from capture import capture
     from metrics import component_shares
@@ -500,19 +511,22 @@ def persistence_profile(model, prompt: str, direction: np.ndarray,
     if baseline is None:
         baseline = capture(model, prompt, tokenizer=tokenizer, top_k=top_k,
                            device=device, dtype=dtype, keep_logits=True,
-                           capture_components=True)
+                           capture_components=True,
+                           capture_attention=capture_attention)
     shares = component_shares(baseline, token=token)          # (L-1, 2)
     inject_layer = int(inject_layer) % baseline.n_layers
 
     if branch is None:
         branch = intervene(model, prompt, [Perturb(inject_layer, delta, token=token)],
                            tokenizer=tokenizer, top_k=top_k, device=device,
-                           dtype=dtype, keep_logits=True)
+                           dtype=dtype, keep_logits=True,
+                           capture_attention=capture_attention)
     control = intervene(model, prompt,
                         [Perturb(inject_layer, _norm_matched_random(delta, seed),
                                  token=token)],
                         tokenizer=tokenizer, top_k=top_k, device=device,
-                        dtype=dtype, keep_logits=True)
+                        dtype=dtype, keep_logits=True,
+                        capture_attention=capture_attention)
 
     records = []
     for layer in range(inject_layer, baseline.n_layers):

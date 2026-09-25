@@ -448,3 +448,18 @@ def test_run_intervention_with_generation_on(tiny):
 
     n_prompt = len(PROMPT.split())
     assert result["traj"].n_tokens == result["traj_b"].n_tokens == n_prompt
+
+
+def test_run_intervention_zero_edit_reproduces_baseline(tiny):
+    """An edit that changes nothing must measure no separation. Attention
+    capture (on by default) puts a pass on the eager kernel, which rounds
+    differently from the model's default one, so the branch has to be
+    captured the way the baseline was."""
+    from config import MarbleConfig
+    from ui import run_intervention
+
+    cfg = MarbleConfig(model="tiny", use_cache=False)
+    edits = [Perturb(layer=1, delta=np.zeros(32, np.float32))]
+    result = run_intervention(cfg, PROMPT, edits, tiny, DummyTokenizer())
+
+    assert np.array_equal(result["traj"].hidden, result["traj_b"].hidden)
