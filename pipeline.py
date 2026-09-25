@@ -417,10 +417,18 @@ def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
     from intervene import (divergence, intervene, persistence_profile,
                            score_against_control)
 
-    baseline = _capture_with(cfg, prompt, model=model, tokenizer=tokenizer)
+    # The edit replays the prompt pass only, so the baseline has to be that
+    # same pass: with generation on it would span prompt + continuation and
+    # could not be compared state-for-state with the branch.
+    baseline = _capture_with(replace(cfg, generate_tokens=0), prompt,
+                             model=model, tokenizer=tokenizer)
+    # Attention capture moves a pass onto the eager kernel, so every pass
+    # measured against the baseline has to share it: across kernels, rounding
+    # alone reads as a separation, even for an edit that changed nothing.
     branch = intervene(model, prompt, interventions, tokenizer=tokenizer,
                        top_k=cfg.top_k, device=cfg.device, dtype=cfg.dtype,
-                       keep_logits=cfg.keep_logits)
+                       keep_logits=cfg.keep_logits,
+                       capture_attention=cfg.capture_attention)
     branch.validate()
 
     result = {"prompts": [prompt, prompt], "prompt": prompt,
@@ -436,7 +444,8 @@ def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
         result["faithfulness"] = score_against_control(
             model, prompt, baseline, branch, iv.vector, iv.layer, int(target_id),
             token=tok, tokenizer=tokenizer, seed=cfg.seed, device=cfg.device,
-            dtype=cfg.dtype, top_k=cfg.top_k)
+            dtype=cfg.dtype, top_k=cfg.top_k,
+            capture_attention=cfg.capture_attention)
         if (baseline.components is not None
                 and {"attn", "mlp"} <= set(baseline.components)):
             result["persistence"] = persistence_profile(
@@ -444,6 +453,7 @@ def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
                 tokenizer=tokenizer, token=tok,
                 scale=float(np.linalg.norm(iv.vector)),
                 baseline=baseline, branch=branch, seed=cfg.seed,
-                device=cfg.device, dtype=cfg.dtype, top_k=cfg.top_k)
+                device=cfg.device, dtype=cfg.dtype, top_k=cfg.top_k,
+                capture_attention=cfg.capture_attention)
     return result
 
