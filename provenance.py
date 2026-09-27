@@ -44,8 +44,9 @@ def record(cfg, prompts=None, trajs=None, sae=None,
 
     `cfg` is the `MarbleConfig` that drove the pipeline; `trajs` the captured
     trajectories (one per run), whose `meta` supplies the facts only the
-    capture knows — the resolved device and dtype, and the hub commit the
-    weights came from. `sae` attaches the dictionary's content hash.
+    capture knows — the resolved device and dtype, the hub commit the
+    weights came from, and the edits a counterfactual run was made under.
+    `sae` attaches the dictionary's content hash.
     """
     metas = [dict(getattr(t, "meta", None) or {}) for t in (trajs or [])]
     if prompts is None:
@@ -70,6 +71,12 @@ def record(cfg, prompts=None, trajs=None, sae=None,
             "sha256": None if sae is None else sae_digest(sae),
             "n_features": None if sae is None else int(sae.n_features),
         }
+    # per run, in run order, as `models` is: a counterfactual run
+    # (intervene.intervene) is the prompt under these edits, and a record
+    # without them describes an untouched run instead of the one drawn
+    edits = [list(m.get("interventions") or []) for m in metas]
+    if any(edits):
+        rec["interventions"] = edits
     return rec
 
 

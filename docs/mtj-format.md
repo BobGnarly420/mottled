@@ -72,11 +72,19 @@ hashes; this is where the file states them itself.
     "hook": "blocks.8.hook_resid_pre",
     "sha256": "…",                     // hash of the weights, not of a file
     "n_features": 24576
-  }
+  },
+  "interventions": [                   // only when a run was edited: one list
+    [],                                // per run, in run order; the untouched
+    ["perturb@layer11[token -1]"]      // baseline's is empty
+  ]
 }
 ```
 
-`models` is a list because a cross-model scene has one identity per run.
+`models` is a list because a cross-model scene has one identity per run;
+`interventions` is per run for the same reason. `config` is the
+configuration the runs were captured under, which is not always the one the
+session asked for: an intervention replays the prompt pass only, so its
+record says `generate_tokens: 0` even with generation on.
 The record describes the parameterization, not the result: it is what a
 reproduction attempt needs, not evidence that the run reproduces.
 

@@ -338,7 +338,10 @@ def attach_manifest(result: dict, cfg: MarbleConfig, sae=None,
     `statefile.save_scene` carries it into the `.mtj` additively.
     """
     result["analysis"] = provenance_mod.record(
-        cfg,
+        # a producer that ran under a different config than it was handed
+        # (run_intervention: the prompt pass only) puts it on the result, and
+        # the record states what ran, not what the session asked for
+        result.get("config", cfg),
         prompts=result.get("prompts") or [result.get("prompt", "")],
         trajs=result.get("trajs") or [result["traj"]],
         sae=sae, sae_source=sae_source, sae_hook=sae_hook,
@@ -417,14 +420,26 @@ def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
     from intervene import (divergence, intervene, persistence_profile,
                            score_against_control)
 
-    baseline = _capture_with(cfg, prompt, model=model, tokenizer=tokenizer)
+    # The edit replays the prompt pass only, so the baseline has to be that
+    # same pass: with generation on it would span prompt + continuation and
+    # could not be compared state-for-state with the branch. The temperature
+    # goes too: nothing was sampled, and this is the config the record states.
+    prompt_cfg = replace(cfg, generate_tokens=0, generate_temperature=0.0)
+    baseline = _capture_with(prompt_cfg, prompt, model=model, tokenizer=tokenizer)
+    # Attention capture moves a pass onto the eager kernel, so every pass
+    # measured against the baseline has to share it: across kernels, rounding
+    # alone reads as a separation, even for an edit that changed nothing.
     branch = intervene(model, prompt, interventions, tokenizer=tokenizer,
                        top_k=cfg.top_k, device=cfg.device, dtype=cfg.dtype,
-                       keep_logits=cfg.keep_logits)
+                       keep_logits=cfg.keep_logits,
+                       capture_attention=cfg.capture_attention)
     branch.validate()
 
     result = {"prompts": [prompt, prompt], "prompt": prompt,
               "prompt_b": "patched: " + ", ".join(iv.describe() for iv in interventions),
+              # attach_manifest records this in place of the caller's config,
+              # which may ask for a decode that neither run did
+              "config": prompt_cfg,
               **_assemble_scene(cfg, [baseline, branch])}
     result["divergence"] = divergence(baseline, branch)
 
@@ -436,7 +451,8 @@ def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
         result["faithfulness"] = score_against_control(
             model, prompt, baseline, branch, iv.vector, iv.layer, int(target_id),
             token=tok, tokenizer=tokenizer, seed=cfg.seed, device=cfg.device,
-            dtype=cfg.dtype, top_k=cfg.top_k)
+            dtype=cfg.dtype, top_k=cfg.top_k,
+            capture_attention=cfg.capture_attention)
         if (baseline.components is not None
                 and {"attn", "mlp"} <= set(baseline.components)):
             result["persistence"] = persistence_profile(
@@ -444,6 +460,7 @@ def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
                 tokenizer=tokenizer, token=tok,
                 scale=float(np.linalg.norm(iv.vector)),
                 baseline=baseline, branch=branch, seed=cfg.seed,
-                device=cfg.device, dtype=cfg.dtype, top_k=cfg.top_k)
+                device=cfg.device, dtype=cfg.dtype, top_k=cfg.top_k,
+                capture_attention=cfg.capture_attention)
     return result
 
