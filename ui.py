@@ -44,7 +44,7 @@ from pipeline import (  # noqa: F401
     attach_features,
     attach_inspector,
     attach_manifest,
-    chat_prompt,
+    chat_input,
     chat_reply,
     degraded_note,
     run_compare,
@@ -89,32 +89,45 @@ def _label_provenance(labels: dict) -> str:
 
 
 def chat_panel(st, cfg: MarbleConfig, load_model) -> None:
-    """The chat column: the conversation so far, and a capture of each reply.
+    """The chat column: the conversation so far, and a capture of its latest
+    turn.
 
-    A turn decodes the reply, then captures the whole conversation plus the
-    reply, since that is the forward pass the reply came from. The capture
-    becomes the explorer's result, so the scene beside the chat is that
-    turn's. Takes the Streamlit module as an argument, like
+    A turn decodes the reply, then captures the conversation as the model was
+    sent it, plus the reply: the forward pass that reply came from. The
+    capture becomes the explorer's result, so the scene beside the chat is
+    the latest turn's alone. Takes the Streamlit module as an argument, like
     `render_model_comparison`.
     """
     messages = st.session_state.setdefault("chat", [])
+    if messages and st.session_state.get("chat_model") != cfg.model:
+        # the replies so far are another model's, not this one's history
+        messages.clear()
+        st.session_state.pop("result", None)
+        st.caption(f"The model changed to `{cfg.model}`, so the conversation "
+                   "started over: the replies so far were another model's.")
+    st.session_state["chat_model"] = cfg.model
     history = st.container(height=520)
     said = st.chat_input("Message the model", key="chat_input")
     if said:
         turn = messages + [{"role": "user", "content": said}]
         model, tokenizer = load_model(cfg.model)
+        text, ids = chat_input(tokenizer, turn)
         with st.spinner("Replying, then capturing the forward pass…"):
-            result = run_pipeline(cfg, chat_prompt(tokenizer, turn),
-                                  model=model, tokenizer=tokenizer)
-        # joined only once there is a reply, so a failed capture does not
-        # leave a question in the conversation that was never answered
+            result = run_pipeline(cfg, text, model=model, tokenizer=tokenizer,
+                                  input_ids=ids)
+        # joined only once there is a reply: an exception above leaves the
+        # conversation as it was, not holding a question never answered
         messages[:] = turn + [{"role": "assistant",
                                "content": chat_reply(tokenizer, result["traj"])}]
         st.session_state["result"], st.session_state["cfg"] = result, cfg
         st.session_state["chat_templated"] = bool(getattr(tokenizer, "chat_template", None))
     with history:
         for m in messages:
-            st.chat_message(m["role"]).write(m["content"])
+            # a reply of only special tokens decodes to nothing; an empty
+            # bubble would read as a rendering fault
+            st.chat_message(m["role"]).write(
+                m["content"] or "*(no text: the reply was only special tokens "
+                                "or whitespace)*")
 
     if not messages:
         return
@@ -124,8 +137,13 @@ def chat_panel(st, cfg: MarbleConfig, load_model) -> None:
             st.caption(f"`{cfg.model}` has no chat template, so the conversation "
                        "goes in as a plain User/Assistant transcript.")
         st.code(result.get("prompt", ""), language=None, wrap_lines=True)
-        st.caption("Each turn captures the whole conversation again, so turns "
-                   "slow down as it grows.")
+        st.caption("This is the latest turn's input, and the scene is that turn "
+                   "alone: the terrain is rebuilt every turn. Earlier replies are "
+                   "in it as the chat template re-renders them from text, as any "
+                   "chat re-sends its history, so their tokens can differ from "
+                   "the ones generated at the time.")
+        st.caption("Each turn decodes without a KV cache and captures the whole "
+                   "conversation again, so turns slow down as it grows.")
     if st.button("Clear conversation", key="chat_clear"):
         messages.clear()
         st.session_state.pop("result", None)
@@ -236,10 +254,9 @@ def main() -> None:
         st.caption("Latent trajectory explorer")
         chat_on = st.toggle(
             "Chat", key="chat_mode",
-            help="Talk to the model in a column on the left and watch its "
-                 "trajectories on the right. Each reply is decoded, then the "
-                 "whole conversation plus the reply is captured and drawn — "
-                 "the reply as the decode axis.")
+            help="Talk to the model on the left. The right shows the latest "
+                 "turn: the conversation as the model was sent it, and its "
+                 "reply as the decode axis. The terrain is rebuilt every turn.")
         prompt = prompt_b = extra_models = ""
         if not chat_on:
             prompt = st.text_area("Prompt", DEFAULT_PROMPT, key="prompt")
@@ -260,9 +277,11 @@ def main() -> None:
         dens_name = st.selectbox("Density estimator", DENSITY_CHOICES, key="density")
         top_k = st.slider("Top-k", 1, 10, 5, key="top_k")
         if chat_on:
-            gen_tokens = st.slider("Reply tokens", 1, 64, 32, key="reply_tokens",
+            gen_tokens = st.slider("Reply tokens", 1, 32, 32, key="reply_tokens",
                                    help="The most tokens a reply may run to; it "
-                                        "stops early at the model's end token.")
+                                        "stops early at the model's end token. "
+                                        "The cap is Generate tokens' own: each "
+                                        "token is a full forward pass.")
         else:
             gen_tokens = st.slider("Generate tokens", 0, 32, 0, key="generate_tokens",
                                    help="Decode this many tokens before capturing: the "

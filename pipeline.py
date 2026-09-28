@@ -31,13 +31,19 @@ from trajectory import StateTrajectory
 
 # Pipeline: capture -> project -> compute_density -> mesh -> trajectory
 # --------------------------------------------------------------------------
-def run_pipeline(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) -> dict:
+def run_pipeline(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None,
+                 input_ids=None) -> dict:
     """Execute the full Mottled pipeline and return every artifact.
 
     `model`/`tokenizer` may be pre-loaded objects (the UI caches them); when
-    omitted, `cfg.model` is loaded by name.
+    omitted, `cfg.model` is loaded by name. `input_ids`, when the prompt's
+    exact token ids are known (a chat template's own tokenization), are
+    captured as given; `prompt` then only labels the run.
     """
     disk = cache_mod.DiskCache(cfg.cache_dir) if cfg.use_cache else None
+    # the same text can stand for different ids, so ids are part of the key;
+    # passed only when given, so every other key is what it was
+    ids = {} if input_ids is None else {"input_ids": [int(i) for i in input_ids]}
     key = cache_mod.make_key("pipeline-v6", prompt, cfg.model, cfg.projection,
                              cfg.density, cfg.top_k, cfg.n_components, cfg.seed,
                              cfg.grid_size, cfg.smooth_sigma, cfg.height_scale,
@@ -45,11 +51,12 @@ def run_pipeline(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) -> 
                              cfg.trajectory_token, cfg.frames_per_layer,
                              cfg.capture_components, cfg.capture_attention,
                              cfg.density_bootstrap, cfg.generate_tokens,
-                             cfg.generate_temperature)
+                             cfg.generate_temperature, **ids)
     if disk is not None and (hit := disk.get(key)) is not None:
         return hit
 
-    traj = _capture_with(cfg, prompt, model=model, tokenizer=tokenizer)
+    traj = _capture_with(cfg, prompt, model=model, tokenizer=tokenizer,
+                         input_ids=input_ids)
 
     coords, projector = projection_mod.project(
         traj.hidden, method=cfg.projection, n_components=cfg.n_components, seed=cfg.seed
@@ -88,7 +95,8 @@ def run_pipeline(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) -> 
     return result
 
 
-def _capture_with(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) -> StateTrajectory:
+def _capture_with(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None,
+                  input_ids=None) -> StateTrajectory:
     """One validated capture under the config's capture knobs.
 
     With `cfg.generate_tokens > 0` the capture decodes that many tokens
@@ -103,6 +111,7 @@ def _capture_with(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) ->
         keep_logits=cfg.keep_logits,
         capture_components=cfg.capture_components,
         capture_attention=cfg.capture_attention,
+        input_ids=input_ids,
     )
     target = model if model is not None else cfg.model
     if cfg.generate_tokens > 0:
@@ -116,27 +125,28 @@ def _capture_with(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) ->
     return traj
 
 
-def chat_prompt(tokenizer, messages: list[dict]) -> str:
-    """The text a conversation is sent to the model as, ready for its reply.
+def chat_input(tokenizer, messages: list[dict]) -> tuple[str, list[int]]:
+    """A conversation as the model is sent it, ready for its reply: the text,
+    and the token ids to capture.
 
-    A tokenizer with a chat template renders the conversation with it. One
-    without (GPT-2) gets a plain User/Assistant transcript, which the
-    explorer says it is doing. The capture tokenizes this text again with
-    the tokenizer's own special tokens, so a BOS the template already wrote
-    is dropped rather than doubled: a doubled BOS is a different question to
-    the model, and nothing downstream would notice.
+    With a chat template the ids are the tokenizer's own chat tokenization,
+    to be captured as they are. Tokenizing the rendered text again would add
+    the tokenizer's special tokens to ones the template already wrote (a
+    doubled BOS is the common case): a different question to the model that
+    nothing downstream would notice. Without a template (GPT-2) the
+    conversation is a plain transcript, tokenized as any prompt is.
     """
     if getattr(tokenizer, "chat_template", None):
         text = tokenizer.apply_chat_template(messages, tokenize=False,
                                              add_generation_prompt=True)
-        bos = getattr(tokenizer, "bos_token", None)
-        if (bos and text.startswith(bos)
-                and tokenizer("")["input_ids"][:1] == [tokenizer.bos_token_id]):
-            text = text[len(bos):]
-        return text
-    turns = [f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}"
-             for m in messages]
-    return "\n".join(turns + ["Assistant:"])
+        ids = tokenizer.apply_chat_template(messages, tokenize=True,
+                                            add_generation_prompt=True)
+        if hasattr(ids, "keys"):            # transformers 5 returns an encoding
+            ids = ids["input_ids"]
+        return text, [int(i) for i in ids]
+    turns = [f"{m['role'].capitalize()}: {m['content']}" for m in messages]
+    text = "\n".join(turns + ["Assistant:"])
+    return text, tokenizer(text)["input_ids"]
 
 
 def chat_reply(tokenizer, traj: StateTrajectory) -> str:
