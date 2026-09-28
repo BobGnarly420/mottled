@@ -5,12 +5,16 @@ A forward pass with no gradients only needs block *i*'s weights while block
 traced: build the module skeleton with no weights at all, then materialise
 each block from disk immediately before it runs and release it immediately
 after. Peak memory becomes **one block plus the activations**, not the whole
-model.
+model (a checkpoint that stores each expert as its own tensor briefly holds
+a block's experts twice while `_fuse_experts` stacks them).
 
 That is exactly the shape of what Mottled wants — the residual stream at
 every layer for a short prompt — so the expensive resource is a single
 sequential read of the weights, not RAM. For a 93-layer, 1.5 TB model like
-Kimi K3 the difference is between "impossible" and "slow".
+Kimi K3 that is the difference between "impossible" and "slow", though not
+yet in practice: only the common per-expert gate/up/down layout is fused, a
+layout this module cannot load fails loudly, and nothing here has run at
+that scale.
 
     from stream import stream_capture
     traj = stream_capture("/path/to/checkpoint", "The capital of France is")
@@ -27,7 +31,7 @@ weights never land on local disk in full either — `remote.RemoteWeights`
 fetches one layer's byte ranges, writes them to a cache file, and deletes it
 once the block has been read:
 
-    traj = stream_capture("hf://moonshotai/Kimi-K2-Instruct", "The capital of")
+    traj = stream_capture("hf://org/model", "The capital of")
 
 Egress is then the binding cost — one full read of the checkpoint per pass —
 so `stream_capture_batch` runs many prompts through each block while it is
@@ -204,6 +208,11 @@ class StreamedBlocks:
     def _load(self, i: int) -> None:
         if i in self.resident:
             return
+        # Release before loading, not after: a forward pass never returns to
+        # an earlier block, and releasing once the next one has loaded holds
+        # keep + 1 blocks at the peak — the bound this module is for.
+        while self.resident and len(self.resident) >= self.keep:
+            _release(self.blocks[self.resident.pop(0)])
         block = self.blocks[i]
         sd = self.shards.prefixed(f"{self.prefix}{i}.")
         if not sd:
@@ -227,8 +236,6 @@ class StreamedBlocks:
                 f"per-expert → fused case).")
         self.resident.append(i)
         self.loads += 1
-        while len(self.resident) > self.keep:
-            _release(self.blocks[self.resident.pop(0)])
 
     def __enter__(self):
         def pre(module, args, kwargs, _i):
@@ -484,7 +491,8 @@ def stream_capture_batch(
             "block_loads": sb.loads,
             "keep_resident": keep_resident,
             # what a streamed pass cannot give you, stated rather than implied
-            "absent": ["residual decomposition", "attention patterns"],
+            "absent": ["residual decomposition", "attention patterns",
+                       "embedding matrix"],
         }
         if batched:
             meta["batch"] = len(prompts)

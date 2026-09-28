@@ -103,19 +103,40 @@ def test_streamed_capture_reports_what_the_record_reads(tmp_path):
     assert entry["backend"] == "streamed" and entry["dtype"] == mem.meta["dtype"]
 
 
-def test_only_the_configured_number_of_blocks_is_resident(tmp_path):
-    """The memory bound is the point; assert it rather than trusting it."""
-    _, path = _dense(tmp_path, layers=6)
-    seen = []
+def test_streamed_capture_names_what_it_does_not_carry(tmp_path):
+    """No embedding matrix rides along (a frontier vocabulary would dwarf the
+    trajectory), so the representation-space neighbors capture() supports are
+    unavailable, and a trajectory that lacks a layer has to say so."""
+    _, path = _dense(tmp_path, layers=2)
+    streamed = stream_capture(path, PROMPT, tokenizer=DummyTokenizer())
+    assert streamed.embedding_matrix is None
+    assert "embedding matrix" in streamed.meta["absent"]
 
-    original = StreamedBlocks._load
+
+def test_only_the_configured_number_of_blocks_is_resident(tmp_path):
+    """The memory bound is the point; assert it rather than trusting it. The
+    count is taken as each block loads *and* as each is released: a block
+    released only after the next one has loaded puts keep + 1 in memory, and
+    a count taken after the release cannot see that."""
+    import stream as S
+
+    _, path = _dense(tmp_path, layers=6)
+    seen, blocks = [], []
+    original, release = StreamedBlocks._load, S._release
+
+    def live():
+        return sum(1 for b in blocks if next(b.parameters()).device.type != "meta")
 
     def spy(self, i):
+        blocks[:] = self.blocks
         original(self, i)
-        seen.append(sum(1 for b in self.blocks
-                        if next(b.parameters()).device.type != "meta"))
+        seen.append(live())
 
-    StreamedBlocks._load = spy
+    def spy_release(module):
+        seen.append(live())
+        release(module)
+
+    StreamedBlocks._load, S._release = spy, spy_release
     try:
         one = stream_capture(path, PROMPT, tokenizer=DummyTokenizer(), keep_resident=1)
         assert max(seen) == 1
@@ -123,7 +144,7 @@ def test_only_the_configured_number_of_blocks_is_resident(tmp_path):
         three = stream_capture(path, PROMPT, tokenizer=DummyTokenizer(), keep_resident=3)
         assert max(seen) == 3
     finally:
-        StreamedBlocks._load = original
+        StreamedBlocks._load, S._release = original, release
     # residency is a memory knob, never a numerical one
     np.testing.assert_array_equal(one.hidden, three.hidden)
 
@@ -169,12 +190,21 @@ def test_routing_capture_records_the_experts_each_token_used(tmp_path):
 
 
 def test_routing_agreement_compares_two_runs(tmp_path):
+    """Same prompt twice pins determinism, not the metric: a second prompt
+    sharing only its first token has to agree there (nothing precedes it) and
+    has to be able to disagree everywhere else."""
     model, _ = _moe(tmp_path)
     a = capture(model, PROMPT, tokenizer=DummyTokenizer(), capture_routing=True)
     b = capture(model, PROMPT, tokenizer=DummyTokenizer(), capture_routing=True)
     same = a.routing.agreement(b.routing)
     assert same.shape == (4, a.n_tokens)
     np.testing.assert_allclose(same, 1.0)            # same prompt, same route
+
+    other = capture(model, "the quick brown fox jumps", tokenizer=DummyTokenizer(),
+                    capture_routing=True)
+    differ = a.routing.agreement(other.routing)
+    np.testing.assert_allclose(differ[:, 0], 1.0)    # the shared first token
+    assert 0.0 <= differ.min() < 1.0
 
 
 def test_routing_refuses_on_a_dense_model(tmp_path):

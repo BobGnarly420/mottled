@@ -33,6 +33,7 @@ class _RangeHandler(http.server.SimpleHTTPRequestHandler):
     """`SimpleHTTPRequestHandler` does not do ranges; this one does."""
 
     ignore_ranges = False
+    short = None            # "announced" / "silent": each range one byte short
     hits: list = []
 
     def log_message(self, *a):
@@ -51,9 +52,12 @@ class _RangeHandler(http.server.SimpleHTTPRequestHandler):
             first, last = re.match(r"bytes=(\d+)-(\d+)", rng).groups()
             first, last = int(first), min(int(last), len(body) - 1)
             chunk = body[first:last + 1]
+            if self.short:
+                chunk = chunk[:-1]
             self.send_response(206)
             self.send_header("Content-Range", f"bytes {first}-{last}/{len(body)}")
-            self.send_header("Content-Length", str(len(chunk)))
+            if self.short != "silent":
+                self.send_header("Content-Length", str(len(chunk)))
             self.end_headers()
             self.wfile.write(chunk)
             return
@@ -68,9 +72,9 @@ def serve(tmp_path):
     """Serve a directory over HTTP and hand back its base URL."""
     servers = []
 
-    def start(directory, ignore_ranges=False):
+    def start(directory, ignore_ranges=False, short=None):
         handler = type("H", (_RangeHandler,),
-                       {"ignore_ranges": ignore_ranges, "hits": []})
+                       {"ignore_ranges": ignore_ranges, "short": short, "hits": []})
         srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
         srv.RequestHandlerClass = lambda *a, **k: handler(
             *a, directory=str(directory), **k)
@@ -264,3 +268,85 @@ def test_single_file_checkpoints_need_no_index(tmp_path, serve):
     weights = RemoteWeights(base, cache_dir=tmp_path / "cache")
     assert any(k.startswith("model.layers.1.") for k in weights.map)
     assert json.loads((path / "config.json").read_text())["num_hidden_layers"] == 2
+
+
+@pytest.mark.parametrize("layers", [1, 2])
+def test_a_layer_comes_back_whatever_its_order_on_disk(tmp_path, serve, layers):
+    """safetensors lays a file out by dtype before name, so a layer that mixes
+    dtypes (FP8 weights beside F32 scales, say) is not in name order on disk,
+    and with a second layer in the file it is not contiguous either: the other
+    layer's tensors sit between its pieces. Every tensor must still come back
+    as the bytes it was — out of order alone, the failure was silent."""
+    from safetensors.torch import save_file
+
+    torch.manual_seed(0)
+    tensors = {}
+    for layer in range(layers):
+        tensors[f"model.layers.{layer}.a"] = torch.randn(16)
+        tensors[f"model.layers.{layer}.b"] = torch.randn(16).to(torch.bfloat16)
+        tensors[f"model.layers.{layer}.c"] = torch.randn(16)
+    ckpt = tmp_path / "ckpt"
+    ckpt.mkdir()
+    save_file(tensors, str(ckpt / "model.safetensors"))
+    base, _ = serve(ckpt)
+    weights = RemoteWeights(base, cache_dir=tmp_path / "cache")
+    for layer in range(layers):
+        got = weights.prefixed(f"model.layers.{layer}.")
+        for name in "abc":
+            assert torch.equal(got[name], tensors[f"model.layers.{layer}.{name}"])
+
+
+@pytest.mark.parametrize("short", ["announced", "silent"])
+def test_a_short_range_is_refused_not_cached(tmp_path, serve, short):
+    """A 206 of the wrong size is the same lie as a 200 of the whole file:
+    what arrived is not the range asked for, and it must not become a cache
+    file the next pass trusts."""
+    _, path = _dense(tmp_path, layers=2)
+    cache = tmp_path / "cache"
+    honest, _ = serve(path)
+    RemoteWeights(honest, cache_dir=cache)           # caches the header
+    lying, _ = serve(path, short=short)
+    weights = RemoteWeights(lying, cache_dir=cache)
+    with pytest.raises(RuntimeError, match="byte range"):
+        weights.prefixed("model.layers.0.")
+    assert not list(cache.glob("*.safetensors"))
+
+
+def test_a_failed_eviction_is_visible(tmp_path, serve, monkeypatch):
+    """The disk bound is why this module exists. A cache file that cannot be
+    deleted (a mapped file, on some platforms) breaks it, and a broken bound
+    has to show: in the receipt a trajectory carries, and as it happens."""
+    import pathlib
+
+    _, path = _dense(tmp_path, layers=2)
+    base, _ = serve(path)
+    weights = RemoteWeights(base, cache_dir=tmp_path / "cache")
+    unlink = pathlib.Path.unlink
+
+    def mapped(self, missing_ok=False):
+        if self.suffix == ".safetensors":
+            raise OSError("file is mapped")
+        return unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", mapped)
+    weights.prefixed("model.layers.0.")
+    with pytest.warns(RuntimeWarning, match="disk"):
+        weights.prefixed("model.layers.1.")
+    assert weights.receipt()["evictions_failed"] == 1
+
+
+@pytest.mark.parametrize("chunk", [1, 3, 7, 40])
+def test_scatter_routes_bytes_whatever_the_chunking(chunk):
+    """The network hands a range over in arbitrary chunks; where a tensor's
+    bytes land must not depend on where a chunk happened to end."""
+    import io
+
+    from remote import _Scatter
+
+    src = bytes(range(40))                                   # offsets 100..139
+    spans = [(100, 108, 18), (112, 120, 0), (130, 140, 8)]   # (src, end, dst)
+    fh = io.BytesIO(bytes(26))
+    sink = _Scatter(fh, 0, 100, spans)
+    for i in range(0, len(src), chunk):
+        sink.write(src[i:i + chunk])
+    assert fh.getvalue() == src[12:20] + src[30:40] + src[0:8]

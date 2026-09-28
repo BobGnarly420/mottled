@@ -40,6 +40,7 @@ import json
 import os
 import struct
 import time
+import warnings
 from pathlib import Path
 
 _HF = "https://huggingface.co"
@@ -102,6 +103,7 @@ class RemoteWeights:
         self.bytes_fetched = 0
         self.requests_made = 0
         self.peak_cache_bytes = 0
+        self.evictions_failed = 0
         self.layer_bytes: dict[str, int] = {}
 
         self._headers: dict[str, tuple[dict, int]] = {}
@@ -143,6 +145,11 @@ class RemoteWeights:
                         f"checkpoint from a host that ignores Range is not a "
                         f"slow path, it is a different order of cost — "
                         f"refusing rather than silently downloading it.")
+                sent = r.headers.get("Content-Length")
+                if want is not None and sent is not None and int(sent) != want:
+                    r.close()
+                    raise RuntimeError(f"{url} announced {sent} bytes for a "
+                                       f"{want}-byte range")
                 self.requests_made += 1
                 if sink is None:
                     body = r.content
@@ -153,6 +160,12 @@ class RemoteWeights:
                     sink.write(chunk)
                     got += len(chunk)
                 self.bytes_fetched += got
+                if want is not None and got != want:
+                    # a 206 of the wrong size is the same lie as a 200 of the
+                    # whole file, and what it wrote must not become a cache
+                    # file: raising here keeps the caller from renaming it
+                    raise RuntimeError(f"{url} sent {got} bytes for a "
+                                       f"{want}-byte range")
                 return got
             except RangeUnsupported:
                 raise
@@ -210,8 +223,12 @@ class RemoteWeights:
                 victim.unlink(missing_ok=True)
             except OSError:
                 # A mapped file cannot be unlinked on every platform. Keep it
-                # and say so rather than pretending the budget held.
+                # and say so rather than pretending the budget held: the
+                # bound is why this module exists, so breaking it must show.
                 self._files.append(victim)
+                self.evictions_failed += 1
+                warnings.warn(f"could not delete {victim}; the local disk "
+                              f"bound is not holding", RuntimeWarning)
                 break
 
     def _remember(self, path: Path) -> None:
@@ -284,10 +301,11 @@ class RemoteWeights:
                 for filename, spans in plan:
                     merged = self._coalesce([(s, e) for s, e, _ in spans],
                                             self.coalesce_gap)
-                    dst_of = {s: d for s, _, d in spans}
                     for start, end in merged:
-                        fh.seek(base + dst_of[start])
-                        self._get(filename, start, end, sink=fh)
+                        inside = [sp for sp in spans
+                                  if start <= sp[0] and sp[1] <= end]
+                        self._get(filename, start, end,
+                                  sink=_Scatter(fh, base, start, inside))
             tmp.replace(path)
         self.layer_bytes[prefix] = cursor
         self._remember(path)
@@ -348,11 +366,44 @@ class RemoteWeights:
             "bytes_fetched": self.bytes_fetched,
             "requests_made": self.requests_made,
             "peak_cache_bytes": self.peak_cache_bytes,
+            "evictions_failed": self.evictions_failed,
             "cache_dir": str(self.cache),
         }
 
     def __len__(self) -> int:
         return len(self.map)
+
+
+class _Scatter:
+    """Sink for one coalesced range: each wanted tensor's bytes go to its
+    place in the local file, and the bytes between tensors are dropped.
+
+    A coalesced range arrives in source order, gaps included, while the local
+    file is packed in name order. Written as one block, the two only agree
+    when a layer sits on disk in name order with nothing between its tensors,
+    and safetensors lays a file out by dtype before name: a layer that mixes
+    dtypes came back with its bytes under the wrong names."""
+
+    def __init__(self, fh, base: int, start: int, spans):
+        self.fh, self.base, self.at = fh, base, start
+        self.spans = sorted(spans)             # (src_start, src_end, dst)
+        self.i = 0
+
+    def write(self, chunk: bytes) -> None:
+        off = 0
+        while off < len(chunk) and self.i < len(self.spans):
+            s, e, dst = self.spans[self.i]
+            at = self.at + off
+            if at >= e:
+                self.i += 1
+            elif at < s:                           # between tensors
+                off += min(s - at, len(chunk) - off)
+            else:
+                n = min(e - at, len(chunk) - off)
+                self.fh.seek(self.base + dst + (at - s))
+                self.fh.write(chunk[off:off + n])
+                off += n
+        self.at += len(chunk)
 
 
 def unrouted_expert_bytes(weights: RemoteWeights, routing, prefix="model.layers.") -> dict:
