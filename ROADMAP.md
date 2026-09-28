@@ -52,8 +52,15 @@ Today Mottled has one time axis: layers. Autoregressive decode is the second.
       offline-safe), `sae.apply_labels` writes them onto the dictionary, and
       the explorer names them — with `ui._label_provenance` stating who wrote
       them and that they describe correlates, not computation.
-- [ ] Feature-field domain coloring keyed by those labels rather than by
-      feature index.
+- [x] Feature field **names its domains**: `FeatureField.domains()` ranks
+      territories by area with plane centroids, and `render_feature_field`
+      writes the label of each onto the plane.
+
+      *Named, not recoloured, on purpose:* golden-angle hue encodes
+      **identity** — adjacent ids are made maximally distinct so regions stay
+      legible — so keying hue to label meaning would destroy that separation
+      *and* imply a semantic metric a 1-D hue cannot carry. Colour answers
+      which feature owns a region; the name answers what it is about.
 
 ### M3 — A tangible viewer
 - [x] `bvh.py` ported to `viewer/bvh.js` and pinned by a cross-language
@@ -119,9 +126,17 @@ start.
 
 ## Status
 
-M1, M3 and M6 are complete; M2, M4 and M5 each have exactly one item left,
-listed above. Every milestone landed green (offline test suite + viewer Node
-tests) before the next started, and that stays the rule.
+M1, M2, M3 and M6 are complete. Two items remain, both blocked on something
+other than effort:
+
+- **M4's live provider path** needs API credentials, which a session should
+  not hold or ask for. The producer and its honesty machinery are done and
+  tested against fixtures; someone with a key can wire the last mile.
+- **M5's `mottled/` package move** is a public API break, so it wants a
+  release boundary and an explicit decision, not a drive-by commit.
+
+Every milestone landed green (offline test suite + viewer Node tests) before
+the next started, and that stays the rule.
 
 ## Model coverage
 
@@ -157,11 +172,9 @@ distinct:
 
 ## Orientation
 
-New here — human or agent — start with [`docs/field-notes.md`](docs/field-notes.md):
-what the field currently believes, what it disputes, and the specific traps
-this codebase has already hit. It exists because a session confidently wrote
-a 2023-true claim about the SAE ecosystem into the README in 2026; dated
-facts with a re-verification command beat remembered ones.
+Start with [`docs/field-notes.md`](docs/field-notes.md): what the field
+currently believes, what it disputes, and the traps this codebase has already
+paid for. Every claim there is dated with a command to re-check it.
 
 ## Standing hazard: within-model assumptions
 

@@ -253,8 +253,7 @@ def direction_from_token(traj: StateTrajectory, token_id: int,
 
     For a model with tied embeddings (GPT-2) this row is also the unembedding
     direction, so pushing a late state along it moves the logit lens toward
-    that token — the mechanism behind the README's " Berlin" example, here as
-    a named, reusable helper instead of an inline expression.
+    that token.
     """
     if traj.embedding_matrix is None:
         raise ValueError("trajectory has no embedding_matrix; capture with a "
