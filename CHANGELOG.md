@@ -15,6 +15,18 @@
   Colour answers which feature owns a region; the name answers what it is
   about. Pinned by a test.
 
+### An intervention scene's record tells its edits apart
+- **An edit was recorded as its kind, layer and token only**, so a push of 30
+  and a push of 60, or pushes toward two different tokens, read the same.
+  `Intervention.record()` adds a vector edit's norm and a sha256 of its exact
+  values, and noise's scale and seed. `interventions` has not shipped in a
+  release, so its entries change shape without breaking the schema's promise.
+- **The edited run now records the attention/MLP split** the config asks for
+  (`intervene(capture_components=...)`, passed by `run_intervention`), so the
+  inspector reads it for both runs. A frozen block records zero writes: its
+  submodules still run, but their outputs are discarded, and recording them
+  would give a block that wrote nothing an attention/MLP share.
+
 ### Dose–response sweeps
 `faithfulness` scores a steer at one magnitude, and one successful magnitude
 says little: a large enough push along almost any direction moves the

@@ -139,7 +139,24 @@ def test_meta_records_counterfactual(tiny):
     branch = intervene(tiny, PROMPT, [Perturb(layer=1, delta=np.zeros(32, np.float32))],
                        tokenizer=DummyTokenizer())
     assert branch.meta["counterfactual"] is True
-    assert "perturb@layer1" in branch.meta["interventions"][0]
+    edit, = branch.meta["interventions"]
+    assert (edit["kind"], edit["layer"], edit["norm"]) == ("perturb", 1, 0.0)
+
+
+def test_record_tells_edits_apart():
+    """`describe()` reads the same for two strengths or two directions of one
+    edit; the record the analysis manifest carries must not."""
+    rng = np.random.default_rng(0)
+    v = rng.normal(size=32).astype(np.float32)
+    w = rng.normal(size=32).astype(np.float32)
+    w *= np.linalg.norm(v) / np.linalg.norm(w)          # same norm, other way
+    a, b, c = (Perturb(2, d, token=-1).record() for d in (v, 2 * v, w))
+    assert a["norm"] != b["norm"]
+    assert a["norm"] == pytest.approx(c["norm"]) and a["sha256"] != c["sha256"]
+    assert a == Perturb(2, v.copy(), token=-1).record()  # same edit, same record
+    assert InjectNoise(3, 0.5, seed=7).record() == {
+        "kind": "noise", "layer": 3, "token": None, "scale": 0.5, "seed": 7}
+    assert FreezeLayer(1).record() == {"kind": "freeze", "layer": 1, "token": None}
 
 
 def test_guards():
@@ -463,3 +480,29 @@ def test_run_intervention_zero_edit_reproduces_baseline(tiny):
     result = run_intervention(cfg, PROMPT, edits, tiny, DummyTokenizer())
 
     assert np.array_equal(result["traj"].hidden, result["traj_b"].hidden)
+
+
+def test_frozen_block_records_no_writes(tiny):
+    """A frozen block's submodules still run, but their outputs are discarded:
+    its recorded writes are zero, so the decomposition holds at every block."""
+    branch = intervene(tiny, PROMPT, [FreezeLayer(2)], tokenizer=DummyTokenizer(),
+                       capture_components=True)
+    comps = branch.components
+    assert not comps["attn"][2].any() and not comps["mlp"][2].any()
+    updates = np.diff(branch.hidden, axis=0)
+    assert np.allclose(comps["attn"] + comps["mlp"], updates, atol=1e-4)
+
+
+def test_run_intervention_branch_records_components(tiny):
+    """The config records the attn/MLP split for the scene, so the branch
+    carries it too — and a zero edit writes exactly what the baseline did."""
+    from config import MarbleConfig
+    from ui import run_intervention
+
+    cfg = MarbleConfig(model="tiny", use_cache=False, capture_attention=False)
+    edits = [Perturb(layer=1, delta=np.zeros(32, np.float32))]
+    result = run_intervention(cfg, PROMPT, edits, tiny, DummyTokenizer())
+
+    for name in ("attn", "mlp"):
+        assert np.array_equal(result["traj_b"].components[name],
+                              result["traj"].components[name])

@@ -175,7 +175,7 @@ def test_intervention_scene_records_what_ran(tmp_path):
     assert not any("generation" in t.meta for t in result["trajs"])  # no decode
     assert rec["config"]["generate_tokens"] == 0
     assert rec["config"]["generate_temperature"] == 0.0
-    assert rec["interventions"] == [[], ["perturb@layer2[token -1]"]]
+    assert rec["interventions"] == [[], [edits[0].record()]]
 
 
 def test_scene_without_a_record_is_unchanged(tmp_path):
