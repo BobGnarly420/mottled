@@ -42,6 +42,27 @@
 - **Not run at frontier scale.** The mechanism is proven on small models;
   the open items are in `ROADMAP.md`.
 
+### Chat beside the scene
+- **The explorer's Chat switch splits the page**: the conversation on the
+  left, its trajectories on the right, the inspector under the scene. Each
+  turn decodes the reply, then captures the whole conversation plus the
+  reply, since that is the forward pass the reply came from; the reply is
+  drawn as the decode axis.
+- **`pipeline.chat_prompt`** renders a conversation with the tokenizer's
+  chat template. When the template writes BOS and the tokenizer adds its
+  own, the rendered BOS is dropped, since re-tokenizing the text would carry
+  it twice. A model without a template (GPT-2) gets a plain User/Assistant
+  transcript; the panel says so and shows exactly what was sent.
+  `pipeline.chat_reply` decodes the reply from the ids the decode chose.
+- Chat turns skip the disk cache: every turn is a new conversation, so the
+  cache would only ever write, hundreds of MB a turn.
+- **`capture._entropy_topk` works a layer at a time** and partitions rather
+  than sorting the vocabulary. On a 258-token GPT-2 capture, about three
+  chat turns, it took 4.5 GB and 31 s; now 3.4 s, with no measurable rise
+  in peak memory. Entropy and top-k are unchanged, except that tied
+  probabilities now come out in token-id order (a stable sort's) instead of
+  whatever order the unstable sort left them in.
+
 ### A README for a reader who has never seen this repo
 927 lines had grown by accretion: a second, stale roadmap inside it (listing
 the analysis-manifest export as "next", months after it shipped), and every

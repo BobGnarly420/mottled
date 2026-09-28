@@ -69,6 +69,14 @@ capture), `remote` (stream weights you do not hold), `umap`, `faiss`,
 needs none of them. From a clone:
 `pip install -r requirements.txt && streamlit run ui.py`.
 
+The explorer's **Chat** switch puts a conversation on the left and its
+trajectories on the right. Each reply is decoded, then the whole
+conversation plus the reply is captured, so the scene is the forward pass
+the reply came from. An instruct model (`Qwen/Qwen2.5-0.5B-Instruct`) is
+sent the conversation in its own chat template; a model without one (GPT-2)
+gets a plain User/Assistant transcript, and the panel shows exactly what
+was sent.
+
 ## What it is, and what it isn't
 
 This matters more than the feature list, so it comes first.

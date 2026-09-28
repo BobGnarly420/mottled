@@ -116,6 +116,36 @@ def _capture_with(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) ->
     return traj
 
 
+def chat_prompt(tokenizer, messages: list[dict]) -> str:
+    """The text a conversation is sent to the model as, ready for its reply.
+
+    A tokenizer with a chat template renders the conversation with it. One
+    without (GPT-2) gets a plain User/Assistant transcript, which the
+    explorer says it is doing. The capture tokenizes this text again with
+    the tokenizer's own special tokens, so a BOS the template already wrote
+    is dropped rather than doubled: a doubled BOS is a different question to
+    the model, and nothing downstream would notice.
+    """
+    if getattr(tokenizer, "chat_template", None):
+        text = tokenizer.apply_chat_template(messages, tokenize=False,
+                                             add_generation_prompt=True)
+        bos = getattr(tokenizer, "bos_token", None)
+        if (bos and text.startswith(bos)
+                and tokenizer("")["input_ids"][:1] == [tokenizer.bos_token_id]):
+            text = text[len(bos):]
+        return text
+    turns = [f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}"
+             for m in messages]
+    return "\n".join(turns + ["Assistant:"])
+
+
+def chat_reply(tokenizer, traj: StateTrajectory) -> str:
+    """The reply a chat capture generated, decoded from the token ids the
+    decode chose (not re-joined from their display strings)."""
+    steps = (traj.meta.get("generation") or {}).get("steps", [])
+    return tokenizer.decode([s["id"] for s in steps], skip_special_tokens=True).strip()
+
+
 def _assemble_scene(cfg: MarbleConfig, trajs: list[StateTrajectory]) -> dict:
     """Shared multi-run assembly: joint projection, one terrain from the
     union of all runs' states, draped trajectories, comparisons vs run 0."""

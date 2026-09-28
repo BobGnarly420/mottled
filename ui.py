@@ -12,6 +12,8 @@ is unchanged.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 
 import attractor as attractor_mod
@@ -42,6 +44,8 @@ from pipeline import (  # noqa: F401
     attach_features,
     attach_inspector,
     attach_manifest,
+    chat_prompt,
+    chat_reply,
     degraded_note,
     run_compare,
     run_intervention,
@@ -82,6 +86,50 @@ def _label_provenance(labels: dict) -> str:
     return (f"Feature names are **auto-generated explanations** (Neuronpedia, "
             f"written by {who}) — descriptions of what a feature correlates "
             f"with, not of what it computes. Treat them as leads, not labels.")
+
+
+def chat_panel(st, cfg: MarbleConfig, load_model) -> None:
+    """The chat column: the conversation so far, and a capture of each reply.
+
+    A turn decodes the reply, then captures the whole conversation plus the
+    reply, since that is the forward pass the reply came from. The capture
+    becomes the explorer's result, so the scene beside the chat is that
+    turn's. Takes the Streamlit module as an argument, like
+    `render_model_comparison`.
+    """
+    messages = st.session_state.setdefault("chat", [])
+    history = st.container(height=520)
+    said = st.chat_input("Message the model", key="chat_input")
+    if said:
+        turn = messages + [{"role": "user", "content": said}]
+        model, tokenizer = load_model(cfg.model)
+        with st.spinner("Replying, then capturing the forward pass…"):
+            result = run_pipeline(cfg, chat_prompt(tokenizer, turn),
+                                  model=model, tokenizer=tokenizer)
+        # joined only once there is a reply, so a failed capture does not
+        # leave a question in the conversation that was never answered
+        messages[:] = turn + [{"role": "assistant",
+                               "content": chat_reply(tokenizer, result["traj"])}]
+        st.session_state["result"], st.session_state["cfg"] = result, cfg
+        st.session_state["chat_templated"] = bool(getattr(tokenizer, "chat_template", None))
+    with history:
+        for m in messages:
+            st.chat_message(m["role"]).write(m["content"])
+
+    if not messages:
+        return
+    result = st.session_state.get("result") or {}
+    with st.expander("Sent to the model", expanded=False):
+        if not st.session_state.get("chat_templated", True):
+            st.caption(f"`{cfg.model}` has no chat template, so the conversation "
+                       "goes in as a plain User/Assistant transcript.")
+        st.code(result.get("prompt", ""), language=None, wrap_lines=True)
+        st.caption("Each turn captures the whole conversation again, so turns "
+                   "slow down as it grows.")
+    if st.button("Clear conversation", key="chat_clear"):
+        messages.clear()
+        st.session_state.pop("result", None)
+        st.rerun()
 
 
 def render_model_comparison(st, result: dict) -> None:
@@ -186,27 +234,41 @@ def main() -> None:
     with st.sidebar:
         st.title("Mottled")
         st.caption("Latent trajectory explorer")
-        prompt = st.text_area("Prompt", DEFAULT_PROMPT, key="prompt")
-        prompt_b = st.text_area("Overlay prompts (one per line, optional)", "",
-                                key="prompt_b",
-                                help="Each line becomes another run drawn on the "
-                                     "same terrain and compared against the prompt above.")
+        chat_on = st.toggle(
+            "Chat", key="chat_mode",
+            help="Talk to the model in a column on the left and watch its "
+                 "trajectories on the right. Each reply is decoded, then the "
+                 "whole conversation plus the reply is captured and drawn — "
+                 "the reply as the decode axis.")
+        prompt = prompt_b = extra_models = ""
+        if not chat_on:
+            prompt = st.text_area("Prompt", DEFAULT_PROMPT, key="prompt")
+            prompt_b = st.text_area("Overlay prompts (one per line, optional)", "",
+                                    key="prompt_b",
+                                    help="Each line becomes another run drawn on the "
+                                         "same terrain and compared against the prompt above.")
         model_name = st.selectbox("Model", MODEL_CHOICES, index=0, key="model")
-        extra_models = st.text_input(
-            "Compare models (comma-separated, optional)", "", key="extra_models",
-            help="Draw other models on the SAME terrain for this prompt. They "
-                 "share no hidden space, so the scene is built in readout space "
-                 "— the vocabulary the models have in common — with the mass "
-                 "each spends outside it kept visible. Overrides the overlay "
-                 "prompts above.")
+        if not chat_on:
+            extra_models = st.text_input(
+                "Compare models (comma-separated, optional)", "", key="extra_models",
+                help="Draw other models on the SAME terrain for this prompt. They "
+                     "share no hidden space, so the scene is built in readout space "
+                     "— the vocabulary the models have in common — with the mass "
+                     "each spends outside it kept visible. Overrides the overlay "
+                     "prompts above.")
         proj_name = st.selectbox("Projection", PROJECTION_CHOICES, key="projection")
         dens_name = st.selectbox("Density estimator", DENSITY_CHOICES, key="density")
         top_k = st.slider("Top-k", 1, 10, 5, key="top_k")
-        gen_tokens = st.slider("Generate tokens", 0, 32, 0, key="generate_tokens",
-                               help="Decode this many tokens before capturing: the "
-                                    "scene then covers prompt + continuation — the "
-                                    "decode axis. Exact: the captured states are "
-                                    "the ones that existed at each decode step.")
+        if chat_on:
+            gen_tokens = st.slider("Reply tokens", 1, 64, 32, key="reply_tokens",
+                                   help="The most tokens a reply may run to; it "
+                                        "stops early at the model's end token.")
+        else:
+            gen_tokens = st.slider("Generate tokens", 0, 32, 0, key="generate_tokens",
+                                   help="Decode this many tokens before capturing: the "
+                                        "scene then covers prompt + continuation — the "
+                                        "decode axis. Exact: the captured states are "
+                                        "the ones that existed at each decode step.")
         gen_temp = 0.0
         if gen_tokens:
             gen_temp = st.slider("Decode temperature", 0.0, 2.0, 0.0, 0.1,
@@ -233,14 +295,26 @@ def main() -> None:
         attention_on = st.checkbox("Show attention flow", value=False, key="attention_flow",
                                    help="Draw head-averaged attention edges between token "
                                         "states at the selected layer.")
-        run = st.button("Run capture", type="primary", use_container_width=True, key="run")
+        run = False if chat_on else st.button("Run capture", type="primary",
+                                              use_container_width=True, key="run")
         st.caption("Play, pause and scrub inside the figure animate the marble; "
                    "the layer slider below drives the inspector.")
 
+    asked = MarbleConfig(model=model_name, projection=proj_name, density=dens_name,
+                         top_k=top_k, trajectory_mode=mode, invert_terrain=invert,
+                         generate_tokens=gen_tokens, generate_temperature=gen_temp)
+    if chat_on:
+        col_chat, col_viz = st.columns([2, 3])
+        with col_chat:
+            # every turn is a new conversation, so a disk cache would only
+            # ever write: a full-vocabulary capture, hundreds of MB, per turn
+            chat_panel(st, replace(asked, use_cache=False), load_model_cached)
+
     if run and prompt.strip():
-        cfg = MarbleConfig(model=model_name, projection=proj_name, density=dens_name,
-                           top_k=top_k, trajectory_mode=mode, invert_terrain=invert,
-                           generate_tokens=gen_tokens, generate_temperature=gen_temp)
+        cfg = asked
+        # the chat and the explorer share one scene; a new one ends the chat
+        # rather than sit beside a conversation it did not come from
+        st.session_state.pop("chat", None)
         model, tokenizer = load_model_cached(model_name)
         overlays = [p.strip() for p in prompt_b.splitlines() if p.strip()]
         others = [m.strip() for m in extra_models.split(",") if m.strip()]
@@ -261,8 +335,15 @@ def main() -> None:
             st.session_state["cfg"] = cfg
 
     result = st.session_state.get("result")
+    if chat_on and not st.session_state.get("chat"):
+        result = None               # a prompt capture is not this conversation
     if result is None:
-        st.info("Enter a prompt and press **Run capture** to explore the latent manifold.")
+        if chat_on:
+            col_viz.info("Say something on the left: each reply's forward pass "
+                         "is drawn here.")
+        else:
+            st.info("Enter a prompt and press **Run capture** to explore the "
+                    "latent manifold.")
         return
 
     cfg: MarbleConfig = st.session_state["cfg"]
@@ -432,7 +513,10 @@ def main() -> None:
             holder["tn"] = TokenNeighbors(t.embedding_matrix, t.vocab)
         return holder["tn"]
 
-    col_viz, col_info = st.columns([3, 1])
+    if chat_on:
+        col_info = col_viz          # the inspector sits under the scene
+    else:
+        col_viz, col_info = st.columns([3, 1])
 
     extra_runs = None
     if result.get("trajs") is not None and len(result["trajs"]) > 2:
