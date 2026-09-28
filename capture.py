@@ -83,8 +83,8 @@ class HookCapture:
     ``capture_components=True`` additionally hooks every block's attention and
     MLP submodules and records their outputs — the two additive writes to the
     residual stream, so for pre-norm architectures (Llama-style, GPT-2, NeoX)
-    ``hidden[l+1] = hidden[l] + attn[l] + mlp[l]`` exactly.  Frozen blocks
-    skip their update, so their recorded components no longer propagate.
+    ``hidden[l+1] = hidden[l] + attn[l] + mlp[l]`` exactly.  A frozen block's
+    submodules still run, but it writes nothing, so its components are zero.
     """
 
     def __init__(self, model, state_edits: dict | None = None,
@@ -123,6 +123,11 @@ class HookCapture:
                 if _block in self.frozen_blocks:            # skip the update
                     out = args[0]
                     changed = True
+                    # the submodules' outputs were discarded; recording them
+                    # would give a block that wrote nothing an attn/MLP share
+                    for writes in self.components.values():
+                        if _block in writes:
+                            writes[_block] = torch.zeros_like(writes[_block])
                 else:
                     out = output[0] if isinstance(output, tuple) else output
                 edit = self.state_edits.get(_layer)

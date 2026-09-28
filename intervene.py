@@ -26,6 +26,7 @@ capture) plus one or more branches are what the UI overlays and diffs.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -55,6 +56,27 @@ class Intervention:
     def describe(self) -> str:
         where = "all tokens" if self.token is None else f"token {self.token}"
         return f"{self.kind}@layer{self.layer}[{where}]"
+
+    def record(self) -> dict:
+        """This edit as the analysis record states it (`provenance.record`).
+
+        `describe()` reads the same for a push of 30 and one of 60, or for
+        pushes toward two different tokens. A vector edit is named here by its
+        norm and a hash of its exact values: enough to tell edits apart and to
+        check a reproduction, without a D-dimensional array in the record.
+        """
+        rec = {"kind": self.kind, "layer": int(self.layer),
+               "token": None if self.token is None else int(self.token)}
+        if self.vector is not None:
+            v = np.ascontiguousarray(self.vector, dtype="<f4")
+            rec["norm"] = float(np.linalg.norm(v))
+            # shape, then the float32 bytes, as provenance.sae_digest hashes
+            rec["sha256"] = hashlib.sha256(
+                repr(v.shape).encode("ascii") + v.tobytes()).hexdigest()
+        if self.kind == "noise":
+            rec["scale"] = float(self.scale)
+            rec["seed"] = None if self.seed is None else int(self.seed)
+        return rec
 
 
 def Perturb(layer: int, delta, token: int | None = None) -> Intervention:
@@ -131,15 +153,17 @@ def intervene(
     dtype: str = "float32",
     keep_logits: bool = True,
     capture_attention: bool = False,
+    capture_components: bool = False,
 ) -> StateTrajectory:
     """Run a counterfactual forward pass under `interventions`.
 
     Returns a StateTrajectory whose `meta["interventions"]` records the edits
-    and `meta["counterfactual"]` is True.  Requires a torch model (a HF
-    instance with `tokenizer`, or a hub name).  Pass the baseline's
-    `capture_attention`: it moves the pass onto the eager attention kernel,
-    and a branch on another kernel differs from its baseline by rounding
-    before any edit takes effect.
+    (`Intervention.record`) and `meta["counterfactual"]` is True.  Requires a
+    torch model (a HF instance with `tokenizer`, or a hub name).  Pass the
+    baseline's `capture_attention`: it moves the pass onto the eager attention
+    kernel, and a branch on another kernel differs from its baseline by
+    rounding before any edit takes effect.  `capture_components` records each
+    block's attention and MLP writes, as `capture` does.
     """
     if not interventions:
         raise ValueError("no interventions given; use capture() for a baseline pass")
@@ -149,9 +173,10 @@ def intervene(
         model, prompt, tokenizer=tokenizer, top_k=top_k, device=device, dtype=dtype,
         keep_logits=keep_logits, state_edits=state_edits, frozen_blocks=frozen,
         capture_attention=capture_attention,
+        capture_components=capture_components,
         extra_meta={
             "counterfactual": True,
-            "interventions": [iv.describe() for iv in interventions],
+            "interventions": [iv.record() for iv in interventions],
         },
     )
 
