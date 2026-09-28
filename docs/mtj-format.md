@@ -75,13 +75,19 @@ hashes; this is where the file states them itself.
   },
   "interventions": [                   // only when a run was edited: one list
     [],                                // per run, in run order; the untouched
-    ["perturb@layer11[token -1]"]      // baseline's is empty
+    [{ "kind": "perturb", "layer": 11, // baseline's is empty
+       "token": -1, "norm": 30.0,
+       "sha256": "…" }]                // hash of the vector's float32 values
   ]
 }
 ```
 
 `models` is a list because a cross-model scene has one identity per run;
-`interventions` is per run for the same reason. `config` is the
+`interventions` is per run for the same reason. Each edit records its
+`kind`, `layer` and `token` (`null` for every position). A vector edit
+(`perturb`, `set`) adds the vector's `norm` and a `sha256` of its values, and
+`noise` adds its `scale` and `seed`, so two strengths or two directions of
+the same edit read differently. `config` is the
 configuration the runs were captured under, which is not always the one the
 session asked for: an intervention replays the prompt pass only, so its
 record says `generate_tokens: 0` even with generation on.

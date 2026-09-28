@@ -429,10 +429,12 @@ def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
     # Attention capture moves a pass onto the eager kernel, so every pass
     # measured against the baseline has to share it: across kernels, rounding
     # alone reads as a separation, even for an edit that changed nothing.
+    # Components too: the config records them for the scene, not one run.
     branch = intervene(model, prompt, interventions, tokenizer=tokenizer,
                        top_k=cfg.top_k, device=cfg.device, dtype=cfg.dtype,
                        keep_logits=cfg.keep_logits,
-                       capture_attention=cfg.capture_attention)
+                       capture_attention=cfg.capture_attention,
+                       capture_components=cfg.capture_components)
     branch.validate()
 
     result = {"prompts": [prompt, prompt], "prompt": prompt,
