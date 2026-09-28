@@ -58,7 +58,7 @@ mottled-convert-sae = "convert_sae:main"
 # `mottled serve` all failed on an install that looked fine in a clone.
 py-modules = ["attractor", "bvh", "cache", "capture", "cli", "compare",
               "config", "convert_sae", "crossmodel", "density", "design_tokens",
-              "intervene", "metrics", "mweights", "neighbors", "parity",
+              "dose", "intervene", "metrics", "mweights", "neighbors", "parity",
               "pipeline", "projection", "provenance", "render", "sae", "serve",
               "smoke", "statefile", "terrain", "trajectory", "ui"]
 # `viewer` ships as package data, not just as repo content: serve.py resolves

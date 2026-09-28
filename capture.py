@@ -330,13 +330,18 @@ def _run(model, prompt, tokenizer=None, top_k=5, device="auto", dtype="float32",
          frozen_blocks: set | None = None, extra_meta: dict | None = None,
          capture_components: bool = False,
          capture_attention: bool = False,
-         input_ids: "torch.Tensor | None" = None) -> StateTrajectory:
+         input_ids: "torch.Tensor | None" = None,
+         logits_dtype: str = "float16") -> StateTrajectory:
     """Forward pass (optionally intervened) -> StateTrajectory. Shared by
     capture(), intervene() and generate_and_capture().
 
     `input_ids` (1, T) overrides tokenization of `prompt` — used when the
     exact token ids are already known (a decoded sequence must not be
     re-tokenized, since detokenize->tokenize can move token boundaries).
+
+    `logits_dtype` is how the logits are stored. float16 halves a large
+    array, but its rounding makes tiny KL steps and rank ties; `dose.py`
+    asks for float32 so its smallest doses measure the model, not the cast.
     """
     if isinstance(model, str):
         model, tokenizer = load_model(model, device=device, dtype=dtype)
@@ -399,7 +404,7 @@ def _run(model, prompt, tokenizer=None, top_k=5, device="auto", dtype="float32",
     return StateTrajectory(
         hidden=hidden.numpy(),
         tokens=tokens,
-        logits=logits.astype(np.float16) if keep_logits else None,
+        logits=logits.astype(logits_dtype) if keep_logits else None,
         entropy=entropy,
         topk=topk,
         vocab=vocab,
