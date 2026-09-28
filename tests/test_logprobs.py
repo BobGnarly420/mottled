@@ -161,7 +161,7 @@ def test_explorer_banner_states_the_limits():
 
 
 def test_explorer_banner_is_absent_for_a_full_capture():
-    from models import synthetic
+    import tiny as synthetic
     from ui import degraded_note
 
     assert degraded_note(synthetic.capture("the capital of france is").meta) is None

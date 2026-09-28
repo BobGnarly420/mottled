@@ -1,7 +1,8 @@
 # Clone-install superset (core + all optional backends). Lower-bound floors;
 # see requirements.lock for the exact pinned closure used in CI.
-# The minimal install needs only the core five (the synthetic backend needs
-# neither torch nor transformers).
+# The core five are enough to *read* a .mtj, analyse a trajectory or drive a
+# viewer; capture needs torch + transformers, because every capture is now a
+# real model (the synthetic backend was removed in 2e254fa).
 numpy>=1.24
 scipy>=1.10
 scikit-learn>=1.3
@@ -12,3 +13,9 @@ transformers>=4.44
 umap-learn>=0.5
 faiss-cpu>=1.7
 pytest>=7.4
+# Reference quantiser for the GGUF conformance tests: viewer/gguf.js is
+# checked against this package's own dequantiser rather than against a
+# reading of the spec. Without it those tests skip, and the ternary block
+# layouts go unverified — which is the whole point of having them.
+# Pure Python over numpy/pyyaml/requests/tqdm; it adds nothing heavy.
+gguf>=0.10

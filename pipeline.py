@@ -21,6 +21,7 @@ import cache as cache_mod
 import compare as compare_mod
 import density as density_mod
 import projection as projection_mod
+import provenance as provenance_mod
 import sae as sae_mod
 import terrain as terrain_mod
 import trajectory as trajectory_mod
@@ -34,7 +35,7 @@ def run_pipeline(cfg: MarbleConfig, prompt: str, model=None, tokenizer=None) -> 
     """Execute the full Mottled pipeline and return every artifact.
 
     `model`/`tokenizer` may be pre-loaded objects (the UI caches them); when
-    omitted, `cfg.model` is loaded by name ("synthetic" needs no loading).
+    omitted, `cfg.model` is loaded by name.
     """
     disk = cache_mod.DiskCache(cfg.cache_dir) if cfg.use_cache else None
     key = cache_mod.make_key("pipeline-v6", prompt, cfg.model, cfg.projection,
@@ -272,7 +273,7 @@ def attach_features(result: dict, sae, source: str | None = None,
 def attach_inspector(result: dict, n_neighbors: int = 5) -> dict:
     """Precompute the inspector layers a scene file cannot recover on its own.
 
-    The explorer can show semantic neighbors and the attention/MLP split
+    The explorer can show representation-space neighbors and the attention/MLP split
     because it still holds the embedding matrix (V x D) and the residual
     components (2 x (L-1) x T x D) in memory. A scene file carries neither —
     they are orders of magnitude larger than everything else in it — so the
@@ -324,6 +325,30 @@ def attach_inspector(result: dict, n_neighbors: int = 5) -> dict:
     return result
 
 
+def attach_manifest(result: dict, cfg: MarbleConfig, sae=None,
+                    sae_source: str | None = None,
+                    sae_hook: str | None = None) -> dict:
+    """Attach the analysis record — the scene's own methods section.
+
+    `docs/validity.md` asks a user publishing on Mottled output to version-lock
+    the model, tokenizer, library versions, precision, seeds and SAE artifact
+    hashes. This puts all of it in the file instead of in the user's notes:
+    `provenance.record` over the config that drove the run and the metas of the
+    trajectories it produced. Mutates and returns `result` (adds "analysis");
+    `statefile.save_scene` carries it into the `.mtj` additively.
+    """
+    result["analysis"] = provenance_mod.record(
+        # a producer that ran under a different config than it was handed
+        # (run_intervention: the prompt pass only) puts it on the result, and
+        # the record states what ran, not what the session asked for
+        result.get("config", cfg),
+        prompts=result.get("prompts") or [result.get("prompt", "")],
+        trajs=result.get("trajs") or [result["traj"]],
+        sae=sae, sae_source=sae_source, sae_hook=sae_hook,
+    )
+    return result
+
+
 def run_model_scene(cfg: MarbleConfig, prompt: str, models: list,
                     loaded: dict | None = None) -> dict:
     """One prompt, several **models**, on one terrain.
@@ -336,7 +361,7 @@ def run_model_scene(cfg: MarbleConfig, prompt: str, models: list,
     coordinate system, so joint projection, the terrain, and every viewer
     work unchanged.
 
-    `models` are names (or "synthetic"); `loaded` optionally maps a name to a
+    `models` are hub names; `loaded` optionally maps a name to a
     preloaded (model, tokenizer) pair. The result carries the usual scene
     keys plus `model_names`, `shared_vocab`, and `model_comparisons` (each
     model measured against the first).
@@ -387,18 +412,34 @@ def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
     When `target_id` is given for a single directional steer, also attaches a
     `Faithfulness` readout: the run measures a norm-matched *random* control so
     the UI can say how much of the effect is the steering direction rather than
-    the perturbation's raw size.
+    the perturbation's raw size. When the baseline additionally carries the
+    residual decomposition (`cfg.capture_components`), a `PersistenceProfile`
+    is attached too — the same faithfulness effect read at every layer from
+    the edit down, paired with the attention/MLP write shares.
     """
-    from intervene import divergence, intervene, score_against_control
+    from intervene import (divergence, intervene, persistence_profile,
+                           score_against_control)
 
-    baseline = _capture_with(cfg, prompt, model=model, tokenizer=tokenizer)
+    # The edit replays the prompt pass only, so the baseline has to be that
+    # same pass: with generation on it would span prompt + continuation and
+    # could not be compared state-for-state with the branch. The temperature
+    # goes too: nothing was sampled, and this is the config the record states.
+    prompt_cfg = replace(cfg, generate_tokens=0, generate_temperature=0.0)
+    baseline = _capture_with(prompt_cfg, prompt, model=model, tokenizer=tokenizer)
+    # Attention capture moves a pass onto the eager kernel, so every pass
+    # measured against the baseline has to share it: across kernels, rounding
+    # alone reads as a separation, even for an edit that changed nothing.
     branch = intervene(model, prompt, interventions, tokenizer=tokenizer,
                        top_k=cfg.top_k, device=cfg.device, dtype=cfg.dtype,
-                       keep_logits=cfg.keep_logits)
+                       keep_logits=cfg.keep_logits,
+                       capture_attention=cfg.capture_attention)
     branch.validate()
 
     result = {"prompts": [prompt, prompt], "prompt": prompt,
               "prompt_b": "patched: " + ", ".join(iv.describe() for iv in interventions),
+              # attach_manifest records this in place of the caller's config,
+              # which may ask for a decode that neither run did
+              "config": prompt_cfg,
               **_assemble_scene(cfg, [baseline, branch])}
     result["divergence"] = divergence(baseline, branch)
 
@@ -410,6 +451,16 @@ def run_intervention(cfg: MarbleConfig, prompt: str, interventions: list,
         result["faithfulness"] = score_against_control(
             model, prompt, baseline, branch, iv.vector, iv.layer, int(target_id),
             token=tok, tokenizer=tokenizer, seed=cfg.seed, device=cfg.device,
-            dtype=cfg.dtype, top_k=cfg.top_k)
+            dtype=cfg.dtype, top_k=cfg.top_k,
+            capture_attention=cfg.capture_attention)
+        if (baseline.components is not None
+                and {"attn", "mlp"} <= set(baseline.components)):
+            result["persistence"] = persistence_profile(
+                model, prompt, iv.vector, iv.layer, int(target_id),
+                tokenizer=tokenizer, token=tok,
+                scale=float(np.linalg.norm(iv.vector)),
+                baseline=baseline, branch=branch, seed=cfg.seed,
+                device=cfg.device, dtype=cfg.dtype, top_k=cfg.top_k,
+                capture_attention=cfg.capture_attention)
     return result
 

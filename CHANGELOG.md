@@ -15,6 +15,335 @@
   Colour answers which feature owns a region; the name answers what it is
   about. Pinned by a test.
 
+### Dose–response sweeps
+`faithfulness` scores a steer at one magnitude, and one successful magnitude
+says little: a large enough push along almost any direction moves the
+readout. `docs/validity.md` listed dose-response curves as an open need.
+- **`dose.dose_sweep`** injects one direction at one layer over a signed grid
+  of doses (default 0, ±1/32 … ±2), one forward pass per dose, reading the
+  last token. Doses are relative to r_ℓ, the median residual norm at the
+  injection layer over positions t ≥ 1 (position 0's norm dwarfs the rest in
+  GPT-2- and Llama-family models), measured once from the dose-0 captures.
+  Each point stores the absolute ‖δ‖ as its primary field, as
+  `Faithfulness.scale` does. Points above dose 1 are flagged
+  `replacement_regime`.
+- **Metrics per point:** `state_distance` (‖h_α − h₀‖ / ‖h₀‖ in full hidden
+  space at every layer from the injection down), final-layer KL, target
+  log-prob and rank, entropy, the log-prob of the dose-0 top token, and
+  on-distribution checks at the injection site (cosine, norm ratio, and v's
+  component against its observed range, flagged `extrapolation` outside it).
+- **Controls on the same signed grid:** seeded random directions orthogonal
+  to v with the sign applied (`intervene._norm_matched_random` draws the same
+  direction for ±δ), label-shuffled diff-of-means directions for contrast
+  directions, and the same δ injected at the final layer for token
+  directions — with tied embeddings, part of a token steer's effect arrives
+  through the skip path by construction.
+- **`DoseSweep`** writes JSON (its own encoder: `statefile._jsonable` would
+  turn an array into a truncated string) and a tidy CSV, and carries
+  `provenance.record`, the direction's sha256 and the injection site in
+  TransformerLens terms. Evaluation prompts that also derived the direction
+  are refused, and so are multi-token targets.
+- **`metrics.logit_lens_rank`**: rank (ties counted in the target's favour,
+  since float16 logits tie often) and normalized log-probability.
+- **`capture._run(logits_dtype=...)`**: the sweep keeps float32 logits so its
+  smallest doses measure the model rather than float16 rounding. The default,
+  and every stored format, is unchanged.
+
+### An intervention scene's record says what ran
+- **It claimed a decode that never happened.** The explorer attaches the
+  analysis record with its session config, so with *Generate tokens* above
+  zero an exported intervention scene recorded the sliders' `generate_tokens`
+  and `generate_temperature`, although both runs are the prompt pass only.
+  `run_intervention` now returns the config it ran under as
+  `result["config"]`, and `attach_manifest` records that one.
+- **It did not name the edits.** The record now carries `interventions`: one
+  list per run, in run order, empty for the untouched baseline. The field is
+  additive, so the schema stays `mottled-analysis/1`.
+
+### An intervention compares like with like
+- **`run_intervention` raised whenever generation was on.** With the
+  explorer's *Generate tokens* slider above zero the baseline decoded prompt +
+  continuation, while the edit replays the prompt pass only, so `divergence`
+  rejected the pair. The baseline is now that prompt pass.
+- **A no-op edit read as a separation.** Attention capture (on by default)
+  moves a pass onto the eager attention kernel, but only the baseline asked
+  for it; the branch and the faithfulness and persistence controls ran on the
+  model's default kernel (sdpa). Rounding alone gave a zero-delta edit a
+  nonzero divergence profile (~1e-8 on the tiny test model) and a separation
+  onset at layer 1. `intervene`, `score_against_control` and
+  `persistence_profile` take `capture_attention`, and `run_intervention`
+  passes the config's to each, so every pass it measures shares one kernel —
+  and the branch now carries attention patterns too.
+
+### A pip install was broken, and every test passed
+Preparing a release meant building one, and the wheel turned out not to
+contain the tool. The suite runs in a checkout, where every file is present
+because git put it there; none of it could see this.
+
+- **`attractor` and `mweights` were absent from `py-modules`.** A
+  pip-installed Mottled could not `import ui` at all — the explorer, the
+  documented flat API and `mottled serve` were broken for anyone who installed
+  rather than cloned, across 0.1.0 and 0.2.0.
+- **`viewer/` was not packaged.** `serve.py` resolves its static root next to
+  itself, so `mottled serve` answered 404 for the very URL it printed. The
+  viewer and its sample scenes now ship as package data, `viewer.samples`
+  declared explicitly rather than glob-included — setuptools warns that the
+  ambiguous form may stop shipping, which is how a bundled sample disappears
+  two versions from now.
+- **`mottled smoke`** (`smoke.py`) is the check the suite cannot make: run
+  against an *installed* package it imports the flat API, resolves every asset
+  the viewer page asks for, reads a bundled scene, round-trips a `.mtj` and
+  builds an analysis record. Seconds, no network, no weights — a core install
+  with none of the extras must pass it. A missing `torch` is reported, not
+  failed: analysis and both viewers work without it.
+- **`tests/test_packaging.py`** pins the configuration in CI: every top-level
+  module is declared and imports, console scripts point at modules that ship,
+  and every asset `index.html` references matches a package-data pattern.
+- **`RELEASING.md`** — the pre-tag checklist (including that the parity matrix
+  must actually have been run) and what a version number promises about the
+  `.mtj` format, the flat API, the analysis-record schema and `MarbleConfig`.
+
+### A shared scene says what it is and how much to trust it
+The explorer has always put the caveats beside its figure: projection fidelity
+inline, ✕ markers on low-fidelity states, the validity contract under the
+scene. The viewer said none of it — and the viewer is the surface a scene is
+*shared* on, where the reader has no session, no config and no author to ask.
+An attractive picture with nothing attached is exactly the research-validity
+risk `docs/validity.md` exists to name.
+
+- **`viewer/reading.js` + a "Reading this scene" panel.** Collapsed by
+  default — it answers a question the reader has rather than standing between
+  them and the picture. It reports the scene's pooled projection fidelity
+  (amber past a quarter of states low), whether the density carries a
+  bootstrap standard error *and that the bound is a lower one*, what the
+  terrain and the readouts do and do not mean in `docs/validity.md`'s own
+  vocabulary, and — from the analysis record the `.mtj` now carries — what
+  produced it. A scene written before that record existed says so rather than
+  showing a blank.
+- Fidelity is **pooled across runs, not averaged over per-run means**: runs in
+  one scene can have different token counts, and a mean of means would weight
+  a three-token prompt like a thirty-token one.
+- **`projection.fidelity_summary` and `projection.LOW_FIDELITY`** are the one
+  home for that computation and that threshold, which previously lived inline
+  in `ui.py`. `viewer/reading.js` ports them and
+  `tests/test_reading_conformance.py` pins the pair: a scene that reported one
+  fidelity in the app and another in the browser would be two tools.
+- Models are de-duplicated in the provenance line — the record has one entry
+  per run, so a two-prompt scene on one model would otherwise read
+  "gpt2, gpt2", which counts runs rather than weights.
+- Verified in a real browser (Chromium) on a bundled sample and on a
+  record-carrying scene, not only under `node --test`.
+
+### Don't take the README's word for it: `mottled parity`
+The test suite proves the pipeline is self-consistent. That is not the
+question a reader of a paper built on Mottled has — theirs is whether the
+residual stream in the picture is the one the model actually computed, and the
+only answer on offer was the README's assurance that it is.
+
+- **`parity.py` + `mottled parity`** runs one prompt through Mottled and
+  through the implementations a reviewer already trusts, and prints the
+  largest disagreement per model as a number, with `-o` for a JSON report and
+  `--markdown` for the table. Non-zero exit when anything exceeds tolerance,
+  so it can gate a release; each cell is isolated, so one gated model or one
+  missing wheel costs a row rather than the table. A skipped row is never
+  counted as a passed one.
+- Two comparisons, two different claims. **States**: the per-block capture
+  against HuggingFace's `output_hidden_states` — the same tensors read two
+  ways, so anything above float noise is a bug rather than a tolerance.
+  **Readout**: the deepest logit lens against the model's actual `logits`,
+  which is not circular — if the lens at the last layer cannot reproduce what
+  the model predicts, every shallower readout is measuring something else.
+- **NNsight** is a real cell, not a stub: `trace_with_nnsight` takes layer 0
+  from block 0's *input*, which is what `HookCapture` records and is
+  family-agnostic — the embedding module's output would differ on GPT-2, which
+  adds positional embeddings in between. Verified against a locally-built
+  model at exactly 0.0 deviation. (The states are appended in a loop, not a
+  comprehension: NNsight re-executes the trace body and a comprehension-local
+  name does not survive it.)
+- **TransformerLens** is compared only against `from_pretrained_no_processing`.
+  TL's default folds layer-norms and centers writing weights, which moves the
+  residual stream deliberately; the harness refuses the processed comparison
+  rather than publish a number that means nothing.
+- `models.families.resolve_paths` returns where a model keeps its blocks and
+  embeddings as attribute *paths*, which is what a tracing library's proxy
+  needs — it mirrors the module tree, so the module itself cannot be found by
+  identity.
+
+### Mottled does not have to own the forward pass
+Every producer so far ran the model itself. That is the wrong shape for a
+researcher who already has the states — an NNsight trace with `.save()` on
+each layer, a vLLM or custom-loop hook, a `run_with_cache` already sitting in
+a notebook. Re-running the model to look at a pass you already ran is the
+expensive half of the work, and at frontier scale it may not be possible.
+
+- **`models/external.py`** — `from_hidden_states(hidden, tokens, model,
+  tokenizer)` accepts whatever the capture left behind: an `(L, T, D)` array,
+  a per-layer list of `(T, D)` or `(1, T, D)`, numpy or torch, bfloat16, and
+  NNsight's saved proxies (`.value` is unwrapped). The model is used only for
+  the readout — final norm, LM head, embedding table, resolved structurally by
+  `models/families.py` — so every layout `capture.py` supports works here too.
+  A ragged stack and a token-count mismatch are named errors rather than a
+  silently wrong picture.
+- **`models/hooked.from_cache`** builds a trajectory from a TransformerLens
+  `ActivationCache` you already ran; `from_hooked_transformer` is now that plus
+  the forward pass. `residual_stack` is separated out, so the layer convention
+  (layer 0 = `resid_pre` 0, then each `resid_post`) is testable without the
+  library installed.
+- Both fill the `meta` keys `provenance.record` reads, so a scene built from an
+  external capture records real facts instead of nulls.
+- The contract pinned by `tests/test_external.py` is not that these produce *a*
+  trajectory but that they produce the *same* one: ingesting the states
+  `capture()` recorded reproduces its logits, entropy, top-k and neighbors.
+  An adapter that near-misses the readout does not crash — it gives every basin
+  and top-k downstream a different question to answer.
+
+### Scenes carry their own methods section
+`docs/validity.md` asks anyone publishing on Mottled output to version-lock
+the model, tokenizer, library versions, precision, seeds and SAE artifact
+hashes. That was a norm with nothing behind it: the knobs lived in a
+`MarbleConfig` the user had to transcribe by hand, the environment facts lived
+nowhere, and a shared `.mtj` could not say what produced it (#29).
+
+- **`provenance.py`** — `record()` collects the full parameterization: schema
+  and UTC timestamp, Mottled's version, every `MarbleConfig` field, the
+  prompts, one model identity *per run* (id, hub commit, backend, family,
+  device, dtype), and the environment (Python, platform, and the versions of
+  the nine libraries that can actually move a number in a scene — not a `pip
+  freeze`). `sae_digest` hashes a dictionary's weights rather than the file
+  they arrived in, so the same SAE hashes the same from the hub, an `.npz` or
+  a SAELens object.
+- **`pipeline.attach_manifest`** puts the record on a result the way
+  `attach_inspector` and `attach_features` do; `statefile` writes it under the
+  additive manifest key `analysis` in both `.mtj` kinds. The explorer's
+  **Export scene** button and `mottled export` attach it always.
+- **`mottled export-manifest scene.mtj`** prints it as citable JSON, and
+  `mottled export --manifest PATH` writes it beside the scene.
+- **Capture now reports what it ran**: `meta` carries the hub commit the
+  weights resolved to, plus the resolved device and dtype — the config can say
+  `device="auto"`, only the capture knows where the model actually ran.
+- The record states the parameterization a reproduction attempt needs; it is
+  not evidence that the run reproduces, and `docs/validity.md` says so.
+
+### The synthetic backend is gone
+`models/synthetic.py` generated plausible-looking trajectories analytically.
+It made the whole stack runnable without torch, and it was also the reason
+much of the suite was testing the pipeline against numbers no transformer
+produces. With the browser able to run a real model, it has no remaining job.
+
+- **Deleted**, along with its dispatch in `capture`, `serve`, `ui`,
+  `pipeline` and `intervene`. `MODEL_CHOICES` and every default now name a
+  real model (`gpt2`, as the smallest honest one).
+- **The suite runs on tiny locally-built Llamas** (`tests/tiny.py`) — real
+  hooks, real logit lens, real attention, an exactly reconciling residual
+  decomposition — with a word-level tokenizer so a "token" still means what
+  the assertions assume. Offline, and no slower in practice.
+- Two assertions turned out to have been testing the *fixture*, and are now
+  honest about it: `entropy_collapse > 0` held only because the synthetic
+  logits sharpened with depth by construction (it now pins the metric's
+  definition instead), and `identified().all()` in the CKA alignment held
+  only because synthetic took large steps between layers — in a small model
+  consecutive layers genuinely cannot be resolved, which is precisely what
+  `identified()` exists to report.
+- `scene-abc.mtj` and `single.mtj` — the viewer's and the site's default
+  scenes — were synthetic. They are regenerated as real GPT-2 captures, so
+  every bundled sample is now a real model.
+- `render._continuation_text` decided how to join decode tokens from the
+  backend *name*; it now decides from the pieces, since the distinction is
+  the tokenizer's and either kind can come from any backend.
+
+### Capture in the browser: the viewer runs the model
+Until now the web viewer only *drew* scenes — producing one needed Python,
+so the live demo could ship pre-baked samples or nothing. The forward pass,
+the scene pipeline and the weights now all exist client-side, which makes
+the hosted viewer a place you can run a real open-weight model rather than a
+gallery of captures someone else made.
+
+- **`viewer/model.js`** — an instrumented Llama/Qwen3-family forward pass
+  (RMSNorm, rotary, grouped-query attention, SwiGLU, optional Qwen3 q/k
+  norms). No chat runtime exposes per-layer activations, so the pass is
+  implemented rather than borrowed: it records `hidden[0]` as the embedding
+  stream and `hidden[l+1] = hidden[l] + attn[l] + mlp[l]`, the layout
+  `capture.py` already produces. Pinned against HuggingFace's own outputs on
+  locally-built models — per-layer states, logits including argmax, the exact
+  decomposition, and causality, across GQA/MHA/tied-embedding configurations.
+- **`viewer/scene.js`** — the Python scene pipeline (projection → density →
+  terrain → drape) ported, since an in-browser producer has no server to ask.
+  Dual/Gram PCA, so cost scales with the number of states rather than the
+  model's width, and component signs follow scikit-learn's `svd_flip` so a
+  browser-built scene is not a mirrored one. Conformance-tested against the
+  Python modules, the way `bvh.js` is against `bvh.py`.
+- **`viewer/ops-webgpu.js`** — four WGSL kernels behind the same `ops`
+  contract the CPU reference implements, so there is one forward pass and the
+  GPU path is an accelerator, never a second source of truth. `forward()` is
+  async and awaits each op; awaiting a plain value is a no-op, so the CPU path
+  is unchanged. **The kernels' arithmetic cannot be verified by CI** — that
+  needs a GPU. `viewer/tests/parity.html` runs both backends over identical
+  weights in a real browser and reports the largest disagreement; it has been
+  run on real hardware and passed, and since nothing in CI can catch an
+  arithmetic regression there, it is the manual step to repeat after changing
+  a kernel. What CI does check is that each shader's bindings and entry point
+  match what `dispatch()` supplies — the failure mode where one side is
+  edited alone.
+- **`.mwt` weights** (`mweights.py` + `viewer/weights.js` +
+  `mottled export-weights`) — a container shaped like `.mtj`, with per-output-
+  row int8 by default and lazy dequantisation. Qwen3-0.6B lands at ~598 MB.
+- **`viewer/gguf.js`** — reads GGUF as published, including the ternary
+  (1.58-bit) builds that make a 4B model a ~1 GB download instead of 8 GB.
+  F32/F16/Q8_0/TQ1_0/TQ2_0; any other ggml type throws by name rather than
+  mis-reading bytes. Checked against the `gguf` package's own dequantiser
+  byte-exactly, plus a test of the defining ternary property so a shared
+  misconception could not pass silently.
+
+Three bugs measurement caught that review would not have:
+- A tied model still lists `lm_head.weight` in its state dict, sharing storage
+  with the embedding table — writing both shipped the same matrix twice
+  (~156 MB on Qwen3-0.6B).
+- Keeping the embedding table at f32 "because Mottled reads neighbours out of
+  it" cost 622 MB at Qwen3's vocab width, making the small model a *larger*
+  download than the 4B one. It is quantised now, with a test that the
+  neighbour ranking the inspector shows survives it.
+- The `.mwt` data section was unaligned, so a reader taking a typed-array view
+  worked or threw depending on how many bytes the JSON happened to occupy.
+
+Both remaining gaps closed in the same cycle: BPE **encode**
+(`viewer/tokenizer.js`, checked against the real Qwen3 tokenizer) and the
+capture UI (the model picker below). The live viewer is end to end.
+
+### Layer-wise persistence profile for injected directions
+`divergence()` says where a branch separates; `component_shares` says who
+writes each layer. The new instrument combines them: is an injected effect
+*carried* by the residual stream, or *rebuilt* by later layers?
+- `intervene.persistence_profile(model, prompt, direction, inject_layer,
+  target, tokenizer)` applies one directional steer plus the norm-matched
+  random control (the `faithfulness()` construction, unchanged) and reads
+  the effect toward the target at **every** layer from the injection down,
+  pairing each with the baseline's attention/MLP write shares from
+  `metrics.component_shares`. The final record *is* `faithfulness()`'s
+  scoring — `target_logit_shift` gained a `layer` argument (default: final,
+  as before) so the profile generalizes the old readout instead of
+  reimplementing it. Same framing as `Divergence`: a measurement of what
+  happened downstream, not a claimed cause.
+- The explorer gains an **Injection persistence** panel next to the
+  intervention divergence: `render.render_persistence` charts the effect by
+  layer with the MLP write-share overlaid on a secondary axis, so a
+  drop-and-return in the effect can be read against the block that might
+  have rebuilt it. Attached by `run_intervention` for directional steers
+  whenever the baseline carries the residual decomposition.
+### The inferential contract (docs/validity.md)
+The tool's central research-validity risk — an attractive within-run
+visualization mistaken for evidence of a model mechanism — now has a
+dedicated answer instead of scattered caveats.
+- **`docs/validity.md`**: what each Mottled artifact licenses you to claim,
+  from the projection robustness envelope through the SAE claim gates to
+  researcher degrees of freedom — including the tool's own known limits
+  (the i.i.d. density bootstrap understates uncertainty on dependent
+  states; the honest upgrades are named and marked unimplemented).
+- **Framing tightened to match**: a basin is a *state concentration region*
+  under the chosen projection and estimator; "semantic manifold" is gone
+  from README and site; neighbors are labeled *representation-space*
+  neighbors everywhere; the explorer and README's "What this is — and is
+  not" open with the one-sentence boundary and link the contract.
+
 ### Features with names (roadmap M2)
 An SAE's features are indices until something explains them, and an unnamed
 feature overlay is a colour with no meaning.

@@ -214,6 +214,33 @@ def neighborhood_preservation(X: np.ndarray, Y: np.ndarray, k: int = 10) -> np.n
     return out
 
 
+# Below this neighborhood-preservation score a state is drawn where the
+# projection *could* put it rather than where it is. One home for the
+# threshold: it drives the explorer's prose, the ✕ markers on the scene, and
+# the viewer's scene panel, which would otherwise disagree about the same run.
+LOW_FIDELITY = 0.5
+
+
+def fidelity_summary(preservation, low_fidelity: float = LOW_FIDELITY) -> dict:
+    """How much of the neighborhood structure survived the projection.
+
+    One computation, two surfaces: the Streamlit explorer's inline note and
+    the web viewer's scene panel (`viewer/reading.js`, pinned by
+    `tests/test_reading_conformance.py`). A scene that reports one fidelity in
+    the app and another in the browser is two tools, and a screenshot from
+    either says nothing about the other.
+    """
+    arr = np.asarray(preservation, dtype=np.float64).ravel()
+    if arr.size == 0:
+        raise ValueError("no preservation values to summarize")
+    return {
+        "mean": float(arr.mean()),
+        "low_fraction": float((arr < low_fidelity).mean()),
+        "low_fidelity": float(low_fidelity),
+        "n": int(arr.size),
+    }
+
+
 def projection_quality(
     hidden: np.ndarray,
     coords: np.ndarray,

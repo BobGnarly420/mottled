@@ -18,6 +18,7 @@ import attractor as attractor_mod
 import cache as cache_mod
 import compare as compare_mod
 import metrics as metrics_mod
+import projection as projection_mod
 import sae as sae_mod
 import statefile as statefile_mod
 from config import (
@@ -40,6 +41,7 @@ from pipeline import (  # noqa: F401
     _capture_with,
     attach_features,
     attach_inspector,
+    attach_manifest,
     degraded_note,
     run_compare,
     run_intervention,
@@ -54,13 +56,14 @@ from render import (  # noqa: F401
     field_rgb,
     render,
     render_feature_field,
+    render_persistence,
 )
 
 __all__ = [
     "run_pipeline", "run_scene", "run_compare", "run_intervention",
-    "run_model_scene", "attach_features", "attach_inspector",
+    "run_model_scene", "attach_features", "attach_inspector", "attach_manifest",
     "degraded_note",
-    "render", "render_feature_field", "field_rgb",
+    "render", "render_feature_field", "render_persistence", "field_rgb",
     "main",
 ]
 
@@ -238,9 +241,7 @@ def main() -> None:
         cfg = MarbleConfig(model=model_name, projection=proj_name, density=dens_name,
                            top_k=top_k, trajectory_mode=mode, invert_terrain=invert,
                            generate_tokens=gen_tokens, generate_temperature=gen_temp)
-        model = tokenizer = None
-        if model_name != "synthetic":
-            model, tokenizer = load_model_cached(model_name)
+        model, tokenizer = load_model_cached(model_name)
         overlays = [p.strip() for p in prompt_b.splitlines() if p.strip()]
         others = [m.strip() for m in extra_models.split(",") if m.strip()]
         with st.spinner("Capturing forward pass…"):
@@ -248,8 +249,7 @@ def main() -> None:
                 names = [model_name] + others
                 loaded = {model_name: (model, tokenizer)} if model is not None else {}
                 for name in others:
-                    if name != "synthetic":
-                        loaded[name] = load_model_cached(name)
+                    loaded[name] = load_model_cached(name)
                 st.session_state["result"] = run_model_scene(cfg, prompt, names,
                                                              loaded=loaded)
             elif overlays:
@@ -369,11 +369,17 @@ def main() -> None:
         # inspector layers (neighbors, attn/MLP share) so the shareable
         # viewer is not the lesser surface
         attach_inspector(result, n_neighbors=cfg.n_neighbors)
+        sae_record = {}
         if acts is not None and sae_source is not None:
             # trained dictionary active: export its feature layer + measured
             # fit with the scene (demo features are decorative — not exported)
             attach_features(result, active_sae,
                             source=sae_source[0], hook=sae_source[1])
+            sae_record = {"sae": active_sae, "sae_source": sae_source[0],
+                          "sae_hook": sae_source[1]}
+        # the analysis record: an exported scene states its own
+        # parameterization rather than relying on the user's notes
+        attach_manifest(result, cfg, **sae_record)
         _buf = _io.BytesIO()
         statefile_mod.save_scene(result, _buf)
         st.download_button("Export scene (.mtj)", data=_buf.getvalue(),
@@ -383,42 +389,38 @@ def main() -> None:
                                 "or any .mtj consumer — see docs/mtj-format.md.")
 
         with st.expander("Intervention (perturb & replay)", expanded=False):
-            if cfg.model == "synthetic":
-                st.caption("The synthetic backend is analytic and not resumable; "
-                           "interventions need a torch model.")
-            else:
-                iv_layer = st.slider("Edit layer", 0, traj.n_layers - 1,
-                                     traj.n_layers - 1, key="iv_layer")
-                iv_kind = st.selectbox("Edit", ["push toward token", "inject noise",
-                                                "freeze block"], key="iv_kind")
-                iv_target = ""
-                if iv_kind == "push toward token":
-                    iv_target = st.text_input("Target token", "Berlin", key="iv_target")
-                iv_scale = st.slider("Strength", 0.0, 100.0, 30.0, key="iv_scale")
-                if st.button("Run intervention", key="iv_run"):
-                    from intervene import (FreezeLayer, InjectNoise, Perturb,
-                                           direction_from_token)
+            iv_layer = st.slider("Edit layer", 0, traj.n_layers - 1,
+                                 traj.n_layers - 1, key="iv_layer")
+            iv_kind = st.selectbox("Edit", ["push toward token", "inject noise",
+                                            "freeze block"], key="iv_kind")
+            iv_target = ""
+            if iv_kind == "push toward token":
+                iv_target = st.text_input("Target token", "Berlin", key="iv_target")
+            iv_scale = st.slider("Strength", 0.0, 100.0, 30.0, key="iv_scale")
+            if st.button("Run intervention", key="iv_run"):
+                from intervene import (FreezeLayer, InjectNoise, Perturb,
+                                       direction_from_token)
 
-                    model, tokenizer = load_model_cached(cfg.model)
-                    target_id = None
-                    if iv_kind == "push toward token":
-                        ids = tokenizer(iv_target, add_special_tokens=False)["input_ids"]
-                        if not ids:
-                            st.warning("target token is empty")
-                            st.stop()
-                        target_id = int(ids[0])
-                        # data-derived: the target token's own embedding axis
-                        direction = direction_from_token(traj, target_id)
-                        edits = [Perturb(iv_layer, iv_scale * direction, token=-1)]
-                    elif iv_kind == "inject noise":
-                        edits = [InjectNoise(iv_layer, iv_scale, token=-1)]
-                    else:
-                        edits = [FreezeLayer(min(iv_layer, traj.n_layers - 2))]
-                    with st.spinner("Replaying under intervention…"):
-                        st.session_state["result"] = run_intervention(
-                            cfg, result["prompt"], edits, model, tokenizer,
-                            target_id=target_id)
-                    st.rerun()
+                model, tokenizer = load_model_cached(cfg.model)
+                target_id = None
+                if iv_kind == "push toward token":
+                    ids = tokenizer(iv_target, add_special_tokens=False)["input_ids"]
+                    if not ids:
+                        st.warning("target token is empty")
+                        st.stop()
+                    target_id = int(ids[0])
+                    # data-derived: the target token's own embedding axis
+                    direction = direction_from_token(traj, target_id)
+                    edits = [Perturb(iv_layer, iv_scale * direction, token=-1)]
+                elif iv_kind == "inject noise":
+                    edits = [InjectNoise(iv_layer, iv_scale, token=-1)]
+                else:
+                    edits = [FreezeLayer(min(iv_layer, traj.n_layers - 2))]
+                with st.spinner("Replaying under intervention…"):
+                    st.session_state["result"] = run_intervention(
+                        cfg, result["prompt"], edits, model, tokenizer,
+                        target_id=target_id)
+                st.rerun()
 
     @st.cache_resource(show_spinner=False)
     def _neighbor_cache(key: str):  # one TokenNeighbors per capture
@@ -443,18 +445,20 @@ def main() -> None:
 
     quality = result.get("quality")
     with col_viz:
-        low_fidelity = 0.5  # one threshold drives both the prose and the ✕ markers
+        # the threshold drives the prose, the ✕ markers, and the viewer's panel
+        low_fidelity = projection_mod.LOW_FIDELITY
         if (degraded := degraded_note(traj.meta)) is not None:
             st.warning(degraded)
         if quality is not None:
             ev = (f"keeps **{quality.explained_variance:.0%}** of the variance · "
                   if quality.explained_variance is not None else "")
-            low = float((np.asarray(quality.preservation) < low_fidelity).mean())
+            fidelity = projection_mod.fidelity_summary(quality.preservation)
             st.markdown(
                 f"**Projection fidelity** — {ev}mean neighborhood preservation "
-                f"**{quality.preservation.mean():.2f}** (k={quality.k}). "
-                f"**{low:.0%}** of states are low-fidelity — flagged ✕ on the scene "
-                f"and drawn where the projection *could* put them, not where they truly are.")
+                f"**{fidelity['mean']:.2f}** (k={quality.k}). "
+                f"**{fidelity['low_fraction']:.0%}** of states are low-fidelity — "
+                f"flagged ✕ on the scene and drawn where the projection *could* "
+                f"put them, not where they truly are.")
         gen0 = traj.meta.get("generation")
         if isinstance(gen0, dict):
             st.markdown(
@@ -479,15 +483,26 @@ def main() -> None:
                    'external landscape. The pinned callout marks the basin; open '
                    '**Why this attractor** in the inspector for this run\'s numbers.')
 
+        st.caption("Scenes generate hypotheses, not mechanisms — "
+                   "`docs/validity.md` is the inferential contract.")
         with st.expander("What this is — and is not", expanded=False):
             st.markdown(
-                "Mottled visualizes the **geometry of latent dynamics** — where a "
-                "run's hidden states go and pile up — and measures how much of that "
-                "geometry survives the projection. It is **not** a proof of "
-                "mechanism.\n\n"
-                "- A basin shows states *accumulating*, not a circuit *computing*. "
+                "Mottled visualizes the **geometry of a run's latent "
+                "trajectories** — where hidden states go and pile up — and "
+                "measures how much of that geometry survives the projection. "
+                "It summarizes representation-space behavior under the analysis "
+                "choices you declared; it generates mechanistic hypotheses, it "
+                "does **not** establish mechanisms (the full inferential "
+                "contract is `docs/validity.md`).\n\n"
+                "- A basin is a **state concentration region** under this "
+                "projection and density estimator — states *accumulating*, not "
+                "a circuit *computing*. "
                 "Attention flow and the intervention divergence are **measurements** "
                 "of what happened, not identified causes.\n"
+                "- Logit-lens readouts are **probe diagnostics** — what the "
+                "output head would say if pointed at an intermediate state — "
+                "and nearest-token lists are **representation-space** "
+                "neighbors, not verified semantic ones.\n"
                 "- An SAE overlay is only as interpretable as the SAE you load; the "
                 "bundled `demo_sae` is a random dictionary (decorative). Load real "
                 "weights with `sae.load_npz` / the `mottled-convert-sae` CLI.\n"
@@ -561,7 +576,7 @@ def main() -> None:
             st.progress(min(max(p, 0.0), 1.0), text=f"{tok!r} — {p:.1%}")
 
         if traj.embedding_matrix is not None and traj.vocab is not None:
-            st.markdown("**Nearest semantic neighbors**")
+            st.markdown("**Nearest neighbors (representation space)**")
             tn = _token_neighbors(traj)
             for tok, sim in tn.nearest(state.vector, k=cfg.n_neighbors):
                 st.write(f"`{tok}`  ·  cos {sim:.3f}")
@@ -687,6 +702,19 @@ def main() -> None:
                     st.caption("A large *effect* means the steering direction, not "
                                "just the perturbation's size, moved the model. This "
                                "is a measured counterfactual, not an isolated circuit.")
+
+        if (prof := result.get("persistence")) is not None:
+            with st.expander("Injection persistence", expanded=True):
+                st.plotly_chart(render_persistence(prof), use_container_width=True,
+                                key="persistence")
+                st.caption("The faithfulness effect (steer minus norm-matched "
+                           "random control) read at every layer from the edit "
+                           "down, with the baseline's MLP write-share overlaid. "
+                           "A smooth decay or hold says the residual stream "
+                           "carried the effect; a drop that returns alongside an "
+                           "MLP spike says a later block rewrote it. Like the "
+                           "divergence readout, this is a measurement of what "
+                           "happened downstream — not a claimed cause.")
 
         if result.get("comparisons") and len(result["comparisons"]) > 1:
             with st.expander("Scene comparisons (vs A)", expanded=True):

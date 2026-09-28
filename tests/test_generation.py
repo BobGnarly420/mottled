@@ -6,15 +6,15 @@ import numpy as np
 import pytest
 
 from capture import generate_and_capture
-from models import synthetic
+import tiny as synthetic
 
 PROMPT = "the capital of france is"
 
 
 # ---------------------------------------------------------------- synthetic
 
-def test_synthetic_greedy_decode_shapes_and_meta():
-    traj = generate_and_capture("synthetic", PROMPT, max_new_tokens=4)
+def test_tiny_greedy_decode_shapes_and_meta():
+    traj = synthetic.generate_and_capture(PROMPT, max_new_tokens=4)
     n_prompt = len(PROMPT.split())
     assert traj.n_tokens == n_prompt + 4
     gen = traj.meta["generation"]
@@ -29,14 +29,14 @@ def test_synthetic_greedy_decode_shapes_and_meta():
     traj.validate()
 
 
-def test_synthetic_greedy_is_deterministic():
-    a = generate_and_capture("synthetic", PROMPT, max_new_tokens=3)
-    b = generate_and_capture("synthetic", PROMPT, max_new_tokens=3)
+def test_tiny_greedy_is_deterministic():
+    a = synthetic.generate_and_capture(PROMPT, max_new_tokens=3)
+    b = synthetic.generate_and_capture(PROMPT, max_new_tokens=3)
     assert a.tokens == b.tokens
     np.testing.assert_array_equal(a.hidden, b.hidden)
 
 
-def test_synthetic_sampling_reproducible_per_seed():
+def test_tiny_sampling_reproducible_per_seed():
     a = synthetic.generate_and_capture(PROMPT, max_new_tokens=5,
                                        temperature=2.0, seed=7)
     b = synthetic.generate_and_capture(PROMPT, max_new_tokens=5,
@@ -48,8 +48,8 @@ def test_synthetic_sampling_reproducible_per_seed():
     assert gen["seed"] == 7
 
 
-def test_synthetic_generated_capture_flags_pass_through():
-    traj = generate_and_capture("synthetic", PROMPT, max_new_tokens=2,
+def test_tiny_generated_capture_flags_pass_through():
+    traj = synthetic.generate_and_capture(PROMPT, max_new_tokens=2,
                                 capture_components=True, capture_attention=True)
     assert traj.components is not None
     assert traj.attention is not None
@@ -160,9 +160,9 @@ def test_pipeline_generates_when_configured():
     from config import MarbleConfig
     from ui import run_pipeline
 
-    cfg = MarbleConfig(model="synthetic", use_cache=False, generate_tokens=3,
+    cfg = MarbleConfig(model="tiny", use_cache=False, generate_tokens=3,
                        density_bootstrap=0)
-    traj = run_pipeline(cfg, PROMPT)["traj"]
+    traj = run_pipeline(cfg, PROMPT, **synthetic.mt())["traj"]
     assert traj.n_tokens == len(PROMPT.split()) + 3
     assert traj.meta["generation"]["new_tokens"] == 3
 
@@ -171,9 +171,9 @@ def test_render_marks_generated_tokens():
     from config import MarbleConfig
     from ui import render, run_pipeline
 
-    cfg = MarbleConfig(model="synthetic", use_cache=False, generate_tokens=2,
+    cfg = MarbleConfig(model="tiny", use_cache=False, generate_tokens=2,
                        density_bootstrap=0)
-    r = run_pipeline(cfg, PROMPT)
+    r = run_pipeline(cfg, PROMPT, **synthetic.mt())
     fig = render(r["traj"], r["mesh"], r["trajectories"], r["fine_paths"])
     plus = [t.name for t in fig.data if t.name and t.name.startswith("+")]
     assert len(plus) == 2  # one per generated token
@@ -184,10 +184,10 @@ def test_scene_mtj_carries_generation(tmp_path):
     from config import MarbleConfig
     from ui import run_scene
 
-    cfg = MarbleConfig(model="synthetic", use_cache=False, generate_tokens=2,
+    cfg = MarbleConfig(model="tiny", use_cache=False, generate_tokens=2,
                        density_bootstrap=0)
     path = tmp_path / "scene.mtj"
-    statefile.save_scene(run_scene(cfg, [PROMPT]), path)
+    statefile.save_scene(run_scene(cfg, [PROMPT], **synthetic.mt()), path)
     run = statefile.load_scene(path)["runs"][0]
     gen = run["generation"]
     assert gen["prompt_tokens"] == len(PROMPT.split())

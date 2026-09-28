@@ -1,7 +1,7 @@
 # The `.mtj` format — Mottled Trajectory interchange, version 1
 
 `StateTrajectory` is the center of Mottled: producers (transformer capture,
-synthetic generator, future Mamba / diffusion / neuroscience recorders) emit
+the browser's own forward pass, future diffusion / neuroscience recorders) emit
 one, and viewers (the Streamlit app, the web viewer, notebooks) consume one.
 `.mtj` is the stable on-disk form of that abstraction, designed to be
 trivially parseable from any language — a JSON manifest plus raw
@@ -42,6 +42,51 @@ Array references always carry `dtype` (`float16` | `float32` | `int32`),
 `shape`, `offset`, and `length` (bytes; equals the product of the shape and
 the item size). Readers MUST ignore unknown manifest fields and unknown
 arrays — that is how the format stays stable while growing.
+
+## `analysis` — the record of what produced the file *(optional)*
+
+Both kinds may carry an `analysis` object: the full parameterization of the
+run, written by `provenance.record` (Python) via `pipeline.attach_manifest`.
+`docs/validity.md` asks anyone publishing on Mottled output to version-lock
+the model, tokenizer, library versions, precision, seeds and SAE artifact
+hashes; this is where the file states them itself.
+
+```jsonc
+{
+  "schema": "mottled-analysis/1",
+  "created": "2026-09-15T21:40:00Z",   // UTC, when the record was made
+  "mottled": "0.2.0",                  // null if the version is unknowable
+  "config": { "projection": "pca", "seed": 0, … },  // every MarbleConfig field
+  "prompts": ["The capital of France is"],
+  "models": [                          // one entry per run, in run order
+    { "id": "gpt2", "revision": "e7da7f2",  // hub commit, null if not from one
+      "backend": "transformers", "family": "gpt2",
+      "device": "cpu", "dtype": "float32" }
+  ],
+  "environment": {
+    "python": "3.11.9", "platform": "Linux-6.8.0-x86_64",
+    "packages": { "numpy": "2.1.0", "torch": "2.4.0", … }
+  },
+  "sae": {                             // only when a dictionary was applied
+    "source": "jbloom/GPT2-Small-SAEs-Reformatted",
+    "hook": "blocks.8.hook_resid_pre",
+    "sha256": "…",                     // hash of the weights, not of a file
+    "n_features": 24576
+  },
+  "interventions": [                   // only when a run was edited: one list
+    [],                                // per run, in run order; the untouched
+    ["perturb@layer11[token -1]"]      // baseline's is empty
+  ]
+}
+```
+
+`models` is a list because a cross-model scene has one identity per run;
+`interventions` is per run for the same reason. `config` is the
+configuration the runs were captured under, which is not always the one the
+session asked for: an intervention replays the prompt pass only, so its
+record says `generate_tokens: 0` even with generation on.
+The record describes the parameterization, not the result: it is what a
+reproduction attempt needs, not evidence that the run reproduces.
 
 ## `kind: "trajectory"` — one full StateTrajectory
 

@@ -17,8 +17,8 @@ Supported edits (transformer backend):
 
 All are applied by write-hooks during a single forward pass (`capture._run`),
 so the model resumes from the edited residual and every downstream layer sees
-the consequence.  Interventions require a real (torch) model; the synthetic
-backend is analytic and not resumable.
+the consequence.  Interventions require a torch model: the forward pass has
+to be resumable from an edited state.
 
 Fork semantics: `intervene(...)` returns a branch; `baseline` (an unperturbed
 capture) plus one or more branches are what the UI overlays and diffs.
@@ -130,16 +130,17 @@ def intervene(
     device: str = "auto",
     dtype: str = "float32",
     keep_logits: bool = True,
+    capture_attention: bool = False,
 ) -> StateTrajectory:
     """Run a counterfactual forward pass under `interventions`.
 
     Returns a StateTrajectory whose `meta["interventions"]` records the edits
     and `meta["counterfactual"]` is True.  Requires a torch model (a HF
-    instance with `tokenizer`, or a hub name); "synthetic" is not resumable.
+    instance with `tokenizer`, or a hub name).  Pass the baseline's
+    `capture_attention`: it moves the pass onto the eager attention kernel,
+    and a branch on another kernel differs from its baseline by rounding
+    before any edit takes effect.
     """
-    if isinstance(model, str) and model == "synthetic":
-        raise ValueError("the synthetic backend is analytic and not resumable; "
-                         "interventions require a torch model")
     if not interventions:
         raise ValueError("no interventions given; use capture() for a baseline pass")
 
@@ -147,6 +148,7 @@ def intervene(
     return _run(
         model, prompt, tokenizer=tokenizer, top_k=top_k, device=device, dtype=dtype,
         keep_logits=keep_logits, state_edits=state_edits, frozen_blocks=frozen,
+        capture_attention=capture_attention,
         extra_meta={
             "counterfactual": True,
             "interventions": [iv.describe() for iv in interventions],
@@ -246,7 +248,7 @@ def direction_from_contrast(pos, neg, layer: int, token: int = -1,
     that do vs. don't exhibit a behavior). The direction is the difference of
     the groups' mean hidden state at `(layer, token)` — the classic
     activation-steering construction. Backend-agnostic: it reads only
-    `hidden`, so it works on synthetic runs too.
+    `hidden`, so it works on any producer's runs.
     """
     pos_t, neg_t = _as_trajectories(pos), _as_trajectories(neg)
 
@@ -297,14 +299,30 @@ class Faithfulness:
 
 
 def target_logit_shift(baseline: StateTrajectory, branch: StateTrajectory,
-                       target: int, token: int = -1) -> float:
-    """Final-layer logit-lens shift toward `target` from baseline to branch."""
+                       target: int, token: int = -1, layer: int = -1) -> float:
+    """Logit-lens shift toward `target` from baseline to branch at `layer`.
+
+    Defaults to the final layer — the readout `faithfulness()` scores — but
+    any captured layer can be read, which is what lets
+    `persistence_profile()` trace the same effect down the stack instead of
+    only at the end.
+    """
     if baseline.logits is None or branch.logits is None:
         raise ValueError("both trajectories need logits (keep_logits=True)")
     t = int(token) % baseline.n_tokens
-    base = float(baseline.logits[-1, t, int(target)])
-    new = float(branch.logits[-1, t, int(target)])
+    l = int(layer) % baseline.n_layers
+    base = float(baseline.logits[l, t, int(target)])
+    new = float(branch.logits[l, t, int(target)])
     return new - base
+
+
+def _norm_matched_random(delta: np.ndarray, seed: int = 0) -> np.ndarray:
+    """A random delta with the same L2 norm as `delta` (the control push)."""
+    delta = np.asarray(delta, dtype=np.float32)
+    rng = np.random.default_rng(seed)
+    r = rng.normal(size=delta.shape).astype(np.float32)
+    r *= float(np.linalg.norm(delta)) / max(float(np.linalg.norm(r)), 1e-12)
+    return r
 
 
 def score_against_control(model, prompt: str, baseline: StateTrajectory,
@@ -312,7 +330,8 @@ def score_against_control(model, prompt: str, baseline: StateTrajectory,
                           target: int, *, token: int = -1,
                           scale: float | None = None, tokenizer=None, seed: int = 0,
                           device: str = "auto", dtype: str = "float32",
-                          top_k: int = 5) -> Faithfulness:
+                          top_k: int = 5,
+                          capture_attention: bool = False) -> Faithfulness:
     """Score an already-computed steer against a norm-matched random control.
 
     Given `baseline` and the `branch` produced by applying `delta` at
@@ -321,15 +340,16 @@ def score_against_control(model, prompt: str, baseline: StateTrajectory,
     `faithfulness()` and `ui.run_intervention` — which already holds
     `baseline`/`branch` and must not pay for a second branch forward pass —
     construct the control the same way. `scale` records the steer magnitude and
-    defaults to ``||delta||``.
+    defaults to ``||delta||``. `capture_attention` is the one `baseline` was
+    captured with, so the control runs on the same attention kernel (see
+    `intervene`).
     """
     delta = np.asarray(delta, dtype=np.float32)
-    rng = np.random.default_rng(seed)
-    r = rng.normal(size=delta.shape).astype(np.float32)
-    r *= float(np.linalg.norm(delta)) / max(float(np.linalg.norm(r)), 1e-12)
+    r = _norm_matched_random(delta, seed)
     control = intervene(model, prompt, [Perturb(layer, r, token=token)],
                         tokenizer=tokenizer, top_k=top_k, device=device,
-                        dtype=dtype, keep_logits=True)
+                        dtype=dtype, keep_logits=True,
+                        capture_attention=capture_attention)
 
     steer_shift = target_logit_shift(baseline, branch, target, token)
     control_shift = target_logit_shift(baseline, control, target, token)
@@ -377,3 +397,153 @@ def faithfulness(model, prompt: str, layer: int, direction: np.ndarray,
         model, prompt, baseline, branch, delta, layer, target, token=token,
         scale=scale, tokenizer=tokenizer, seed=seed, device=device, dtype=dtype,
         top_k=top_k)
+
+
+# --------------------------------------------------------------------------
+# Persistence — is an injected effect carried forward, or rebuilt downstream?
+# --------------------------------------------------------------------------
+@dataclass
+class PersistenceRecord:
+    """One layer of a persistence profile.
+
+    `effect_size` is the faithfulness computation — steer logit-lens shift
+    toward the target minus the shift under a norm-matched random push —
+    evaluated at this layer's logit lens instead of only the final one.
+    `attn_share` / `mlp_share` are the baseline pass's residual-write
+    decomposition for the block that wrote *into* this state
+    (`metrics.component_shares` row `layer - 1`; NaN at layer 0, which no
+    block writes).
+    """
+
+    layer: int
+    effect_size: float
+    steer_shift: float
+    control_shift: float
+    attn_share: float
+    mlp_share: float
+
+
+@dataclass
+class PersistenceProfile:
+    """Layer-by-layer fate of one injected direction — a measurement.
+
+    One steer at `inject_layer` and one norm-matched random control, read at
+    every downstream layer's logit lens. A curve that decays smoothly (or
+    holds) says the residual stream carried the effect forward; a curve that
+    drops and comes back, aligned with a spike in `mlp_share` at the layer
+    where it returns, says a later block rewrote it. Like `Divergence`, this
+    is *deliberately* just a measurement of what happened downstream of the
+    edit — it locates where the effect lives, it does not identify the
+    circuit that computes it.
+
+    The final record is exactly `faithfulness()`'s scoring (same steer, same
+    control, same readout), so the profile strictly generalizes it rather
+    than reimplementing it. Indexing is by absolute layer:
+    ``profile[inject_layer]`` is the first record and ``profile[-1]`` the
+    final-layer one.
+    """
+
+    records: list[PersistenceRecord]
+    inject_layer: int
+    target: int
+    target_token: str | None
+    scale: float
+    token: int
+    seed: int
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __getitem__(self, layer: int) -> PersistenceRecord:
+        n = self.inject_layer + len(self.records)   # layers covered: inject..n-1
+        l = int(layer) % n
+        if l < self.inject_layer:
+            raise IndexError(f"layer {l} precedes inject_layer {self.inject_layer}; "
+                             f"the profile covers layers {self.inject_layer}..{n - 1}")
+        return self.records[l - self.inject_layer]
+
+    @property
+    def layers(self) -> np.ndarray:
+        return np.array([r.layer for r in self.records], dtype=int)
+
+    @property
+    def effect_sizes(self) -> np.ndarray:
+        return np.array([r.effect_size for r in self.records], dtype=np.float32)
+
+    @property
+    def mlp_shares(self) -> np.ndarray:
+        return np.array([r.mlp_share for r in self.records], dtype=np.float32)
+
+
+def persistence_profile(model, prompt: str, direction: np.ndarray,
+                        inject_layer: int, target: int, tokenizer=None, *,
+                        token: int = -1, scale: float = 1.0,
+                        baseline: StateTrajectory | None = None,
+                        branch: StateTrajectory | None = None,
+                        seed: int = 0, device: str = "auto",
+                        dtype: str = "float32",
+                        top_k: int = 5,
+                        capture_attention: bool = False) -> PersistenceProfile:
+    """Trace an injected direction's effect through every downstream layer.
+
+    Applies `scale * unit(direction)` as a `Perturb` at `(inject_layer,
+    token)` — exactly as `faithfulness()` does — plus a norm-matched random
+    control, then evaluates the faithfulness effect (steer shift minus
+    control shift toward `target`) at *each* layer from `inject_layer` to the
+    final one, pairing every layer with the baseline pass's attention/MLP
+    write shares from `metrics.component_shares`. Requires a torch model
+    (inherited from `intervene`: the forward pass must be resumable).
+
+    `baseline` is captured (with `capture_components=True`) if not supplied;
+    a supplied baseline must carry the residual decomposition. `branch` — the
+    already-computed steer at these exact settings — can be passed by callers
+    that hold one (`pipeline.run_intervention`) to skip a forward pass, as
+    with `score_against_control`. `capture_attention` applies to every pass
+    run here and must match a supplied baseline's (see `intervene`).
+    """
+    from capture import capture
+    from metrics import component_shares
+
+    direction = np.asarray(direction, dtype=np.float32)
+    unit = direction / max(float(np.linalg.norm(direction)), 1e-12)
+    delta = (scale * unit).astype(np.float32)
+
+    if baseline is None:
+        baseline = capture(model, prompt, tokenizer=tokenizer, top_k=top_k,
+                           device=device, dtype=dtype, keep_logits=True,
+                           capture_components=True,
+                           capture_attention=capture_attention)
+    shares = component_shares(baseline, token=token)          # (L-1, 2)
+    inject_layer = int(inject_layer) % baseline.n_layers
+
+    if branch is None:
+        branch = intervene(model, prompt, [Perturb(inject_layer, delta, token=token)],
+                           tokenizer=tokenizer, top_k=top_k, device=device,
+                           dtype=dtype, keep_logits=True,
+                           capture_attention=capture_attention)
+    control = intervene(model, prompt,
+                        [Perturb(inject_layer, _norm_matched_random(delta, seed),
+                                 token=token)],
+                        tokenizer=tokenizer, top_k=top_k, device=device,
+                        dtype=dtype, keep_logits=True,
+                        capture_attention=capture_attention)
+
+    records = []
+    for layer in range(inject_layer, baseline.n_layers):
+        steer = target_logit_shift(baseline, branch, target, token=token, layer=layer)
+        ctrl = target_logit_shift(baseline, control, target, token=token, layer=layer)
+        attn, mlp = ((float(shares[layer - 1, 0]), float(shares[layer - 1, 1]))
+                     if layer > 0 else (float("nan"), float("nan")))
+        records.append(PersistenceRecord(
+            layer=layer, effect_size=steer - ctrl,
+            steer_shift=steer, control_shift=ctrl,
+            attn_share=attn, mlp_share=mlp))
+
+    target_token = None
+    if baseline.vocab is not None and 0 <= int(target) < len(baseline.vocab):
+        target_token = baseline.vocab[int(target)]
+
+    return PersistenceProfile(
+        records=records, inject_layer=inject_layer, target=int(target),
+        target_token=target_token, scale=float(np.linalg.norm(delta)),
+        token=int(token) % baseline.n_tokens, seed=int(seed))

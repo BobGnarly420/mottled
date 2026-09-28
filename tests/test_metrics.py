@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 import metrics as M
-from models import synthetic
+import tiny as synthetic
 
 
 def test_entropy_uniform_and_peaked():
@@ -60,7 +60,7 @@ def test_branch_divergence():
     assert np.allclose(M.branch_divergence(a, b), np.arange(5.0))
 
 
-def test_summary_on_synthetic():
+def test_summary_on_tiny_model():
     from projection import project
 
     traj = synthetic.capture("the capital of france is paris")
@@ -71,5 +71,13 @@ def test_summary_on_synthetic():
                 "final_entropy", "nn_stability"}
     assert expected <= set(out)
     assert all(np.isfinite(v) for v in out.values())
-    # synthetic logits sharpen with depth: entropy must collapse
-    assert out["entropy_collapse"] > 0
+    # `entropy_collapse` is first-layer minus last-layer entropy. The old
+    # version of this test asserted it was positive, which held only because
+    # the synthetic backend sharpened its logits with depth *by construction* —
+    # it was checking the fixture, not the metric. A randomly-initialised model
+    # has no reason to become more confident with depth, so what is pinned here
+    # is the definition: the sign is whatever the two entropies say it is.
+    ent = traj.entropy[:, -1]
+    assert out["entropy_collapse"] == pytest.approx(
+        float(ent[0] - ent[-1]), abs=1e-5)
+    assert out["final_entropy"] == pytest.approx(float(ent[-1]), abs=1e-5)

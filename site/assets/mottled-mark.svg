@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Mottled">
+  <title>Mottled</title>
+  <rect width="64" height="64" fill="#080B18"/>
+  <!-- glow -->
+  <rect x="12" y="12" width="40" height="40" rx="6" fill="#4B7CF3" fill-opacity="0.16"/>
+  <!-- density ridges: mottled field, not a mountain icon -->
+  <path fill="#1C2A55" d="M10 48 C16 40 20 44 26 36 C30 30 34 34 38 28 C44 20 50 26 54 22 L54 54 L10 54 Z"/>
+  <path fill="#2F55B8" d="M10 50 C18 42 24 46 30 38 C36 30 42 36 48 32 L54 28 L54 54 L10 54 Z"/>
+  <path fill="#4B7CF3" fill-opacity="0.55" d="M10 52 C22 46 28 48 36 42 C44 36 50 40 54 38 L54 54 L10 54 Z"/>
+  <!-- marble -->
+  <circle cx="36" cy="30" r="4.2" fill="#4B7CF3"/>
+  <circle cx="35.2" cy="29.2" r="1.3" fill="#C8D4FB" fill-opacity="0.85"/>
+  <!-- 1px incision frame -->
+  <rect x="0.5" y="0.5" width="63" height="63" fill="none" stroke="#1E2540" stroke-width="1"/>
+</svg>

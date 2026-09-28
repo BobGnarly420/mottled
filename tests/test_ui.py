@@ -5,17 +5,18 @@ import pytest
 
 from config import MarbleConfig
 from ui import render, run_pipeline
+import tiny as synthetic
 
 
 @pytest.fixture(scope="module")
 def cfg(tmp_path_factory):
-    return MarbleConfig(model="synthetic", use_cache=True,
+    return MarbleConfig(model="tiny", use_cache=True,
                         cache_dir=str(tmp_path_factory.mktemp("cache")))
 
 
 @pytest.fixture(scope="module")
 def result(cfg):
-    return run_pipeline(cfg, "The capital of France is")
+    return run_pipeline(cfg, "The capital of France is", **synthetic.mt())
 
 
 def test_pipeline_artifacts(cfg, result):
@@ -39,7 +40,7 @@ def test_pipeline_reports_uncertainty(cfg, result):
 
 
 def test_pipeline_cache_roundtrip(cfg, result):
-    again = run_pipeline(cfg, "The capital of France is")
+    again = run_pipeline(cfg, "The capital of France is", **synthetic.mt())
     assert np.array_equal(again["coords"], result["coords"])
 
 
@@ -74,7 +75,7 @@ def test_streamlit_app_interactive():
     assert not at.exception
 
     at.text_area(key="prompt").set_value("The capital of France is")
-    at.selectbox(key="model").select("synthetic")
+    at.selectbox(key="model").select("gpt2")
     at.button(key="run").click()
     at.run()
     assert not at.exception
@@ -95,7 +96,7 @@ def test_streamlit_app_surfaces_projection_fidelity_inline():
     at = app_test(default_timeout=120)
     at.run()
     at.text_area(key="prompt").set_value("The capital of France is")
-    at.selectbox(key="model").select("synthetic")
+    at.selectbox(key="model").select("gpt2")
     at.button(key="run").click()
     at.run()
     assert not at.exception

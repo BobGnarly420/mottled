@@ -8,8 +8,18 @@ installed (`pip install transformer-lens`). Rather than route a
 producer contract is all a new backend needs — emit a ``StateTrajectory`` and
 the entire projection / density / metrics / viewer stack works unchanged.
 
-The residual-extraction step is separated from the ``StateTrajectory`` assembly
-(`_to_trajectory`) so the assembly is unit-testable without the heavy library.
+Two entry points, because a TransformerLens user arrives in two states:
+
+    from_hooked_transformer(model, prompt)   # run the pass, then build
+    from_cache(cache, model, prompt)         # a cache you already ran
+
+``from_cache`` is the one that matters for an expensive model: a notebook that
+has already called ``run_with_cache`` should not have to pay for the forward
+pass twice to look at it. ``from_hooked_transformer`` is that plus the run.
+
+The residual extraction (`residual_stack`) and the ``StateTrajectory`` assembly
+(`_to_trajectory`) are separated from both so each is unit-testable without the
+heavy library.
 """
 from __future__ import annotations
 
@@ -22,7 +32,9 @@ from trajectory import StateTrajectory
 def _to_trajectory(hidden: np.ndarray, tokens: list[str], lens: np.ndarray,
                    vocab: list[str], embedding_matrix: np.ndarray,
                    top_k: int = 5, keep_logits: bool = True,
-                   model_name: str = "hooked", prompt: str = "") -> StateTrajectory:
+                   model_name: str = "hooked", prompt: str = "",
+                   device: str | None = None,
+                   dtype: str | None = None) -> StateTrajectory:
     """Assemble a StateTrajectory from an extracted residual stack + logit lens.
 
     hidden: (L, T, D) residual stream (layer 0 = embeddings), lens: (L, T, V)
@@ -41,10 +53,58 @@ def _to_trajectory(hidden: np.ndarray, tokens: list[str], lens: np.ndarray,
         vocab=vocab,
         embedding_matrix=np.asarray(embedding_matrix, dtype=np.float32),
         meta={"backend": "transformer_lens", "model": model_name,
-              "prompt": prompt, "family": "HookedTransformer"},
+              "prompt": prompt, "family": "HookedTransformer",
+              # provenance.record reads these; TransformerLens carries no hub
+              # commit of its own, so `revision` stays absent rather than being
+              # filled with the name of the checkpoint TL converted from
+              "device": device, "dtype": dtype},
     )
     traj.validate()
     return traj
+
+
+def residual_stack(cache, n_layers: int):
+    """(L, T, D) residual stream from a TransformerLens ``ActivationCache``.
+
+    Layer 0 is ``resid_pre`` of block 0 — the embedding stream — and layer l+1
+    is block l's ``resid_post``, which is Mottled's layer convention and the
+    same stack ``capture.py`` records for a HuggingFace model. Takes anything
+    that indexes like a cache, so it is testable without the library.
+    """
+    import torch
+
+    resid = [cache["resid_pre", 0]] + [cache["resid_post", l] for l in range(n_layers)]
+    stacked = torch.stack(resid, dim=0)
+    return stacked[:, 0] if stacked.ndim == 4 else stacked   # drop the batch axis
+
+
+def from_cache(cache, model, prompt, top_k: int = 5,
+               keep_logits: bool = True) -> StateTrajectory:
+    """Build a StateTrajectory from a cache you have already run.
+
+    `cache` is the ``ActivationCache`` from ``model.run_with_cache(...)`` and
+    `prompt` is what you ran it on (a string, or the token tensor — whatever
+    ``to_str_tokens`` accepts). Only the readout touches the model: TL's final
+    layer-norm and unembed, applied to every captured state as the logit lens.
+    """
+    import torch
+
+    str_tokens = [_clean_token(t) for t in model.to_str_tokens(prompt)]
+    with torch.no_grad():
+        hidden = residual_stack(cache, int(model.cfg.n_layers))
+        lens = model.unembed(model.ln_final(hidden))          # (L, T, V) logit lens
+
+    lens_np = lens.float().cpu().numpy()
+    vocab = [_clean_token(t)
+             for t in model.tokenizer.convert_ids_to_tokens(range(lens_np.shape[-1]))]
+    return _to_trajectory(
+        hidden.float().cpu().numpy(), str_tokens, lens_np, vocab,
+        model.W_E.detach().float().cpu().numpy(),
+        top_k=top_k, keep_logits=keep_logits,
+        model_name=getattr(model.cfg, "model_name", "hooked"),
+        prompt=prompt if isinstance(prompt, str) else "",
+        device=str(hidden.device), dtype=str(hidden.dtype).removeprefix("torch."),
+    )
 
 
 def from_hooked_transformer(model, prompt: str, top_k: int = 5,
@@ -52,26 +112,10 @@ def from_hooked_transformer(model, prompt: str, top_k: int = 5,
     """Capture a TransformerLens ``HookedTransformer`` as a StateTrajectory.
 
     Uses ``run_with_cache`` to read the residual stream after every block, then
-    applies TL's final layer-norm + unembed as the logit lens over every state.
+    hands the cache to `from_cache`. Call that directly if you already have one.
     """
     import torch
 
-    tokens_t = model.to_tokens(prompt)
-    str_tokens = [_clean_token(t) for t in model.to_str_tokens(prompt)]
     with torch.no_grad():
-        _, cache = model.run_with_cache(tokens_t)
-        n = int(model.cfg.n_layers)
-        resid = [cache["resid_pre", 0]] + [cache["resid_post", l] for l in range(n)]
-        hidden = torch.stack(resid, dim=0)[:, 0]              # (L, T, D), batch 0
-        lens = model.unembed(model.ln_final(hidden))          # (L, T, V) logit lens
-
-    hidden_np = hidden.float().cpu().numpy()
-    lens_np = lens.float().cpu().numpy()
-    vocab = [_clean_token(t)
-             for t in model.tokenizer.convert_ids_to_tokens(range(lens_np.shape[-1]))]
-    emb = model.W_E.detach().float().cpu().numpy()
-    return _to_trajectory(
-        hidden_np, str_tokens, lens_np, vocab, emb, top_k=top_k,
-        keep_logits=keep_logits,
-        model_name=getattr(model.cfg, "model_name", "hooked"), prompt=prompt,
-    )
+        _, cache = model.run_with_cache(model.to_tokens(prompt))
+    return from_cache(cache, model, prompt, top_k=top_k, keep_logits=keep_logits)

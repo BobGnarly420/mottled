@@ -36,9 +36,13 @@ def _continuation_text(meta: dict) -> str:
     """Human-readable decoded continuation from meta["generation"]."""
     steps = meta.get("generation", {}).get("steps", [])
     toks = [str(s.get("token", "")) for s in steps]
-    # synthetic tokens are bare words; BPE/SentencePiece pieces carry their
-    # own leading spaces after _clean_token
-    joined = " ".join(toks) if meta.get("backend") == "synthetic" else "".join(toks)
+    # Subword pieces carry their own leading space after _clean_token, so they
+    # concatenate; word-level tokenizers emit bare words that need one put
+    # back. Decided from the pieces themselves rather than from the backend
+    # name: the distinction is the tokenizer's, and one backend can be driven
+    # with either kind.
+    bare = all(tok and not tok[:1].isspace() for tok in toks)
+    joined = " ".join(toks) if bare and len(toks) > 1 else "".join(toks)
     return joined.strip()
 
 
@@ -337,6 +341,63 @@ def render(
                     "font": {"family": _FONT_MONO, "color": "#EDF0FA", "size": 11}},
         title={"text": "Mottled — latent trajectory explorer",
                "font": {"size": 13, "color": "#818FB8"}},
+    )
+    return fig
+
+
+# --------------------------------------------------------------------------
+# Persistence profile — the layer-wise fate of an injected direction.
+# --------------------------------------------------------------------------
+def render_persistence(profile) -> go.Figure:
+    """Line chart of an `intervene.PersistenceProfile`.
+
+    `effect_size` by layer on the primary axis (steer minus norm-matched
+    control, logit units), with the baseline pass's `mlp_share` overlaid on a
+    secondary 0–1 axis — so a drop-and-return in the effect can be read
+    against the residual write that might have rebuilt it. Same measured-not-
+    mechanistic framing as the divergence readout.
+    """
+    layers = profile.layers
+    tt = profile.target_token or f"id {profile.target}"
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=layers, y=profile.effect_sizes, mode="lines+markers",
+        name="effect size", line={"color": tokens.ACCENT, "width": 3},
+        marker={"size": 5, "color": tokens.ACCENT},
+        hovertemplate="layer %{x}<br>effect %{y:+.2f}<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=layers, y=profile.mlp_shares, mode="lines",
+        name="mlp share", yaxis="y2",
+        line={"color": tokens.TEAL, "width": 2, "dash": "dot"},
+        hovertemplate="layer %{x}<br>mlp share %{y:.0%}<extra></extra>",
+    ))
+    axis = {"gridcolor": tokens.BORDER, "zerolinecolor": tokens.BORDER_STRONG,
+            "color": tokens.FG_2}
+    fig.update_layout(
+        xaxis={"title": "layer", **axis},
+        yaxis={"title": f"effect toward {tt!r} (logits)", **axis},
+        yaxis2={"title": "mlp write share", "overlaying": "y", "side": "right",
+                "range": [0, 1], "showgrid": False,
+                "color": tokens.TEAL, "tickformat": ".0%"},
+        shapes=[{"type": "line", "x0": profile.inject_layer, "x1": profile.inject_layer,
+                 "y0": 0, "y1": 1, "yref": "paper",
+                 "line": {"color": tokens.FG_2, "width": 1, "dash": "dash"}}],
+        annotations=[{"x": profile.inject_layer, "y": 1.0, "yref": "paper",
+                      "text": "inject", "showarrow": False, "yanchor": "bottom",
+                      "font": {"family": _FONT_MONO, "size": 10, "color": tokens.FG_2}}],
+        margin={"l": 0, "r": 0, "t": 28, "b": 0},
+        height=320,
+        paper_bgcolor=tokens.BASE, plot_bgcolor=tokens.BASE,
+        font={"family": _FONT_SANS, "color": tokens.FG_1, "size": 12},
+        legend={"x": 0.99, "y": 0.99, "xanchor": "right",
+                "bgcolor": "rgba(12,16,32,0.88)", "bordercolor": tokens.BORDER,
+                "borderwidth": 1, "font": {"color": tokens.FG_2, "size": 11}},
+        hoverlabel={"bgcolor": tokens.SURFACE_1, "bordercolor": tokens.BORDER_STRONG,
+                    "font": {"family": _FONT_MONO, "color": tokens.FG_1, "size": 11}},
+        title={"text": "Persistence of the injected direction — steer minus "
+                       "norm-matched control, per layer",
+               "font": {"size": 12, "color": tokens.FG_2}},
     )
     return fig
 

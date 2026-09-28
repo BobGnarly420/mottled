@@ -58,7 +58,9 @@ class NeighborIndex:
 
 
 class TokenNeighbors:
-    """Nearest token embeddings: the semantic neighborhood of a hidden state."""
+    """Nearest token embeddings: the representation-space neighborhood of a
+    hidden state (proximity here is not automatically semantic — see
+    docs/validity.md)."""
 
     def __init__(self, embedding_matrix: np.ndarray, vocab: list[str], backend: str = "auto"):
         self.index = NeighborIndex(embedding_matrix, backend=backend)

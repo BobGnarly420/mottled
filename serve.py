@@ -43,14 +43,12 @@ _MAX_GENERATE = 32
 class _Backend:
     """Owns the configured model and serializes capture requests."""
 
-    def __init__(self, model: str = "synthetic"):
+    def __init__(self, model: str = "gpt2"):
         self.model_name = model
         self._lock = threading.Lock()
-        self._model = self._tokenizer = None
-        if model != "synthetic":
-            from capture import load_model
+        from capture import load_model
 
-            self._model, self._tokenizer = load_model(model)
+        self._model, self._tokenizer = load_model(model)
 
     def scene_bytes(self, prompts: list[str], generate: int = 0,
                     temperature: float = 0.0) -> bytes:
@@ -114,7 +112,7 @@ class Handler(SimpleHTTPRequestHandler):
         print(f"{self.address_string()} {fmt % args}")
 
 
-def make_server(port: int = 0, model: str = "synthetic",
+def make_server(port: int = 0, model: str = "gpt2",
                 directory: str | Path = ROOT) -> ThreadingHTTPServer:
     """Build (but don't start) the server; port 0 picks a free port."""
     handler = partial(Handler, directory=str(directory))
@@ -123,7 +121,7 @@ def make_server(port: int = 0, model: str = "synthetic",
     return server
 
 
-def run_server(port: int = 8000, model: str = "synthetic") -> None:
+def run_server(port: int = 8000, model: str = "gpt2") -> None:
     server = make_server(port=port, model=model)
     print(f"mottled serve — http://127.0.0.1:{server.server_address[1]}/viewer/ "
           f"(model: {model})")
@@ -136,6 +134,6 @@ def run_server(port: int = 8000, model: str = "synthetic") -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--model", default="synthetic")
+    parser.add_argument("--model", default="gpt2")
     args = parser.parse_args()
     run_server(port=args.port, model=args.model)

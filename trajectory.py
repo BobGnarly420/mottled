@@ -1,7 +1,7 @@
 """Core data model: StateTrajectory and trajectory extraction.
 
 StateTrajectory is the common abstraction every analysis in Mottled
-operates on.  A backend (transformer forward pass, synthetic generator, in
+operates on.  A backend (transformer forward pass, the browser's own pass, in
 the future RNNs / Mamba / biological recordings) produces one; projection,
 density, terrain, metrics and the UI are pure functions over it.  Nothing
 above this module may reach into transformer internals.

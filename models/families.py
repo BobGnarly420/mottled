@@ -91,6 +91,23 @@ class FamilyAdapter:
         return attn, mlp
 
 
+def resolve_paths(model: Any) -> tuple[str, str]:
+    """The attribute paths at which this model keeps its blocks and embeddings.
+
+    `resolve_family` hands back the modules themselves, which is what hooking
+    needs. A tracing library whose proxy mirrors the module tree — NNsight's
+    envoy — needs the *path* instead, because the proxy is not the module and
+    cannot be found by identity.
+    """
+    blocks = next((p for p in _BLOCK_PATHS if _get_path(model, p) is not None), None)
+    embed = next((p for p in _EMBED_PATHS if _get_path(model, p) is not None), None)
+    if blocks is None or embed is None:
+        raise ValueError(
+            f"Unsupported model layout: {type(model).__name__}. "
+            "Expected a Llama/Qwen/Mistral/Gemma-style causal LM.")
+    return blocks, embed
+
+
 def resolve_family(model: Any) -> FamilyAdapter:
     """Find blocks / embeddings / norm / head on a HF causal LM."""
     blocks = next((m for p in _BLOCK_PATHS if (m := _get_path(model, p)) is not None), None)

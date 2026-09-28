@@ -16,14 +16,15 @@ import pytest
 import statefile
 from config import MarbleConfig
 from ui import run_scene
+import tiny as synthetic
 
 ROOT = Path(__file__).resolve().parent.parent
 PROMPTS = ["the capital of france is", "the capital of germany is"]
 
 
 def _scene(tmp_path) -> Path:
-    cfg = MarbleConfig(model="synthetic", use_cache=False)
-    result = run_scene(cfg, PROMPTS)
+    cfg = MarbleConfig(model="tiny", use_cache=False)
+    result = run_scene(cfg, PROMPTS, **synthetic.mt())
     path = tmp_path / "scene.mtj"
     statefile.save_scene(result, path)
     return path
