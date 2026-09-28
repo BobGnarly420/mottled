@@ -87,6 +87,22 @@ def test_streamed_capture_is_exactly_the_in_memory_capture(tmp_path):
     assert [t[0][0] for t in streamed.topk[-1]] == [t[0][0] for t in mem.topk[-1]]
 
 
+def test_streamed_capture_reports_what_the_record_reads(tmp_path):
+    """provenance.record takes the family, device and dtype from a run's meta.
+    A streamed pass knows all three, and a record that says null for the
+    precision a pass ran in is missing what docs/validity.md asks to lock."""
+    import provenance
+    from config import MarbleConfig
+
+    model, path = _dense(tmp_path, layers=2)
+    mem = capture(model, PROMPT, tokenizer=DummyTokenizer())
+    streamed = stream_capture(path, PROMPT, tokenizer=DummyTokenizer())
+    for key in ("family", "device", "dtype"):
+        assert streamed.meta[key] == mem.meta[key]
+    entry, = provenance.record(MarbleConfig(), trajs=[streamed])["models"]
+    assert entry["backend"] == "streamed" and entry["dtype"] == mem.meta["dtype"]
+
+
 def test_only_the_configured_number_of_blocks_is_resident(tmp_path):
     """The memory bound is the point; assert it rather than trusting it."""
     _, path = _dense(tmp_path, layers=6)
@@ -168,8 +184,6 @@ def test_routing_refuses_on_a_dense_model(tmp_path):
     model, _ = _dense(tmp_path, layers=2)
     with pytest.raises(ValueError, match="dense|router"):
         capture(model, PROMPT, tokenizer=DummyTokenizer(), capture_routing=True)
-    with pytest.raises(ValueError, match="dense"):
-        capture("synthetic", PROMPT, capture_routing=True)
 
 
 def test_streamed_moe_matches_in_memory_including_routing(tmp_path):

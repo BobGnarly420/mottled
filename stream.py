@@ -457,6 +457,8 @@ def stream_capture_batch(
         raise ValueError("checkpoint exposes no LM head; cannot apply the logit lens")
 
     receipt = shards.receipt() if hasattr(shards, "receipt") else {}
+    # the head stays resident, so it says where and in what the pass ran
+    head = adapter.lm_head.weight
     trajectories = []
     for row, start in spans:
         hidden = sb.stacked(row, start)
@@ -473,6 +475,10 @@ def stream_capture_batch(
             "backend": "streamed",
             "model": str(root),
             "prompt": prompts[row],
+            # what provenance.record reads, as capture._run reports it
+            "family": adapter.name,
+            "device": str(head.device),
+            "dtype": str(head.dtype).removeprefix("torch."),
             "streamed": True,
             "n_blocks": len(blocks),
             "block_loads": sb.loads,
