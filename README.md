@@ -199,7 +199,9 @@ materialises each block immediately before it runs and releases it after, by
 hooks around the model's own blocks, so the architecture stays
 HuggingFace's. Peak memory is one block plus activations; a checkpoint that
 stores each expert as its own tensor briefly holds a block's experts twice
-while fusing them.
+while fusing them. The blocks are found by `models.families`, as for every
+other producer, so GPT-2 and GPT-NeoX stream as the Llama layout does, and a
+layout it cannot name is refused before a weight is read.
 
 ```python
 from stream import stream_capture, stream_capture_batch
@@ -223,9 +225,9 @@ the residency bound is asserted rather than assumed. A batched pass is a
 tolerance, not a promise: it reshapes every matmul, so the last bits move by
 an amount that depends on the machine. `capture(..., capture_routing=True)`
 records which experts each token was routed to in a sparse-MoE model, and
-refuses on a dense one. It also refuses a checkpoint whose layout leaves
-parameters unloaded (only the common per-expert gate/up/down layout is
-fused), and a host that answers a range request with the wrong bytes: the
+refuses on a dense one. It also refuses a checkpoint that leaves any
+parameter unloaded, in a block or outside one (only the common per-expert
+gate/up/down layout is fused), and a host that answers a range request with the wrong bytes: the
 whole file, or a range of the wrong length.
 
 **None of this has been run at frontier scale.** The mechanism is proven on

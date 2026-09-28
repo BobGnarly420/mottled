@@ -64,6 +64,28 @@ def _moe(tmp_path, layers=4, n_experts=8, k=2):
     return model, path
 
 
+def _gpt2(tmp_path, layers=3, saved_from="lm"):
+    torch.manual_seed(0)
+    cfg = transformers.GPT2Config(vocab_size=VOCAB_SIZE, n_embd=32, n_layer=layers,
+                                  n_head=4, n_positions=64)
+    model = transformers.GPT2LMHeadModel(cfg).eval()
+    path = tmp_path / f"gpt2-{saved_from}"
+    saved = model if saved_from == "lm" else model.transformer
+    saved.save_pretrained(path, safe_serialization=True)
+    return model, path
+
+
+def _neox(tmp_path, layers=3):
+    torch.manual_seed(0)
+    cfg = transformers.GPTNeoXConfig(
+        vocab_size=VOCAB_SIZE, hidden_size=32, num_hidden_layers=layers,
+        num_attention_heads=4, intermediate_size=64, max_position_embeddings=64)
+    model = transformers.GPTNeoXForCausalLM(cfg).eval()
+    path = tmp_path / "neox"
+    model.save_pretrained(path, safe_serialization=True)
+    return model, path
+
+
 # ------------------------------------------------------------- streaming
 def test_streamed_capture_is_exactly_the_in_memory_capture(tmp_path):
     """The whole correctness claim: streaming changes *when* weights exist,
@@ -85,6 +107,64 @@ def test_streamed_capture_is_exactly_the_in_memory_capture(tmp_path):
     np.testing.assert_array_equal(streamed.logits, mem.logits)
     assert streamed.tokens == mem.tokens
     assert [t[0][0] for t in streamed.topk[-1]] == [t[0][0] for t in mem.topk[-1]]
+
+
+@pytest.mark.parametrize("saved_from", ["lm", "base"])
+def test_streamed_gpt2_is_exactly_the_in_memory_capture(tmp_path, saved_from):
+    """GPT-2, the project's default model, keeps its blocks at `transformer.h`,
+    its position embeddings outside them, and a head tied to the token
+    embeddings. Saved from the base model, its keys also lack `transformer.`,
+    which `from_pretrained` adds back. Streaming has to find the same weights
+    by the same rules."""
+    model, path = _gpt2(tmp_path, saved_from=saved_from)
+    mem = capture(model, PROMPT, tokenizer=DummyTokenizer())
+    streamed = stream_capture(path, PROMPT, tokenizer=DummyTokenizer())
+
+    np.testing.assert_array_equal(streamed.hidden, mem.hidden)
+    np.testing.assert_array_equal(streamed.logits, mem.logits)
+    assert streamed.meta["family"] == mem.meta["family"]
+
+
+def test_streamed_neox_is_exactly_the_in_memory_capture(tmp_path):
+    """Pythia's layout: blocks at `gpt_neox.layers`, and a head the checkpoint
+    stores as `embed_out`, which transformers 5 renames to `lm_head` on load."""
+    model, path = _neox(tmp_path)
+    mem = capture(model, PROMPT, tokenizer=DummyTokenizer())
+    streamed = stream_capture(path, PROMPT, tokenizer=DummyTokenizer())
+
+    np.testing.assert_array_equal(streamed.hidden, mem.hidden)
+    np.testing.assert_array_equal(streamed.logits, mem.logits)
+
+
+def test_a_layout_the_families_cannot_name_is_refused_before_any_read(
+        tmp_path, monkeypatch):
+    """Every producer finds its blocks through `models.families`. A layout
+    that cannot be named there is refused before a weight is read, rather
+    than half-loaded by a guess."""
+    import models.families as F
+
+    _, path = _dense(tmp_path, layers=2)
+    monkeypatch.setattr(F, "_BLOCK_PATHS",
+                        [p for p in F._BLOCK_PATHS if p != "model.layers"])
+    reads = []
+    monkeypatch.setattr(ShardIndex, "prefixed",
+                        lambda self, prefix: reads.append(prefix) or {})
+    with pytest.raises(ValueError, match="Unsupported model layout"):
+        stream_capture(path, PROMPT, tokenizer=DummyTokenizer())
+    assert reads == []
+
+
+def test_a_resident_weight_that_never_loads_is_refused(tmp_path, monkeypatch):
+    """What stays resident fails the same silent way a block does: a weight
+    left on meta turns the capture into numbers of nothing. So it is refused
+    by name. Without the base-model prefix `from_pretrained` adds back, GPT-2
+    saved from the base model leaves exactly its embeddings unloaded."""
+    import stream as S
+
+    _, path = _gpt2(tmp_path, saved_from="base")
+    monkeypatch.setattr(S, "_checkpoint_names", lambda model: lambda key: key)
+    with pytest.raises(RuntimeError, match="never loaded.*wte"):
+        stream_capture(path, PROMPT, tokenizer=DummyTokenizer())
 
 
 def test_streamed_capture_reports_what_the_record_reads(tmp_path):

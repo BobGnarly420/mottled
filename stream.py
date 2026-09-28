@@ -172,6 +172,66 @@ def _fuse_experts(sd: dict, block) -> dict:
     return sd
 
 
+def _checkpoint_names(model):
+    """Checkpoint key -> the runtime name it loads into, by the rules
+    `from_pretrained` applies.
+
+    transformers renames some keys on load (from v5, GPT-NeoX's `embed_out`
+    is `lm_head` at runtime), so its own renamings are applied rather than
+    copied here to drift. A checkpoint saved from the base model has keys
+    without the base-model prefix (`transformer.` on GPT-2), which is added
+    back.
+    """
+    try:
+        from transformers.conversion_mapping import get_model_conversion_mapping
+        from transformers.core_model_loading import WeightRenaming
+    except ImportError:          # transformers 4 has no renaming table
+        renamings = []
+    else:
+        # renamings only: fusing per-expert tensors is `_fuse_experts`' job
+        renamings = [t for t in get_model_conversion_mapping(model)
+                     if isinstance(t, WeightRenaming)]
+    runtime = set(model.state_dict())
+    base = f"{model.base_model_prefix}."
+
+    def name(key: str) -> str:
+        for t in renamings:
+            key, _ = t.rename_source_key(key)
+        if key not in runtime and base + key in runtime:
+            key = base + key
+        return key
+
+    return name
+
+
+def _load_resident(model, shards, blocks_at: str) -> None:
+    """Load every weight outside the blocks, to stay for the whole pass.
+
+    Only names the runtime has are fetched, so a checkpoint that carries more
+    than the causal LM (a vision tower, say) does not cost those bytes.
+    """
+    names = _checkpoint_names(model)
+    wanted = {n for n in model.state_dict() if not n.startswith(blocks_at)}
+    sd = {}
+    for key in shards.map:
+        name = names(key)
+        if name in wanted:
+            sd[name] = shards.prefixed(key)[""]
+    model.load_state_dict(sd, assign=True, strict=False)
+    # a tied head is not in the checkpoint; transformers knows what it ties to
+    model.tie_weights()
+
+    # The same silent failure `_load` refuses for a block: a weight left on
+    # meta makes every readout numbers of nothing.
+    stranded = [n for n, p in model.named_parameters()
+                if p.is_meta and not n.startswith(blocks_at)]
+    if stranded:
+        raise RuntimeError(
+            f"{len(stranded)} parameter(s) outside the blocks never loaded — "
+            f"{stranded[:4]}{'…' if len(stranded) > 4 else ''}. No checkpoint "
+            f"tensor maps to them under the rules `from_pretrained` applies.")
+
+
 def _release(module) -> None:
     """Return a block's parameters to the meta device, freeing their memory.
 
@@ -341,9 +401,11 @@ def stream_capture(
 
     `checkpoint` is a local HuggingFace checkpoint directory (config + one or
     more `.safetensors`), or a remote one: `org/model`, `hf://org/model`, or
-    a base URL. Blocks are streamed from there; the embeddings, final norm
-    and LM head stay resident, since they are a single matrix each rather
-    than a per-layer cost.
+    a base URL. Blocks are streamed from there; everything outside them (the
+    embeddings, position embeddings where a model has them, the final norm
+    and LM head) stays resident, since each is a single matrix rather than a
+    per-layer cost. The layout is resolved by `models.families`, as it is for
+    `capture`, and one it cannot name is refused.
 
     `keep_resident` is how many blocks may be materialised at once — 1 is the
     minimum-memory setting. Raise it only to trade memory for fewer loads.
@@ -413,32 +475,33 @@ def stream_capture_batch(
     model.eval()
     _materialise_computed_buffers(model, config)
 
-    inner = getattr(model, "model", model)
-    blocks = list(inner.layers)
+    # The blocks are found the way every other producer finds them, before a
+    # weight is read, so a layout `models.families` cannot name is refused
+    # rather than loaded by a guess.
+    from models.families import resolve_family, resolve_paths
+
+    adapter = resolve_family(model)
+    blocks = list(adapter.blocks)
+    blocks_at = f"{resolve_paths(model)[0]}."
+    # A checkpoint saved from the base model keeps them without the
+    # base-model prefix (GPT-2's `h.`, not `transformer.h.`).
+    source = next((p for p in (blocks_at, blocks_at.removeprefix(
+                       f"{model.base_model_prefix}."))
+                   if any(k.startswith(p) for k in shards.map)), blocks_at)
 
     # Everything that is not a block: one matrix each, so they stay resident.
     # Nothing is cast: the pass runs in the checkpoint's own dtype, which is
     # both what fits at frontier scale and what makes the result comparable
     # to an in-memory load of the same checkpoint.
-    for name, module in (("embed", getattr(inner, "embed_tokens", None)),
-                         ("norm", getattr(inner, "norm", None)),
-                         ("head", getattr(model, "lm_head", None))):
-        if module is None:
-            continue
-        prefix = {"embed": "model.embed_tokens.", "norm": "model.norm.",
-                  "head": "lm_head."}[name]
-        sd = shards.prefixed(prefix)
-        if sd:
-            module.load_state_dict(sd, assign=True, strict=False)
-        elif name == "head" and getattr(config, "tie_word_embeddings", False):
-            module.weight = getattr(inner, "embed_tokens").weight
+    _load_resident(model, shards, blocks_at)
 
     from capture import _clean_token, _entropy_topk, _routing_from, logit_lens
 
     input_ids, attention, positions, starts, per_prompt = _pad_batch(tokenizer, prompts)
     batched = len(prompts) > 1
 
-    with StreamedBlocks(model, shards, blocks, keep=keep_resident) as sb, \
+    with StreamedBlocks(model, shards, blocks, prefix=source,
+                        keep=keep_resident) as sb, \
             torch.no_grad():
         out = model(input_ids,
                     **({"attention_mask": attention, "position_ids": positions}
@@ -457,9 +520,6 @@ def stream_capture_batch(
     # where float16 storage turned that into a visible 4e-6. Which BLAS
     # detail did it is not established. The fix is not to explain the
     # difference but to remove the question: one call, one code path.
-    from models.families import resolve_family
-
-    adapter = resolve_family(model)
     if adapter.lm_head is None:
         raise ValueError("checkpoint exposes no LM head; cannot apply the logit lens")
 

@@ -19,6 +19,11 @@ then how to try it with nothing installed, then the rest.
   per-expert checkpoint briefly holds a block's experts twice while fusing
   them). A single-prompt streamed pass is bit-exact against an in-memory
   capture.
+- The layout is `models.families`' to resolve, as it is for `capture`, and
+  checkpoint keys are matched by the rules `from_pretrained` applies (the
+  base-model prefix a checkpoint saved from the base model lacks, and
+  transformers' own renames). GPT-2 and GPT-NeoX stream bit-exact, like the
+  Llama layout; everything outside the blocks stays resident.
 - **`remote.py`** does the same for disk: a repo id or URL is read as HTTP
   range requests against the published safetensors, one layer at a time,
   written to a cache file and deleted once read. Ranges, not whole files,
@@ -33,10 +38,11 @@ then how to try it with nothing installed, then the rest.
 - **`capture(..., capture_routing=True)`** records which experts each token
   was routed to (`StateTrajectory.routing`), and `Routing.agreement`
   compares two runs by the paths they took. It refuses on a dense model.
-- Refused rather than absorbed: a checkpoint whose layout leaves parameters
-  unloaded (only the per-expert gate/up/down layout is fused), and a host
-  that answers a range request with the whole file or a range of the wrong
-  length.
+- Refused rather than absorbed: a layout `models.families` cannot name,
+  before a weight is read; a checkpoint that leaves any parameter unloaded,
+  in a block or outside one (only the per-expert gate/up/down layout is
+  fused); and a host that answers a range request with the whole file or a
+  range of the wrong length.
 - A streamed trajectory reports the family, device and dtype
   `provenance.record` reads, like every other producer, and names what it
   does not carry (the embedding matrix among them).

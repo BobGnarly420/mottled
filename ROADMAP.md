@@ -134,6 +134,12 @@ Frontier models are sparse MoE and do not fit in memory: Kimi K3 is 93 layers,
       the next block loads only after the last is released. Pinned **bit-exact**
       against an in-memory capture, and the residency bound is asserted, not
       assumed.
+- [x] The layout comes from `models.families`, as it does for `capture`:
+      GPT-2 (`transformer.h`) and GPT-NeoX (`gpt_neox.layers`) stream
+      bit-exact like the Llama layout, with checkpoint keys matched by the
+      rules `from_pretrained` applies (the base-model prefix, transformers'
+      own renames). A layout the families cannot name is refused before a
+      weight is read.
 - [x] `capture(..., capture_routing=True)` → `StateTrajectory.routing`: which
       experts each token was sent to, per layer. In a sparse model this is the
       most legible signal available — a *discrete* choice, readable with no
