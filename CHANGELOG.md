@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### A README for a reader who has never seen this repo
+927 lines had grown by accretion: a second, stale roadmap inside it (listing
+the analysis-manifest export as "next", months after it shipped), and every
+feature at the same volume. The rewrite is 316 lines. It opens with what
+Mottled is and what it refuses to claim, in `docs/validity.md`'s vocabulary,
+then how to try it with nothing installed, then the rest.
+
 ### The feature field says what its regions are (completes M2)
 - `FeatureField.domains(k)` ranks a field's territories by the area each
   dominant feature owns, with centroids in plane coordinates;

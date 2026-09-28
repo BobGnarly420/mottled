@@ -1,13 +1,12 @@
-# Field notes — interpretability, for an agent starting cold
+# Field notes — the interpretability landscape, dated
 
-**Verified 2026-08-05.** Written for whoever picks this repo up next with no
-memory of the last session — most likely another agent. Read this before
-asserting anything about the field, because the last session confidently
-wrote a 2023-true claim into the README in 2026 and had to retract it.
+**Verified 2026-08-05.** Orientation for anyone — human or agent — picking
+this repo up cold. The field moves fast enough that remembered facts go stale
+within a year, so:
 
-**Rule of the file: every factual claim here is either (a) dated and
-re-verifiable with the commands at the bottom, or (b) marked as secondary
-and cited.** If a claim has neither, delete it rather than trust it.
+**Rule of the file: every claim is either (a) dated and re-verifiable with the
+commands at the bottom, or (b) marked secondary and cited.** If a claim has
+neither, delete it rather than trust it.
 
 ---
 
