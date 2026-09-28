@@ -227,8 +227,8 @@ an amount that depends on the machine. `capture(..., capture_routing=True)`
 records which experts each token was routed to in a sparse-MoE model, and
 refuses on a dense one. It also refuses a checkpoint that leaves any
 parameter unloaded, in a block or outside one (only the common per-expert
-gate/up/down layout is fused), and a host that answers a range request with the wrong bytes: the
-whole file, or a range of the wrong length.
+gate/up/down layout is fused), and a host that answers a range request with
+the wrong bytes: the whole file, or a range of the wrong length.
 
 **None of this has been run at frontier scale.** The mechanism is proven on
 small models; the open items are in [`ROADMAP.md`](ROADMAP.md) (M7).

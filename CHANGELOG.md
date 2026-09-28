@@ -2,13 +2,6 @@
 
 ## Unreleased
 
-### A README for a reader who has never seen this repo
-927 lines had grown by accretion: a second, stale roadmap inside it (listing
-the analysis-manifest export as "next", months after it shipped), and every
-feature at the same volume. The rewrite is 355 lines. It opens with what
-Mottled is and what it refuses to claim, in `docs/validity.md`'s vocabulary,
-then how to try it with nothing installed, then the rest.
-
 ### Models too big to hold (M7)
 - **`stream.stream_capture`** runs a forward pass with one block's weights in
   memory at a time: the skeleton is built with no weights, and each block is
@@ -48,6 +41,13 @@ then how to try it with nothing installed, then the rest.
   does not carry (the embedding matrix among them).
 - **Not run at frontier scale.** The mechanism is proven on small models;
   the open items are in `ROADMAP.md`.
+
+### A README for a reader who has never seen this repo
+927 lines had grown by accretion: a second, stale roadmap inside it (listing
+the analysis-manifest export as "next", months after it shipped), and every
+feature at the same volume. The rewrite is 316 lines. It opens with what
+Mottled is and what it refuses to claim, in `docs/validity.md`'s vocabulary,
+then how to try it with nothing installed, then the rest.
 
 ### The feature field says what its regions are (completes M2)
 - `FeatureField.domains(k)` ranks a field's territories by the area each
