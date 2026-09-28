@@ -124,10 +124,84 @@ start.
       (readout divergence, layer alignment with its identified/flat rows, the
       generation split), so the atlas is reachable without the API.
 
+### M7 — Models too big to hold *(in progress)*
+Frontier models are sparse MoE and do not fit in memory: Kimi K3 is 93 layers,
+2.8T parameters, ~1.5 TB of weights, 16 of 896 experts active per token.
+- [x] `stream.stream_capture`: build the skeleton with no weights, materialise
+      each block from disk immediately before it runs, release it immediately
+      after. Peak memory is one block plus activations (a per-expert
+      checkpoint briefly holds a block's experts twice while fusing them), and
+      the next block loads only after the last is released. Pinned **bit-exact**
+      against an in-memory capture, and the residency bound is asserted, not
+      assumed.
+- [x] The layout comes from `models.families`, as it does for `capture`:
+      GPT-2 (`transformer.h`) and GPT-NeoX (`gpt_neox.layers`) stream
+      bit-exact like the Llama layout, with checkpoint keys matched by the
+      rules `from_pretrained` applies (the base-model prefix, transformers'
+      own renames). A layout the families cannot name is refused before a
+      weight is read.
+- [x] `capture(..., capture_routing=True)` → `StateTrajectory.routing`: which
+      experts each token was sent to, per layer. In a sparse model this is the
+      most legible signal available — a *discrete* choice, readable with no
+      dictionary learning — and `Routing.agreement` compares two runs by the
+      paths they took rather than the activations they produced. Refuses on a
+      dense model instead of returning an empty routing.
+- [x] Loud failure when a checkpoint's layout does not match the runtime
+      module (MoE checkpoints store experts per-expert; the runtime wants them
+      fused). Silently skipping leaves the experts empty and the whole capture
+      is wrong while still looking like numbers. Only the common gate/up/down
+      layout is fused, so any other expert layout takes this failure today.
+- [x] `remote.RemoteWeights`: the weights never land on local disk in full
+      either. HTTP range requests read one layer's byte spans out of the
+      published shards, write them to a cache file, and delete it once the
+      block has been read — so peak local disk is one layer, not the whole
+      checkpoint. Range granularity is the point: shard boundaries are *not*
+      layer boundaries (Qwen3-30B-A3B packs five layers per shard and splits
+      one layer across two), so fetching whole files can cost several times
+      the layer. A host that ignores `Range` answers `200` with the entire
+      file, which at this scale is a terabyte where 17 GB was asked for, so
+      that is refused rather than paid.
+- [x] `stream_capture_batch`: egress, not RAM, is now the binding cost — one
+      pass over a 1.5 TB checkpoint per capture. So prompts share the pass:
+      each block is loaded once and every prompt in the batch goes through it
+      while it is resident. Twenty prompts cost one download. Batching is a
+      documented *tolerance*, not a bit-exact claim — a batched pass reshapes
+      every matmul, so the last bits move by an amount that depends on the
+      machine's BLAS (zero on one CPU, ~6e-9 on another). `stream_capture` on
+      a single prompt stays bit-exact and is what to use when bits matter.
+- [x] Every remotely-streamed trajectory carries the receipt
+      (`meta.remote`: bytes fetched, requests made, peak cache bytes). The
+      cost of a design this expensive belongs in the artifact, not the docs.
+- [ ] Verify against K3 itself. The mechanism is proven at small scale only,
+      and the honest claim stops there. What is known from the published
+      index files rather than assumed: K2's shards are one layer each at
+      **17.07 GB**, 2327 tensors laid out contiguously, so a layer coalesces
+      to essentially one range request — and 17 GB is what must fit local
+      disk *and* RAM while that block runs. K3 at ~1.56 TB over 93 layers is
+      the same order.
+- [ ] **Fetch only the routed experts.** Nearly all of a sparse layer's bytes
+      are experts, and a short prompt routes to a small fraction of them —
+      K2 sends each token to 8 of 384. `remote.unrouted_expert_bytes`
+      measures that waste after the fact from the routing the capture already
+      recorded, so the case for acting on it is a number rather than an
+      intuition. Acting on it is a much more delicate change: the router runs
+      on post-attention states, so the route cannot be known until the block
+      is half-executed, and a fused expert layout cannot be partially loaded
+      at all. It only ships with the check that every expert the forward
+      actually used was one we fetched.
+- [ ] **AttnRes.** K3 retrieves across depth selectively rather than
+      accumulating uniformly, so `h[l+1] = h[l] + attn + mlp` may not hold.
+      The decomposition must be *measured* on K3 and refused if it does not
+      reconcile — an additive story told about a non-additive model is exactly
+      the failure this project exists to prevent.
+- [ ] KDA is linear attention: there is no `T×T` matrix to capture. Attention
+      capture must refuse there, as it already does on Mamba.
+
 ## Status
 
-M1, M2, M3 and M6 are complete. Two items remain, both blocked on something
-other than effort:
+M1, M2, M3 and M6 are complete, and M7 is in progress (its open items are
+above). Two items remain elsewhere, both blocked on something other than
+effort:
 
 - **M4's live provider path** needs API credentials, which a session should
   not hold or ask for. The producer and its honesty machinery are done and
@@ -151,8 +225,9 @@ distinct:
 - **Licence-gated** — `meta-llama/Llama-3.2-1B`, `google/gemma-2-2b`. They
   work; they need an accepted licence and an `HF_TOKEN`, so they cannot back
   bundled samples or offline CI.
-- **Hardware** — frontier MoE is not a support question. Kimi K2's weights
-  are ~1 TB.
+- **Hardware** — frontier MoE does not fit in memory: Kimi K2's weights are
+  ~1 TB. M7's streamed capture removes that ceiling, but has not been run at
+  that scale.
 - **Ecosystem** — GPT-2 stays in the *SAE-dependent* samples because its
   dictionaries come with published Neuronpedia explanations. That is
   convenience, not the frontier of what is available, and an earlier draft of

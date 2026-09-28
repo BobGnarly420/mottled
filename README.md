@@ -64,8 +64,9 @@ mottled smoke                              # does this install actually work?
 
 Every capture is a real model; `gpt2` is the default because it is the
 smallest honest one. The extras are `models` (torch and transformers, for
-capture), `umap`, `faiss`, `tlens`, `sae` and `nnsight`. A viewer, an
-analysis or a `.mtj` consumer needs none of them. From a clone:
+capture), `remote` (stream weights you do not hold), `umap`, `faiss`,
+`tlens`, `sae` and `nnsight`. A viewer, an analysis or a `.mtj` consumer
+needs none of them. From a clone:
 `pip install -r requirements.txt && streamlit run ui.py`.
 
 The explorer's **Chat** switch puts a conversation on the left and its
@@ -171,7 +172,8 @@ Mamba (state-space)           ─┤                          ├─ WebGL viewe
 TransformerLens               ─┼─► StateTrajectory ─► .mtj ─┤  (no dependencies)
 states you already captured   ─┤                          └─ Jupyter (plain
 API logprobs (degraded)       ─┤                             Plotly figures)
-the browser's own forward pass─┘
+the browser's own forward pass─┤
+streamed, for models too big  ─┘
 ```
 
 - **Transformers.** `models/families.py` resolves Qwen, Llama, Mistral,
@@ -196,6 +198,48 @@ the browser's own forward pass─┘
   builds, and refuses a file holding tensors it cannot place: a model that
   loads and silently skips a weight is a trajectory of a model that does not
   exist. WebGPU kernels accelerate the same op contract the CPU path defines.
+
+### Models too big to hold
+
+A forward pass with no gradients needs block *i*'s weights only while block
+*i* runs. `stream.stream_capture` builds the model skeleton with no weights,
+materialises each block immediately before it runs and releases it after, by
+hooks around the model's own blocks, so the architecture stays
+HuggingFace's. Peak memory is one block plus activations; a checkpoint that
+stores each expert as its own tensor briefly holds a block's experts twice
+while fusing them. The blocks are found by `models.families`, as for every
+other producer, so GPT-2 and GPT-NeoX stream as the Llama layout does, and a
+layout it cannot name is refused before a weight is read.
+
+```python
+from stream import stream_capture, stream_capture_batch
+
+traj = stream_capture("/path/to/checkpoint", "The capital of France is")
+traj = stream_capture("hf://org/model", "The capital of")     # a repo id or URL
+many = stream_capture_batch(checkpoint, prompts)   # one pass, N trajectories
+```
+
+Point it at a repo id or URL and the weights never land on local disk in full
+either: `remote.py` reads one layer's byte ranges out of the published
+shards, writes them to a cache file, and deletes it once the block has been
+read. Ranges rather than whole files, because shard boundaries are not layer
+boundaries. Egress is then the binding cost, so `stream_capture_batch` puts
+every prompt through each block while it is resident, and every remote
+trajectory carries the bill (`meta.remote`: bytes fetched, requests made,
+peak cache bytes).
+
+A single-prompt streamed pass is bit-exact against an in-memory capture, and
+the residency bound is asserted rather than assumed. A batched pass is a
+tolerance, not a promise: it reshapes every matmul, so the last bits move by
+an amount that depends on the machine. `capture(..., capture_routing=True)`
+records which experts each token was routed to in a sparse-MoE model, and
+refuses on a dense one. It also refuses a checkpoint that leaves any
+parameter unloaded, in a block or outside one (only the common per-expert
+gate/up/down layout is fused), and a host that answers a range request with
+the wrong bytes: the whole file, or a range of the wrong length.
+
+**None of this has been run at frontier scale.** The mechanism is proven on
+small models; the open items are in [`ROADMAP.md`](ROADMAP.md) (M7).
 
 ## Programmatic API
 
@@ -280,6 +324,7 @@ and rendered by Mottled. Given the second one, GPT-2's top continuation is
 | `compare.py` · `crossmodel.py` | comparison within a model, and across models in readout space |
 | `intervene.py` · `dose.py` | edits and counterfactual replay; dose-response sweeps with controls |
 | `sae.py` · `attractor.py` | SAE features and their fit; basin analysis as measured prose |
+| `stream.py` · `remote.py` | capture for models too big to hold |
 | `statefile.py` · `provenance.py` | the `.mtj` format and the analysis record it carries |
 | `models/` | producers: model families, TransformerLens, external states, API logprobs |
 | `viewer/` | the WebGL viewer and the in-browser capture stack, each JS file pinned to a Python reference by a conformance test |

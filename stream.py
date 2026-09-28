@@ -1,0 +1,573 @@
+"""Layer-by-layer capture for models too large to hold in memory.
+
+A forward pass with no gradients only needs block *i*'s weights while block
+*i* is running. So a model whose weights do not fit in RAM can still be
+traced: build the module skeleton with no weights at all, then materialise
+each block from disk immediately before it runs and release it immediately
+after. Peak memory becomes **one block plus the activations**, not the whole
+model (a checkpoint that stores each expert as its own tensor briefly holds
+a block's experts twice while `_fuse_experts` stacks them).
+
+That is exactly the shape of what Mottled wants — the residual stream at
+every layer for a short prompt — so the expensive resource is a single
+sequential read of the weights, not RAM. For a 93-layer, 1.5 TB model like
+Kimi K3 that is the difference between "impossible" and "slow", though not
+yet in practice: only the common per-expert gate/up/down layout is fused, a
+layout this module cannot load fails loudly, and nothing here has run at
+that scale.
+
+    from stream import stream_capture
+    traj = stream_capture("/path/to/checkpoint", "The capital of France is")
+
+Weights are materialised by *hooks around the model's own blocks*, never by
+reimplementing a forward pass. That matters: modern frontier models use
+attention this module has never heard of (linear/delta variants, latent
+attention, MoE routing), and hand-rolling those forwards would be both
+wrong and unmaintainable. Here the architecture stays HuggingFace's problem
+and only *when weights exist* is ours.
+
+Point `checkpoint` at a hub repo or a URL instead of a directory and the
+weights never land on local disk in full either — `remote.RemoteWeights`
+fetches one layer's byte ranges, writes them to a cache file, and deletes it
+once the block has been read:
+
+    traj = stream_capture("hf://org/model", "The capital of")
+
+Egress is then the binding cost — one full read of the checkpoint per pass —
+so `stream_capture_batch` runs many prompts through each block while it is
+resident. Twenty prompts cost one download, not twenty.
+
+What this does not do: it does not make a 1.5 TB model fast. It removes the
+RAM ceiling, and with a remote source the disk ceiling; nothing else.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import numpy as np
+
+from trajectory import StateTrajectory
+
+try:
+    import torch
+
+    HAS_TORCH = True
+except ImportError:  # pragma: no cover
+    HAS_TORCH = False
+
+
+class ShardIndex:
+    """Which file holds which tensor, for a HF checkpoint directory."""
+
+    def __init__(self, path: str | Path):
+        self.root = Path(path)
+        index = self.root / "model.safetensors.index.json"
+        if index.exists():
+            weight_map = json.loads(index.read_text())["weight_map"]
+            self.map = {k: self.root / v for k, v in weight_map.items()}
+        else:
+            single = self.root / "model.safetensors"
+            if not single.exists():
+                raise FileNotFoundError(
+                    f"no model.safetensors or shard index under {self.root}")
+            from safetensors import safe_open
+
+            with safe_open(str(single), framework="pt") as f:
+                self.map = {k: single for k in f.keys()}
+        self._open: dict[Path, object] = {}
+
+    def prefixed(self, prefix: str) -> dict:
+        """Every tensor whose name starts with `prefix`, keyed without it."""
+        from safetensors import safe_open
+
+        out, wanted = {}, [k for k in self.map if k.startswith(prefix)]
+        by_file: dict[Path, list[str]] = {}
+        for k in wanted:
+            by_file.setdefault(self.map[k], []).append(k)
+        for file, keys in by_file.items():
+            with safe_open(str(file), framework="pt") as f:
+                for k in keys:
+                    out[k[len(prefix):]] = f.get_tensor(k)
+        return out
+
+    def __len__(self) -> int:
+        return len(self.map)
+
+
+def _materialise_computed_buffers(model, config) -> None:
+    """Give back the buffers that a meta-device build leaves empty.
+
+    Some buffers are *computed* at construction rather than loaded from the
+    checkpoint — rotary `inv_freq` is the usual one — so building on the meta
+    device leaves them with no data and the first forward dies inside the
+    rope helper. They are also tiny, so the fix is to re-instantiate just the
+    module that owns them on a real device and copy the fresh values across.
+    """
+    for name, module in list(model.named_modules()):
+        stranded = [n for n, b in module.named_buffers(recurse=False) if b.is_meta]
+        if not stranded:
+            continue
+        fresh = None
+        for build in (lambda: type(module)(config=config),
+                      lambda: type(module)(config)):
+            try:
+                fresh = build()
+                break
+            except Exception:
+                continue
+        if fresh is None:
+            raise RuntimeError(
+                f"{name} has computed buffers {stranded} that a meta-device "
+                f"build leaves empty, and it could not be rebuilt from the "
+                f"config. Streaming this architecture needs a hand-written "
+                f"buffer rule.")
+        for n in stranded:
+            module.register_buffer(n, getattr(fresh, n).clone(), persistent=False)
+
+
+def _fuse_experts(sd: dict, block) -> dict:
+    """Reshape per-expert checkpoint tensors into a fused runtime layout.
+
+    Sparse-MoE checkpoints usually store one tensor per expert
+    (`mlp.experts.3.gate_proj.weight`), while the runtime module keeps them
+    stacked (`mlp.experts.gate_up_proj` of shape `(n_experts, …)`) so the
+    forward can use a grouped matmul. `from_pretrained` does this conversion
+    internally; a streamed load has to do it too, or the experts silently
+    stay empty.
+
+    Only the common `gate/up/down` fusion is handled. Anything else trips the
+    stranded-parameter check in `_load`, which is the intended outcome — a
+    loud, named failure beats a plausible wrong answer.
+    """
+    per_expert = {}
+    for key in list(sd):
+        parts = key.split(".")
+        if "experts" not in parts:
+            continue
+        e = parts.index("experts")
+        if e + 2 >= len(parts) or not parts[e + 1].isdigit():
+            continue
+        idx, proj = int(parts[e + 1]), parts[e + 2]
+        per_expert.setdefault(".".join(parts[:e + 1]), {}).setdefault(proj, {})[idx] = sd.pop(key)
+    if not per_expert:
+        return sd
+
+    want = {n for n, _ in block.named_parameters()}
+    for root, projs in per_expert.items():
+        order = lambda d: [d[i] for i in sorted(d)]
+        if {"gate_proj", "up_proj"} <= set(projs) and f"{root}.gate_up_proj" in want:
+            # (E, 2*inter, hidden) -> transposed to the runtime's (E, ..., ...)
+            gate, up = order(projs["gate_proj"]), order(projs["up_proj"])
+            fused = torch.stack([torch.cat([g, u], dim=0) for g, u in zip(gate, up)])
+            target = dict(block.named_parameters())[f"{root}.gate_up_proj"]
+            sd[f"{root}.gate_up_proj"] = (fused.transpose(1, 2).contiguous()
+                                          if fused.shape != target.shape else fused)
+        if "down_proj" in projs and f"{root}.down_proj" in want:
+            down = torch.stack(order(projs["down_proj"]))
+            target = dict(block.named_parameters())[f"{root}.down_proj"]
+            sd[f"{root}.down_proj"] = (down.transpose(1, 2).contiguous()
+                                       if down.shape != target.shape else down)
+    return sd
+
+
+def _checkpoint_names(model):
+    """Checkpoint key -> the runtime name it loads into, by the rules
+    `from_pretrained` applies.
+
+    transformers renames some keys on load (from v5, GPT-NeoX's `embed_out`
+    is `lm_head` at runtime), so its own renamings are applied rather than
+    copied here to drift. A checkpoint saved from the base model has keys
+    without the base-model prefix (`transformer.` on GPT-2), which is added
+    back.
+    """
+    try:
+        from transformers.conversion_mapping import get_model_conversion_mapping
+        from transformers.core_model_loading import WeightRenaming
+    except ImportError:          # transformers 4 has no renaming table
+        renamings = []
+    else:
+        # renamings only: fusing per-expert tensors is `_fuse_experts`' job
+        renamings = [t for t in get_model_conversion_mapping(model)
+                     if isinstance(t, WeightRenaming)]
+    runtime = set(model.state_dict())
+    base = f"{model.base_model_prefix}."
+
+    def name(key: str) -> str:
+        for t in renamings:
+            key, _ = t.rename_source_key(key)
+        if key not in runtime and base + key in runtime:
+            key = base + key
+        return key
+
+    return name
+
+
+def _load_resident(model, shards, blocks_at: str) -> None:
+    """Load every weight outside the blocks, to stay for the whole pass.
+
+    Only names the runtime has are fetched, so a checkpoint that carries more
+    than the causal LM (a vision tower, say) does not cost those bytes.
+    """
+    names = _checkpoint_names(model)
+    wanted = {n for n in model.state_dict() if not n.startswith(blocks_at)}
+    sd = {}
+    for key in shards.map:
+        name = names(key)
+        if name in wanted:
+            sd[name] = shards.prefixed(key)[""]
+    model.load_state_dict(sd, assign=True, strict=False)
+    # a tied head is not in the checkpoint; transformers knows what it ties to
+    model.tie_weights()
+
+    # The same silent failure `_load` refuses for a block: a weight left on
+    # meta makes every readout numbers of nothing.
+    stranded = [n for n, p in model.named_parameters()
+                if p.is_meta and not n.startswith(blocks_at)]
+    if stranded:
+        raise RuntimeError(
+            f"{len(stranded)} parameter(s) outside the blocks never loaded — "
+            f"{stranded[:4]}{'…' if len(stranded) > 4 else ''}. No checkpoint "
+            f"tensor maps to them under the rules `from_pretrained` applies.")
+
+
+def _release(module) -> None:
+    """Return a block's parameters to the meta device, freeing their memory.
+
+    Replaces the entries in each owning module's `_parameters` rather than
+    assigning to `.data`: after a `load_state_dict(assign=True)` the stored
+    object may not be a `Parameter` of a compatible type, and `.data =` on a
+    differently-shaped meta tensor is rejected.
+    """
+    for sub in module.modules():
+        for name, p in list(sub._parameters.items()):
+            if p is None:
+                continue
+            sub._parameters[name] = torch.nn.Parameter(
+                torch.empty(0, device="meta", dtype=p.dtype), requires_grad=False)
+
+
+class StreamedBlocks:
+    """Materialise each block just before it runs; release it just after.
+
+    Records the residual stream on the way through, so a streamed pass and an
+    in-memory pass produce the same `hidden` — that equality is the whole
+    correctness claim and is pinned by a test.
+    """
+
+    def __init__(self, model, shards: ShardIndex, blocks, prefix: str = "model.layers.",
+                 keep: int = 1):
+        self.model, self.shards, self.blocks = model, shards, blocks
+        self.prefix, self.keep = prefix, max(1, int(keep))
+        self.states: dict[int, "torch.Tensor"] = {}
+        self.resident: list[int] = []
+        self.loads = 0
+        self._handles = []
+
+    def _load(self, i: int) -> None:
+        if i in self.resident:
+            return
+        # Release before loading, not after: a forward pass never returns to
+        # an earlier block, and releasing once the next one has loaded holds
+        # keep + 1 blocks at the peak — the bound this module is for.
+        while self.resident and len(self.resident) >= self.keep:
+            _release(self.blocks[self.resident.pop(0)])
+        block = self.blocks[i]
+        sd = self.shards.prefixed(f"{self.prefix}{i}.")
+        if not sd:
+            raise RuntimeError(f"no weights found for block {i} "
+                               f"(prefix {self.prefix}{i}.)")
+        sd = _fuse_experts(sd, block)
+        block.load_state_dict(sd, assign=True, strict=False)
+
+        # Never run a block with weights still on meta. `strict=False` is
+        # needed because checkpoints and runtime modules disagree about
+        # layout, but a silent skip means a fused kernel quietly takes the
+        # meta path and the whole capture is wrong in a way that still looks
+        # like numbers. Fail here instead, naming what did not land.
+        stranded = [n for n, prm in block.named_parameters() if prm.is_meta]
+        if stranded:
+            raise RuntimeError(
+                f"block {i}: {len(stranded)} parameter(s) never loaded — "
+                f"{stranded[:4]}{'…' if len(stranded) > 4 else ''}. The "
+                f"checkpoint's layout does not match this module's; streaming "
+                f"needs a mapping rule for it (see `_fuse_experts` for the "
+                f"per-expert → fused case).")
+        self.resident.append(i)
+        self.loads += 1
+
+    def __enter__(self):
+        def pre(module, args, kwargs, _i):
+            self._load(_i)
+            if _i == 0:
+                hs = args[0] if args else kwargs.get("hidden_states")
+                self.states[0] = hs.detach().clone()
+            return None
+
+        def post(module, args, output, _i):
+            out = output[0] if isinstance(output, tuple) else output
+            self.states[_i + 1] = out.detach().clone()
+            return None
+
+        for i, block in enumerate(self.blocks):
+            self._handles.append(block.register_forward_pre_hook(
+                lambda m, a, k, _i=i: pre(m, a, k, _i), with_kwargs=True))
+            self._handles.append(block.register_forward_hook(
+                lambda m, a, o, _i=i: post(m, a, o, _i)))
+        return self
+
+    def __exit__(self, *exc):
+        for h in self._handles:
+            h.remove()
+        self._handles.clear()
+        for i in list(self.resident):
+            _release(self.blocks[i])
+        self.resident.clear()
+        # A remote source keeps the last layer on disk until something asks
+        # for the next one. Nothing will, so say the pass is over.
+        if hasattr(self.shards, "release"):
+            self.shards.release()
+
+    def stacked(self, row: int = 0, start: int = 0) -> "torch.Tensor":
+        """The residual stream for one sequence in the batch, pads dropped."""
+        n = len(self.blocks) + 1
+        missing = [i for i in range(n) if i not in self.states]
+        if missing:
+            raise RuntimeError(f"missing streamed captures for layers {missing}")
+        return torch.stack(
+            [self.states[i][row, start:] for i in range(n)]).float().cpu()
+
+
+def _open_weights(checkpoint, cache_dir=None, cache_bytes=None,
+                  revision="main", token=None):
+    """Resolve a checkpoint to (weights, directory-to-load-metadata-from).
+
+    A local path is read in place. Anything else — a hub repo id, an
+    `hf://` spec, a base URL — is served over range requests by
+    `remote.RemoteWeights`, whose only local footprint is one layer at a time.
+    """
+    root = Path(checkpoint)
+    if root.exists():
+        return ShardIndex(root), root
+    from remote import RemoteWeights
+
+    weights = RemoteWeights(checkpoint, cache_dir=cache_dir,
+                            cache_bytes=cache_bytes, revision=revision,
+                            token=token)
+    return weights, weights.fetch_config()
+
+
+def _pad_batch(tokenizer, prompts):
+    """Left-pad a batch, and say where each sequence really starts.
+
+    Left padding keeps every sequence's last token at the same index, which
+    is where a causal model's prediction lives. It also makes the positions
+    wrong unless they are passed explicitly, so they are computed from the
+    mask rather than left to default to `0..T-1`.
+    """
+    ids = [tokenizer(p, return_tensors="pt")["input_ids"][0] for p in prompts]
+    width = max(len(i) for i in ids)
+    pad = getattr(tokenizer, "pad_token_id", None)
+    if pad is None:
+        pad = getattr(tokenizer, "eos_token_id", None) or 0
+
+    rows, mask = [], []
+    for seq in ids:
+        gap = width - len(seq)
+        rows.append(torch.cat([torch.full((gap,), int(pad), dtype=seq.dtype), seq]))
+        mask.append(torch.cat([torch.zeros(gap, dtype=torch.long),
+                               torch.ones(len(seq), dtype=torch.long)]))
+    attention = torch.stack(mask)
+    positions = (attention.cumsum(-1) - 1).clamp(min=0)
+    starts = [width - len(seq) for seq in ids]
+    return torch.stack(rows), attention, positions, starts, ids
+
+
+def stream_capture(
+    checkpoint: str | Path,
+    prompt: str,
+    tokenizer=None,
+    top_k: int = 5,
+    keep_logits: bool = True,
+    keep_resident: int = 1,
+    capture_routing: bool = False,
+    cache_dir=None,
+    cache_bytes: int | None = None,
+    revision: str = "main",
+    token: str | None = None,
+) -> StateTrajectory:
+    """Capture the residual stream without ever holding the whole model.
+
+    `checkpoint` is a local HuggingFace checkpoint directory (config + one or
+    more `.safetensors`), or a remote one: `org/model`, `hf://org/model`, or
+    a base URL. Blocks are streamed from there; everything outside them (the
+    embeddings, position embeddings where a model has them, the final norm
+    and LM head) stays resident, since each is a single matrix rather than a
+    per-layer cost. The layout is resolved by `models.families`, as it is for
+    `capture`, and one it cannot name is refused.
+
+    `keep_resident` is how many blocks may be materialised at once — 1 is the
+    minimum-memory setting. Raise it only to trade memory for fewer loads.
+
+    The result is an ordinary `StateTrajectory`: everything downstream is
+    unchanged, which is the point of having an interchange format.
+    """
+    return stream_capture_batch(
+        checkpoint, [prompt], tokenizer=tokenizer, top_k=top_k,
+        keep_logits=keep_logits, keep_resident=keep_resident,
+        capture_routing=capture_routing, cache_dir=cache_dir,
+        cache_bytes=cache_bytes, revision=revision, token=token)[0]
+
+
+def stream_capture_batch(
+    checkpoint: str | Path,
+    prompts,
+    tokenizer=None,
+    top_k: int = 5,
+    keep_logits: bool = True,
+    keep_resident: int = 1,
+    capture_routing: bool = False,
+    cache_dir=None,
+    cache_bytes: int | None = None,
+    revision: str = "main",
+    token: str | None = None,
+) -> list[StateTrajectory]:
+    """Trace many prompts against one pass over the weights.
+
+    The unit cost of streaming is reading the checkpoint, not running the
+    prompt: a Kimi-scale layer is ~17 GB to fetch and microseconds to apply
+    to five tokens. So the prompts go through together, and each block is
+    loaded exactly once for the whole batch.
+
+    Returns one `StateTrajectory` per prompt.
+
+    Batching is *not* bit-exact and cannot be. A batched pass gives every
+    matmul a different shape, and a different shape means different blocking
+    and a different summation order — so the answer moves in the last bits,
+    by an amount that depends on the BLAS the machine happens to have. This
+    was measured at ~6e-9 absolute here and was exactly zero on a different
+    CPU, which is the whole point: do not read a zero on one machine as a
+    guarantee. Padding adds a second, smaller source of the same thing.
+
+    So: `stream_capture` on one prompt is bit-exact against an in-memory
+    capture, and is what to use when the bits must match. `stream_capture_batch`
+    trades that for one download instead of N.
+    """
+    if not HAS_TORCH:
+        raise ImportError("stream_capture needs torch")
+    from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+
+    prompts = list(prompts)
+    if not prompts:
+        raise ValueError("stream_capture_batch needs at least one prompt")
+
+    shards, meta_dir = _open_weights(checkpoint, cache_dir=cache_dir,
+                                     cache_bytes=cache_bytes,
+                                     revision=revision, token=token)
+    root = Path(checkpoint)
+    config = AutoConfig.from_pretrained(meta_dir)
+    if tokenizer is None:
+        tokenizer = AutoTokenizer.from_pretrained(meta_dir)
+
+    with torch.device("meta"):
+        model = AutoModelForCausalLM.from_config(config)
+    model.eval()
+    _materialise_computed_buffers(model, config)
+
+    # The blocks are found the way every other producer finds them, before a
+    # weight is read, so a layout `models.families` cannot name is refused
+    # rather than loaded by a guess.
+    from models.families import resolve_family, resolve_paths
+
+    adapter = resolve_family(model)
+    blocks = list(adapter.blocks)
+    blocks_at = f"{resolve_paths(model)[0]}."
+    # A checkpoint saved from the base model keeps them without the
+    # base-model prefix (GPT-2's `h.`, not `transformer.h.`).
+    source = next((p for p in (blocks_at, blocks_at.removeprefix(
+                       f"{model.base_model_prefix}."))
+                   if any(k.startswith(p) for k in shards.map)), blocks_at)
+
+    # Everything that is not a block: one matrix each, so they stay resident.
+    # Nothing is cast: the pass runs in the checkpoint's own dtype, which is
+    # both what fits at frontier scale and what makes the result comparable
+    # to an in-memory load of the same checkpoint.
+    _load_resident(model, shards, blocks_at)
+
+    from capture import _clean_token, _entropy_topk, _routing_from, logit_lens
+
+    input_ids, attention, positions, starts, per_prompt = _pad_batch(tokenizer, prompts)
+    batched = len(prompts) > 1
+
+    with StreamedBlocks(model, shards, blocks, prefix=source,
+                        keep=keep_resident) as sb, \
+            torch.no_grad():
+        out = model(input_ids,
+                    **({"attention_mask": attention, "position_ids": positions}
+                       if batched else {}),
+                    **({"output_router_logits": True} if capture_routing else {}))
+
+    spans = list(enumerate(starts))
+    routings = _routing_from(out, model, capture_routing, spans=spans)
+    if routings is None:
+        routings = [None] * len(prompts)
+
+    # Reuse `capture.logit_lens` rather than re-deriving it. This started as
+    # a hand-rolled copy that chunked the layer stack one layer at a time
+    # instead of four, which is the same arithmetic and was bit-identical on
+    # the machine it was written on — and differed in the last bit on CI's,
+    # where float16 storage turned that into a visible 4e-6. Which BLAS
+    # detail did it is not established. The fix is not to explain the
+    # difference but to remove the question: one call, one code path.
+    if adapter.lm_head is None:
+        raise ValueError("checkpoint exposes no LM head; cannot apply the logit lens")
+
+    receipt = shards.receipt() if hasattr(shards, "receipt") else {}
+    # the head stays resident, so it says where and in what the pass ran
+    head = adapter.lm_head.weight
+    trajectories = []
+    for row, start in spans:
+        hidden = sb.stacked(row, start)
+        tokens = [_clean_token(t) for t in
+                  tokenizer.convert_ids_to_tokens(per_prompt[row].tolist())]
+
+        logits = logit_lens(hidden, adapter).numpy()
+
+        vocab = [_clean_token(t)
+                 for t in tokenizer.convert_ids_to_tokens(range(logits.shape[-1]))]
+        entropy, topk = _entropy_topk(logits, vocab, top_k)
+
+        meta = {
+            "backend": "streamed",
+            "model": str(root),
+            "prompt": prompts[row],
+            # what provenance.record reads, as capture._run reports it
+            "family": adapter.name,
+            "device": str(head.device),
+            "dtype": str(head.dtype).removeprefix("torch."),
+            "streamed": True,
+            "n_blocks": len(blocks),
+            "block_loads": sb.loads,
+            "keep_resident": keep_resident,
+            # what a streamed pass cannot give you, stated rather than implied
+            "absent": ["residual decomposition", "attention patterns",
+                       "embedding matrix"],
+        }
+        if batched:
+            meta["batch"] = len(prompts)
+        if receipt:
+            meta["remote"] = receipt
+        traj = StateTrajectory(
+            hidden=hidden.numpy(),
+            tokens=tokens,
+            logits=logits.astype(np.float16) if keep_logits else None,
+            entropy=entropy,
+            topk=topk,
+            vocab=vocab,
+            routing=routings[row],
+            meta=meta,
+        )
+        traj.validate()
+        trajectories.append(traj)
+    return trajectories
