@@ -182,7 +182,13 @@ nonlinear amplification. For research-grade causal language, add:
 - **On-manifold checks** — compare the intervened state to the empirical
   activation distribution at that layer.
 - **Dose-response curves** — effects across perturbation magnitudes, not
-  one successful magnitude.
+  one successful magnitude. `dose.dose_sweep` runs one: a signed grid of
+  doses relative to the injection layer's median residual norm, with
+  seeded random controls orthogonal to the direction, a shuffled-label
+  control for contrast directions, and a direct-path reference for token
+  directions. Doses above 1 are flagged `replacement_regime`, since the push
+  there outweighs the state it was added to. A curve that clears its
+  controls is still sufficiency, and still one prompt set.
 - **Direction specificity** — target direction vs random, semantically
   related, and matched-norm orthogonal directions.
 - **Restoration tests** — ablate a candidate component, then restore it;
