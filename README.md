@@ -138,7 +138,8 @@ where it was trained.
   norm-matched random control; `dose.dose_sweep` runs one over a signed grid
   of doses, with random, shuffled-label and direct-path controls.
 - **SAE features**, applied and never trained, with their measured fit, and a
-  domain-coloured feature field that names its largest territories.
+  feature field that names its largest regions: hue stays each feature's
+  identity, and the name says what the region is about.
 - **Uncertainty everywhere**: neighborhood preservation per state, explained
   variance, and the density's bootstrap standard-error field.
 - **Measured explanations.** `attractor.explain` turns a basin's numbers into
@@ -196,13 +197,15 @@ A forward pass with no gradients needs block *i*'s weights only while block
 *i* runs. `stream.stream_capture` builds the model skeleton with no weights,
 materialises each block immediately before it runs and releases it after, by
 hooks around the model's own blocks, so the architecture stays
-HuggingFace's. Peak memory is one block plus activations.
+HuggingFace's. Peak memory is one block plus activations; a checkpoint that
+stores each expert as its own tensor briefly holds a block's experts twice
+while fusing them.
 
 ```python
 from stream import stream_capture, stream_capture_batch
 
 traj = stream_capture("/path/to/checkpoint", "The capital of France is")
-traj = stream_capture("hf://moonshotai/Kimi-K2-Instruct", "The capital of")
+traj = stream_capture("hf://org/model", "The capital of")     # a repo id or URL
 many = stream_capture_batch(checkpoint, prompts)   # one pass, N trajectories
 ```
 
@@ -221,8 +224,9 @@ tolerance, not a promise: it reshapes every matmul, so the last bits move by
 an amount that depends on the machine. `capture(..., capture_routing=True)`
 records which experts each token was routed to in a sparse-MoE model, and
 refuses on a dense one. It also refuses a checkpoint whose layout leaves
-parameters unloaded, and a host that answers a range request with the whole
-file.
+parameters unloaded (only the common per-expert gate/up/down layout is
+fused), and a host that answers a range request with the wrong bytes: the
+whole file, or a range of the wrong length.
 
 **None of this has been run at frontier scale.** The mechanism is proven on
 small models; the open items are in [`ROADMAP.md`](ROADMAP.md) (M7).

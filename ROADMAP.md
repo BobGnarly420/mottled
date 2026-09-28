@@ -129,7 +129,9 @@ Frontier models are sparse MoE and do not fit in memory: Kimi K3 is 93 layers,
 2.8T parameters, ~1.5 TB of weights, 16 of 896 experts active per token.
 - [x] `stream.stream_capture`: build the skeleton with no weights, materialise
       each block from disk immediately before it runs, release it immediately
-      after. Peak memory is one block plus activations. Pinned **bit-exact**
+      after. Peak memory is one block plus activations (a per-expert
+      checkpoint briefly holds a block's experts twice while fusing them), and
+      the next block loads only after the last is released. Pinned **bit-exact**
       against an in-memory capture, and the residency bound is asserted, not
       assumed.
 - [x] `capture(..., capture_routing=True)` → `StateTrajectory.routing`: which
@@ -141,7 +143,8 @@ Frontier models are sparse MoE and do not fit in memory: Kimi K3 is 93 layers,
 - [x] Loud failure when a checkpoint's layout does not match the runtime
       module (MoE checkpoints store experts per-expert; the runtime wants them
       fused). Silently skipping leaves the experts empty and the whole capture
-      is wrong while still looking like numbers.
+      is wrong while still looking like numbers. Only the common gate/up/down
+      layout is fused, so any other expert layout takes this failure today.
 - [x] `remote.RemoteWeights`: the weights never land on local disk in full
       either. HTTP range requests read one layer's byte spans out of the
       published shards, write them to a cache file, and delete it once the

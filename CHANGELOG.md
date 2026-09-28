@@ -13,14 +13,20 @@ then how to try it with nothing installed, then the rest.
 - **`stream.stream_capture`** runs a forward pass with one block's weights in
   memory at a time: the skeleton is built with no weights, and each block is
   materialised just before it runs and released after, by hooks around the
-  model's own blocks, so the architecture stays HuggingFace's. A
-  single-prompt streamed pass is bit-exact against an in-memory capture, and
-  the residency bound is asserted.
+  model's own blocks, so the architecture stays HuggingFace's. The next
+  block loads only after the last is released, so at most `keep_resident`
+  blocks are ever materialised, asserted at the moment of release (a
+  per-expert checkpoint briefly holds a block's experts twice while fusing
+  them). A single-prompt streamed pass is bit-exact against an in-memory
+  capture.
 - **`remote.py`** does the same for disk: a repo id or URL is read as HTTP
   range requests against the published safetensors, one layer at a time,
   written to a cache file and deleted once read. Ranges, not whole files,
-  because shard boundaries are not layer boundaries. Every remote trajectory
-  carries its cost in `meta.remote`.
+  because shard boundaries are not layer boundaries; each tensor is placed
+  by its own offsets, so a layer comes back byte-exact whatever its order on
+  disk (safetensors orders by dtype before name). Every remote trajectory
+  carries its cost in `meta.remote`, including any cache file that could not
+  be deleted.
 - **`stream_capture_batch`** loads each block once for a batch of prompts,
   since egress is then the binding cost. Batching is a tolerance, not a
   bit-exact claim: it reshapes every matmul.
@@ -28,9 +34,12 @@ then how to try it with nothing installed, then the rest.
   was routed to (`StateTrajectory.routing`), and `Routing.agreement`
   compares two runs by the paths they took. It refuses on a dense model.
 - Refused rather than absorbed: a checkpoint whose layout leaves parameters
-  unloaded, and a host that answers a range request with the whole file.
+  unloaded (only the per-expert gate/up/down layout is fused), and a host
+  that answers a range request with the whole file or a range of the wrong
+  length.
 - A streamed trajectory reports the family, device and dtype
-  `provenance.record` reads, like every other producer.
+  `provenance.record` reads, like every other producer, and names what it
+  does not carry (the embedding matrix among them).
 - **Not run at frontier scale.** The mechanism is proven on small models;
   the open items are in `ROADMAP.md`.
 
