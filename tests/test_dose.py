@@ -190,6 +190,22 @@ def test_shuffled_label_control_and_derivation_overlap(mt):
     assert len(s.spec["derivation_prompts"]) == 6
 
 
+def test_a_split_and_its_complement_are_one_control(mt):
+    """With equal groups, swapping a split's halves negates its direction,
+    and on the signed grid the negated control measures the same points."""
+    from dose import _shuffled_directions
+
+    model, tok = mt
+    pos = [capture(model, p, tokenizer=tok) for p in
+           ("the capital of france is", "the capital of italy is")]
+    neg = [capture(model, p, tokenizer=tok) for p in
+           ("the cat sat on the mat", "the quick brown fox jumps")]
+    out = _shuffled_directions(pos, neg, LAYER, -1, n=4, seed=0)
+    assert len(out) == 2            # 3 partitions of 2-vs-2, less the real one
+    (_, a), (_, b) = out
+    assert not np.allclose(a, -b, atol=1e-6)
+
+
 # ------------------------------------------------------------------- rank
 def _logits_traj(row):
     row = np.asarray(row, dtype=np.float32)

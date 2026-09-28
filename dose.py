@@ -218,7 +218,9 @@ def _shuffled_directions(pos: list, neg: list, layer: int, token: int,
         split = frozenset(perm[:k].tolist())
         if split in real or split in seen:
             continue
-        seen.add(split)
+        # with equal groups the complement is the same contrast negated, and
+        # the signed grid would measure it again as a second "control"
+        seen.update((split, frozenset(range(len(pool))) - split))
         d = direction_from_contrast([pool[i] for i in sorted(split)],
                                     [pool[i] for i in range(len(pool)) if i not in split],
                                     layer=layer, token=token, normalize=False)
