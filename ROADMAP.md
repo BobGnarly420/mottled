@@ -190,15 +190,18 @@ Frontier models are sparse MoE and do not fit in memory: Kimi K3 is 93 layers,
 
 ## Status
 
-M1, M2, M3 and M6 are complete. Two items remain, both blocked on something
-other than effort:
+M1, M2, M3 and M6 are complete, and M7 is in progress (its open items are
+above). Two items remain elsewhere, both blocked on something other than
+effort:
 
 - **M4's live provider path** needs API credentials, which a session should
   not hold or ask for. The producer and its honesty machinery are done and
   tested against fixtures; someone with a key can wire the last mile.
 - **M5's `mottled/` package move** is a public API break, so it wants a
-  release boundary and an explicit decision, not a drive-by commit. Every milestone landed green (offline test suite + viewer Node
-tests) before the next started, and that stays the rule.
+  release boundary and an explicit decision, not a drive-by commit.
+
+Every milestone landed green (offline test suite + viewer Node tests) before
+the next started, and that stays the rule.
 
 ## Model coverage
 
@@ -213,8 +216,9 @@ distinct:
 - **Licence-gated** — `meta-llama/Llama-3.2-1B`, `google/gemma-2-2b`. They
   work; they need an accepted licence and an `HF_TOKEN`, so they cannot back
   bundled samples or offline CI.
-- **Hardware** — frontier MoE is not a support question. Kimi K2's weights
-  are ~1 TB.
+- **Hardware** — frontier MoE does not fit in memory: Kimi K2's weights are
+  ~1 TB. M7's streamed capture removes that ceiling, but has not been run at
+  that scale.
 - **Ecosystem** — GPT-2 stays in the *SAE-dependent* samples because its
   dictionaries come with published Neuronpedia explanations. That is
   convenience, not the frontier of what is available, and an earlier draft of

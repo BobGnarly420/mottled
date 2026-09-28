@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### A README for a reader who has never seen this repo
+927 lines had grown by accretion: a second, stale roadmap inside it (listing
+the analysis-manifest export as "next", months after it shipped), and every
+feature at the same volume. The rewrite is 355 lines. It opens with what
+Mottled is and what it refuses to claim, in `docs/validity.md`'s vocabulary,
+then how to try it with nothing installed, then the rest.
+
+### Models too big to hold (M7)
+- **`stream.stream_capture`** runs a forward pass with one block's weights in
+  memory at a time: the skeleton is built with no weights, and each block is
+  materialised just before it runs and released after, by hooks around the
+  model's own blocks, so the architecture stays HuggingFace's. A
+  single-prompt streamed pass is bit-exact against an in-memory capture, and
+  the residency bound is asserted.
+- **`remote.py`** does the same for disk: a repo id or URL is read as HTTP
+  range requests against the published safetensors, one layer at a time,
+  written to a cache file and deleted once read. Ranges, not whole files,
+  because shard boundaries are not layer boundaries. Every remote trajectory
+  carries its cost in `meta.remote`.
+- **`stream_capture_batch`** loads each block once for a batch of prompts,
+  since egress is then the binding cost. Batching is a tolerance, not a
+  bit-exact claim: it reshapes every matmul.
+- **`capture(..., capture_routing=True)`** records which experts each token
+  was routed to (`StateTrajectory.routing`), and `Routing.agreement`
+  compares two runs by the paths they took. It refuses on a dense model.
+- Refused rather than absorbed: a checkpoint whose layout leaves parameters
+  unloaded, and a host that answers a range request with the whole file.
+- A streamed trajectory reports the family, device and dtype
+  `provenance.record` reads, like every other producer.
+- **Not run at frontier scale.** The mechanism is proven on small models;
+  the open items are in `ROADMAP.md`.
+
 ### The feature field says what its regions are (completes M2)
 - `FeatureField.domains(k)` ranks a field's territories by the area each
   dominant feature owns, with centroids in plane coordinates;
