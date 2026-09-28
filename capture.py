@@ -199,18 +199,34 @@ def logit_lens(hidden: "torch.Tensor", adapter, chunk: int = 4) -> "torch.Tensor
 
 
 def _entropy_topk(logits: np.ndarray, vocab: list[str], k: int):
-    x = logits.astype(np.float64)
-    x -= x.max(axis=-1, keepdims=True)
-    p = np.exp(x)
-    p /= p.sum(axis=-1, keepdims=True)
-    ent = (-(p * np.log(np.where(p > 0, p, 1.0))).sum(axis=-1)).astype(np.float32)
-    order = np.argsort(-p, axis=-1)[..., :k]
-    L, T = logits.shape[:2]
-    topk = [
-        [[(vocab[j], float(p[layer, t, j])) for j in order[layer, t]] for t in range(T)]
-        for layer in range(L)
-    ]
+    # One layer at a time, and a partition rather than a sort of the whole
+    # vocabulary: the (L, T, V) block in float64 plus a full argsort cost
+    # 4.5 GB and 31 s on a 258-token GPT-2 capture, about three turns of a
+    # chat that re-captures its whole conversation every turn.
+    L, T, V = logits.shape
+    k = min(k, V)
+    ent = np.empty((L, T), dtype=np.float32)
+    topk = []
+    for layer in range(L):
+        x = logits[layer].astype(np.float64)
+        x -= x.max(axis=-1, keepdims=True)
+        p = np.exp(x)
+        p /= p.sum(axis=-1, keepdims=True)
+        ent[layer] = -(p * np.log(np.where(p > 0, p, 1.0))).sum(axis=-1)
+        topk.append([[(vocab[j], float(row[j])) for j in _top_indices(row, k)]
+                     for row in p])
     return ent, topk
+
+
+def _top_indices(row: np.ndarray, k: int) -> np.ndarray:
+    """The k largest entries, largest first, ties to the lower index: what a
+    stable sort of the row gives, without sorting all of it."""
+    if k <= 0:
+        return np.empty(0, dtype=np.intp)
+    kth = np.partition(row, row.size - k)[row.size - k]
+    above = np.flatnonzero(row > kth)
+    idx = np.concatenate([above, np.flatnonzero(row == kth)[: k - above.size]])
+    return idx[np.argsort(-row[idx], kind="stable")]
 
 
 def capture(

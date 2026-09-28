@@ -90,6 +90,32 @@ def test_logit_lens_final_layer_matches_model(tiny_llama):
     assert torch.allclose(lens[-1], out.logits[0].float(), atol=1e-4)
 
 
+def test_entropy_topk_is_the_whole_block_softmax_and_a_stable_sort():
+    """`_entropy_topk` works a layer at a time and partitions rather than
+    sorting the vocabulary. It has to return exactly what the whole-block
+    float64 softmax and a full stable sort return, ties included."""
+    from capture import _entropy_topk
+
+    rng = np.random.default_rng(0)
+    logits = rng.standard_normal((3, 7, 50)).astype(np.float32) * 4
+    logits[1, 2, [3, 9, 17, 30]] = 20.0               # ties inside the top-k
+    logits[2, 4] = np.round(logits[2, 4])             # ties all along a row
+    vocab = [f"t{i}" for i in range(50)]
+
+    x = logits.astype(np.float64)
+    x -= x.max(axis=-1, keepdims=True)
+    p = np.exp(x)
+    p /= p.sum(axis=-1, keepdims=True)
+    want = (-(p * np.log(np.where(p > 0, p, 1.0))).sum(axis=-1)).astype(np.float32)
+    order = np.argsort(-p, axis=-1, kind="stable")
+
+    for k in (0, 1, 3, 5, 50, 80):
+        entropy, topk = _entropy_topk(logits, vocab, k)
+        np.testing.assert_array_equal(entropy, want)
+        assert topk == [[[(vocab[j], float(p[l, t, j])) for j in order[l, t, :k]]
+                         for t in range(7)] for l in range(3)]
+
+
 def test_tiny_backend_shapes():
     traj = synthetic.capture(PROMPT, top_k=5)
     traj.validate()
