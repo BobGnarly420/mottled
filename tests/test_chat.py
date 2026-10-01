@@ -1,10 +1,18 @@
-"""Chat: the conversation a reply came from is the prompt that was captured.
+"""Chat: the forward pass captured is the one the model was sent.
 
-The explorer's chat mode re-captures the whole conversation plus the reply
-on every turn. What matters is that the tokens captured are the tokens the
-model's chat format means, and that the reply shown is what the decode chose.
+The explorer's chat mode captures, each turn, the conversation as the model
+was sent it plus the reply it produced. The claim that makes the scene worth
+reading is token identity: the ids captured are the ids the model's own chat
+format produces. That is pinned here against two real instruct templates —
+Qwen2.5's ChatML, which injects a default system prompt, and Mistral v0.3's,
+which writes BOS itself while its tokenizer adds one too — copied into
+`chat_templates.json` from the published tokenizer configs. Their vocabulary
+here is tiny; what the tests pin is which ids the chat format produces and
+the capture receives, not the words.
 """
+import json
 import types
+from pathlib import Path
 
 import pytest
 
@@ -12,50 +20,154 @@ torch = pytest.importorskip("torch")
 transformers = pytest.importorskip("transformers")
 
 import tiny  # noqa: E402
-from pipeline import chat_prompt, chat_reply  # noqa: E402
+from pipeline import chat_input, chat_reply, run_pipeline  # noqa: E402
+
+TEMPLATES = json.loads((Path(__file__).parent / "chat_templates.json").read_text())
 
 MESSAGES = [{"role": "user", "content": "the capital of france is"},
             {"role": "assistant", "content": "paris"},
             {"role": "user", "content": "and germany"}]
 
 
-def _bos_tokenizer():
-    """A tokenizer that adds BOS itself, with a template that also writes it —
-    the Gemma/Llama shape, where rendering then re-tokenizing doubles it."""
+def _tokenizer(name, add_eos=False):
+    """A word-level tokenizer carrying a real model's chat template and
+    special tokens, adding BOS itself where that model's tokenizer does (and
+    EOS, as an `add_eos_token` config would, when asked)."""
     from tokenizers import Tokenizer, models, pre_tokenizers, processors
 
-    vocab = {"<unk>": 0, "<s>": 1}
-    for word in tiny.CORPUS_WORDS + ["user", "assistant", ":"]:
+    spec = TEMPLATES[name]
+    vocab = {"<unk>": 0}
+    for word in tiny.CORPUS_WORDS:
         vocab.setdefault(word, len(vocab))
     tok = Tokenizer(models.WordLevel(vocab=vocab, unk_token="<unk>"))
     tok.pre_tokenizer = pre_tokenizers.Whitespace()
-    tok.post_processor = processors.TemplateProcessing(
-        single="<s> $A", special_tokens=[("<s>", 1)])
+    tok.add_special_tokens(spec["special_tokens"])
+    parts = (([spec["bos_token"]] if spec["add_bos_token"] else []) + ["$A"]
+             + ([spec["eos_token"]] if add_eos else []))
+    if parts != ["$A"]:
+        tok.post_processor = processors.TemplateProcessing(
+            single=" ".join(parts),
+            special_tokens=[(t, tok.token_to_id(t)) for t in parts if t != "$A"])
     hf = transformers.PreTrainedTokenizerFast(
-        tokenizer_object=tok, unk_token="<unk>", bos_token="<s>", pad_token="<unk>")
-    hf.chat_template = (
-        "{{ bos_token }}{% for m in messages %}{{ m['role'] }} : {{ m['content'] }} "
-        "{% endfor %}{% if add_generation_prompt %}assistant :{% endif %}")
+        tokenizer_object=tok, unk_token="<unk>", bos_token=spec["bos_token"],
+        eos_token=spec["eos_token"], pad_token=spec.get("pad_token") or "<unk>")
+    hf.chat_template = spec["chat_template"]
     return hf
 
 
-def test_the_captured_ids_are_what_the_chat_format_tokenizes_to():
-    """Rendering the template and tokenizing that text again would put BOS in
-    twice. The ids a chat capture sees must be exactly what the tokenizer's
-    own chat tokenization produces."""
-    tok = _bos_tokenizer()
-    own = tok.apply_chat_template(MESSAGES, tokenize=True, add_generation_prompt=True)
-    own = list(own["input_ids"] if hasattr(own, "keys") else own)
+def _model(tok):
+    torch.manual_seed(0)
+    cfg = transformers.LlamaConfig(
+        vocab_size=len(tok), hidden_size=32, intermediate_size=64,
+        num_hidden_layers=2, num_attention_heads=4, num_key_value_heads=2,
+        max_position_embeddings=256)
+    return transformers.LlamaForCausalLM(cfg).eval()
 
-    got = tok(chat_prompt(tok, MESSAGES))["input_ids"]
-    assert got == own
-    assert got[:2] == [tok.bos_token_id, own[1]] and own[1] != tok.bos_token_id
+
+def _own(tok, messages):
+    """The tokenizer's own chat tokenization, as a flat list of ids."""
+    ids = tok.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
+    return list(ids["input_ids"] if hasattr(ids, "keys") else ids)
+
+
+@pytest.fixture
+def seen_ids(monkeypatch):
+    """The ids every capture actually ran on, as `_run` received them."""
+    import capture
+
+    seen, run = [], capture._run
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs["input_ids"][0].tolist())
+        return run(*args, **kwargs)
+
+    monkeypatch.setattr(capture, "_run", spy)
+    return seen
+
+
+@pytest.mark.parametrize("name", sorted(TEMPLATES))
+def test_the_capture_runs_on_the_chat_format_s_own_ids(name, seen_ids):
+    tok = _tokenizer(name)
+    text, ids = chat_input(tok, MESSAGES)
+    assert ids == _own(tok, MESSAGES)
+
+    result = run_pipeline(tiny.config(generate_tokens=3), text, model=_model(tok),
+                          tokenizer=tok, input_ids=ids)
+    gen = result["traj"].meta["generation"]
+    assert gen["prompt_tokens"] == len(ids)
+    assert seen_ids[-1][:len(ids)] == ids
+    assert result["prompt"] == text
+
+
+def test_a_capture_without_decoding_runs_on_the_given_ids_too(seen_ids):
+    tok = _tokenizer("mistral-7b-instruct-v0.3")
+    text, ids = chat_input(tok, MESSAGES)
+    result = run_pipeline(tiny.config(), text, model=_model(tok), tokenizer=tok,
+                          input_ids=ids)
+    assert seen_ids[-1] == ids and result["traj"].n_tokens == len(ids)
+
+
+def test_the_same_text_with_other_ids_is_not_a_cache_hit(tmp_path):
+    """A cached capture is keyed by its prompt text; two id sequences for
+    one text are two different questions."""
+    tok = _tokenizer("mistral-7b-instruct-v0.3")
+    text, ids = chat_input(tok, MESSAGES)
+    cfg = tiny.config(use_cache=True, cache_dir=str(tmp_path))
+    model = _model(tok)
+    one = run_pipeline(cfg, text, model=model, tokenizer=tok, input_ids=ids)
+    two = run_pipeline(cfg, text, model=model, tokenizer=tok,
+                       input_ids=[tok.bos_token_id] + ids)
+    assert two["traj"].n_tokens == one["traj"].n_tokens + 1
+
+
+def test_the_real_templates_are_the_ones_rendered():
+    qwen, _ = chat_input(_tokenizer("qwen2.5-instruct"), MESSAGES)
+    assert qwen.startswith("<|im_start|>system\nYou are Qwen, created by Alibaba "
+                           "Cloud. You are a helpful assistant.<|im_end|>\n")
+    assert qwen.endswith("<|im_start|>assistant\n")
+    mistral, _ = chat_input(_tokenizer("mistral-7b-instruct-v0.3"), MESSAGES)
+    assert mistral == ("<s>[INST] the capital of france is[/INST] paris</s>"
+                       "[INST] and germany[/INST]")
+
+
+def test_tokenizing_the_rendered_text_again_would_change_the_question():
+    """Why the ids are passed rather than re-derived from the text: Mistral's
+    template writes BOS and its tokenizer adds another, and a tokenizer set
+    to add EOS would end the prompt before the reply could begin."""
+    tok = _tokenizer("mistral-7b-instruct-v0.3", add_eos=True)
+    text, ids = chat_input(tok, MESSAGES)
+    bos, eos = tok.bos_token_id, tok.eos_token_id
+    again = tok(text)["input_ids"]
+    assert again[:2] == [bos, bos] and again[-1] == eos
+    assert ids == _own(tok, MESSAGES)
+    assert ids[0] == bos and ids[1] != bos and ids[-1] != eos
+
+
+def test_a_second_turn_runs_on_the_whole_conversation_as_the_template_renders_it(
+        seen_ids):
+    """Earlier replies are re-sent as the template renders their text, as any
+    chat re-sends its history, so the second turn's ids are the template's
+    rendering of the whole conversation."""
+    tok = _tokenizer("qwen2.5-instruct")
+    model, cfg = _model(tok), tiny.config(generate_tokens=3)
+    first = [MESSAGES[0]]
+    text, ids = chat_input(tok, first)
+    reply = chat_reply(tok, run_pipeline(cfg, text, model=model, tokenizer=tok,
+                                         input_ids=ids)["traj"])
+
+    second = first + [{"role": "assistant", "content": reply}, MESSAGES[2]]
+    text, ids = chat_input(tok, second)
+    run_pipeline(cfg, text, model=model, tokenizer=tok, input_ids=ids)
+    assert seen_ids[-1][:len(ids)] == _own(tok, second)
 
 
 def test_a_model_without_a_chat_template_gets_a_plain_transcript():
-    assert chat_prompt(tiny.tokenizer(), MESSAGES) == (
-        "User: the capital of france is\nAssistant: paris\n"
-        "User: and germany\nAssistant:")
+    tok = tiny.tokenizer()
+    messages = [{"role": "system", "content": "the model"}] + MESSAGES
+    text, ids = chat_input(tok, messages)
+    assert text == ("System: the model\nUser: the capital of france is\n"
+                    "Assistant: paris\nUser: and germany\nAssistant:")
+    assert ids == tok(text)["input_ids"]
 
 
 @pytest.fixture
@@ -116,6 +228,42 @@ def test_clearing_the_conversation_clears_its_scene(chat_app):
     assert not at.exception
     assert at.session_state["chat"] == []
     assert any("Say something" in i.value for i in at.info)
+
+
+def test_changing_the_model_starts_a_new_conversation(chat_app):
+    """The replies so far were another model's; carrying them over would
+    send the new model a history it did not write."""
+    from config import MODEL_CHOICES
+
+    at = chat_app
+    at.chat_input(key="chat_input").set_value("the capital of france is").run()
+    at.selectbox(key="model").select(MODEL_CHOICES[1]).run()
+    assert not at.exception
+    assert at.session_state["chat"] == []
+    assert any("started over" in c.value for c in at.caption)
+
+
+def test_a_failed_capture_leaves_the_conversation_as_it_was(chat_app, monkeypatch):
+    import pipeline
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("capture failed")
+
+    at = chat_app
+    monkeypatch.setattr(pipeline, "run_pipeline", fail)
+    at.chat_input(key="chat_input").set_value("the capital of france is").run()
+    assert at.exception
+    assert at.session_state["chat"] == []
+
+
+def test_an_empty_reply_says_so(chat_app, monkeypatch):
+    import pipeline
+
+    monkeypatch.setattr(pipeline, "chat_reply", lambda tokenizer, traj: "")
+    at = chat_app
+    at.chat_input(key="chat_input").set_value("the capital of france is").run()
+    assert not at.exception
+    assert "no text" in at.chat_message[1].markdown[0].value
 
 
 def test_the_reply_is_decoded_from_the_ids_the_decode_chose():

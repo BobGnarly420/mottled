@@ -44,24 +44,40 @@
 
 ### Chat beside the scene
 - **The explorer's Chat switch splits the page**: the conversation on the
-  left, its trajectories on the right, the inspector under the scene. Each
-  turn decodes the reply, then captures the whole conversation plus the
-  reply, since that is the forward pass the reply came from; the reply is
-  drawn as the decode axis.
-- **`pipeline.chat_prompt`** renders a conversation with the tokenizer's
-  chat template. When the template writes BOS and the tokenizer adds its
-  own, the rendered BOS is dropped, since re-tokenizing the text would carry
-  it twice. A model without a template (GPT-2) gets a plain User/Assistant
-  transcript; the panel says so and shows exactly what was sent.
-  `pipeline.chat_reply` decodes the reply from the ids the decode chose.
-- Chat turns skip the disk cache: every turn is a new conversation, so the
-  cache would only ever write, hundreds of MB a turn.
+  left, the latest turn on the right, the inspector under the scene. A turn
+  decodes the reply, then captures the conversation as the model was sent
+  it plus the reply: the forward pass that reply came from, with the reply
+  as the decode axis. The scene is that turn alone; the terrain is rebuilt
+  every turn. Chat is the explorer's only: the viewer and `mottled serve`
+  have no chat path.
+- **The capture runs on the chat format's own ids.** `pipeline.chat_input`
+  returns a conversation's text and the ids of the tokenizer's own chat
+  tokenization, and `run_pipeline`, `capture` and `generate_and_capture`
+  take `input_ids` and capture them as given. Rendering a template and
+  tokenizing the text again adds the tokenizer's special tokens to the ones
+  the template wrote: a doubled BOS, or with `add_eos_token` a prompt that
+  ends in EOS before the reply begins. Pinned against two real templates
+  copied from the published configs: Qwen2.5-Instruct's, which injects a
+  default system prompt, and Mistral-7B-Instruct-v0.3's, which writes BOS
+  itself. `pipeline.chat_reply` decodes the reply from the ids the decode
+  chose.
+- **Earlier replies are re-sent as text**, as any chat re-sends its history:
+  the next turn's template renders them again, so their tokens can differ
+  from the ones generated at the time. The panel says so beside exactly
+  what was sent. A model without a template (GPT-2) gets a plain
+  transcript labelled by role.
+- A new model starts a new conversation, since the replies so far were
+  another model's. A reply that decodes to nothing says so. Replies are
+  capped at 32 tokens, Generate tokens' own cap: each is a full forward
+  pass. Chat turns skip the disk cache: every turn is a new conversation, so
+  it would only ever write, hundreds of MB a turn.
 - **`capture._entropy_topk` works a layer at a time** and partitions rather
   than sorting the vocabulary. On a 258-token GPT-2 capture, about three
-  chat turns, it took 4.5 GB and 31 s; now 3.4 s, with no measurable rise
-  in peak memory. Entropy and top-k are unchanged, except that tied
-  probabilities now come out in token-id order (a stable sort's) instead of
-  whatever order the unstable sort left them in.
+  chat turns, its own peak allocation fell from 5.1 GB to 0.4 GB (measured
+  with tracemalloc) and its time from 31 s to 3.4 s. Entropy and top-k are
+  unchanged, except that tied probabilities now come out in token-id order
+  (a stable sort's) instead of whatever order the unstable sort left them
+  in.
 
 ### A README for a reader who has never seen this repo
 927 lines had grown by accretion: a second, stale roadmap inside it (listing

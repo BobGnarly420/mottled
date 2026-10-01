@@ -240,12 +240,17 @@ def capture(
     capture_components: bool = False,
     capture_attention: bool = False,
     capture_routing: bool = False,
+    input_ids=None,
 ) -> StateTrajectory:
     """Run a forward pass and capture the residual stream at every layer.
 
     `model` may be a HF model instance (with `tokenizer` supplied) or a HF hub
     name.  Returns hidden[layer][token][dimension]
     wrapped in a StateTrajectory with logit-lens statistics attached.
+
+    `input_ids`, when the prompt's exact token ids are known (a chat
+    template's own tokenization), are captured as given; `prompt` then only
+    labels the run.
 
     `capture_components=True` also records each block's attention and MLP
     outputs — the residual decomposition — in `StateTrajectory.components`.
@@ -261,7 +266,9 @@ def capture(
                 dtype=dtype, keep_logits=keep_logits,
                 capture_components=capture_components,
                 capture_attention=capture_attention,
-                capture_routing=capture_routing)
+                capture_routing=capture_routing,
+                input_ids=None if input_ids is None
+                else torch.as_tensor(input_ids).reshape(1, -1))
 
 
 def generate_and_capture(
@@ -277,6 +284,7 @@ def generate_and_capture(
     keep_logits: bool = True,
     capture_components: bool = False,
     capture_attention: bool = False,
+    input_ids=None,
 ) -> StateTrajectory:
     """Autoregressively decode, then capture the completed sequence.
 
@@ -297,6 +305,12 @@ def generate_and_capture(
     the tokenizer's EOS token.  The decode loop runs one full forward pass
     per step (no KV cache) — transparent and exact, sized for the short
     continuations Mottled visualizes, not for bulk generation.
+
+    `input_ids`, when the prompt's exact token ids are known (a chat
+    template's own tokenization), are decoded from as given instead of
+    re-tokenizing `prompt`, which then only labels the run: rendering a
+    template and tokenizing the text again can add special tokens the
+    template already wrote.
     """
     _require_torch()
     if isinstance(model, str):
@@ -305,7 +319,9 @@ def generate_and_capture(
         raise ValueError("a tokenizer is required when passing a model instance")
 
     model_device = next(model.parameters()).device
-    input_ids = tokenizer(prompt, return_tensors="pt")["input_ids"].to(model_device)
+    if input_ids is None:
+        input_ids = tokenizer(prompt, return_tensors="pt")["input_ids"]
+    input_ids = torch.as_tensor(input_ids).reshape(1, -1).to(model_device)
     n_prompt = int(input_ids.shape[1])
     eos_id = getattr(tokenizer, "eos_token_id", None)
 
